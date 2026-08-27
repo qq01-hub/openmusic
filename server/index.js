@@ -347,7 +347,7 @@ const io = new Server(httpServer, {
   },
   httpCompression: true,
   // 人多时事件循环偶发阻塞，放宽 ping 超时减少误判断连
-  pingInterval: 25_000,
+  pingInterval: 10_000,
   pingTimeout: 60_000,
 });
 
