@@ -63,6 +63,7 @@ const ACCOUNT_PUBLIC_POST_PATHS = new Set([
   '/api/auth/email/register',
   '/api/auth/email/login',
   '/api/auth/logout',
+  '/api/auth/wechat/account',
 ]);
 
 export function isPublicApiPath(req) {
@@ -88,6 +89,7 @@ export function isPublicApiPath(req) {
   if (req.method === 'GET' && OAUTH_PUBLIC_GET_PATHS.has(path)) return true;
   if (ACCOUNT_PUBLIC_POST_PATHS.has(path) && req.method === 'POST') return true;
   if (path === '/api/auth/session' && req.method === 'GET') return true;
+  if (path === '/api/auth/providers' && req.method === 'GET') return true;
   return false;
 }
 

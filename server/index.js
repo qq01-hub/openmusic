@@ -42,7 +42,12 @@ import {
   startManagedQishuiVerification,
 } from './musicQrSessions.js';
 import { hasRoomCredentialEncryptionKey } from './roomCredentialCrypto.js';
-import { mountWechatFileHelperProxy } from './wechatFileHelperProxy.js';
+import {
+  mountWechatFileHelperProxy,
+  verifyWechatLoginProof,
+  WECHAT_LOGIN_PROOF_COOKIE,
+  WECHAT_LOGIN_PROOF_TTL_SEC,
+} from './wechatFileHelperProxy.js';
 import {
   WECHAT_UIN_CONFLICT,
   createWechatUinStore,
@@ -262,6 +267,9 @@ import {
   requestEmailRegistrationCode,
   registerWithEmail,
   loginWithEmail,
+  loginOrRegisterExternalIdentity,
+  bindExternalIdentity,
+  unbindExternalIdentity,
   createAccountSession,
   resolveAccountSession,
   revokeAccountSession,
@@ -704,6 +712,7 @@ const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitLinuxdoAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitGithubAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitWechatUinAuth = createRateLimiter({ windowMs: 10 * 60_000, max: 10 });
+const WECHAT_ACCOUNT_AUTH_ENABLED = false;
 const socketRateLog = createLogger('socket-rate-limit');
 let lastSocketRateRedisErrorAt = 0;
 const distributedSocketRateLimiter = createDistributedSocketRateLimiter({
@@ -2003,6 +2012,50 @@ function resolveAccountSessionToken(req) {
   return String(cookies[ACCOUNT_SESSION_COOKIE] || '').trim();
 }
 
+async function resolveAccountFromRequest(req) {
+  const token = resolveAccountSessionToken(req);
+  if (!token) return null;
+  return resolveAccountSession(token);
+}
+
+async function requireAccountSession(req, res) {
+  const account = await resolveAccountFromRequest(req);
+  if (account) return account;
+  clearAccountSessionCookie(res);
+  res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
+  return null;
+}
+
+function appendAccountAuthResult(returnPath, result) {
+  const path = sanitizeReturnPath(returnPath);
+  return `${path}?account_auth=${encodeURIComponent(result)}`;
+}
+
+function clearWechatLoginProofCookie(res) {
+  res.append(
+    'Set-Cookie',
+    `${WECHAT_LOGIN_PROOF_COOKIE}=; Max-Age=0; Path=/api/auth; HttpOnly; SameSite=Strict${res.req?.secure ? '; Secure' : ''}`,
+  );
+}
+
+async function consumeWechatLoginProof(req, res) {
+  const cookies = parseCookieHeader(req.headers?.cookie || '');
+  const proof = verifyWechatLoginProof(cookies[WECHAT_LOGIN_PROOF_COOKIE]);
+  clearWechatLoginProofCookie(res);
+  if (!proof) return null;
+  const store = getRedisClient();
+  if (!isRedisEnabled() || !store) {
+    throw new AccountAuthError('REDIS_UNAVAILABLE', '账户服务暂不可用，请稍后重试', 503);
+  }
+  const nonceDigest = createHash('sha256').update(proof.nonce).digest('hex');
+  const claimed = await store.set(
+    `openmusic:account:wechat-proof:${nonceDigest}`,
+    '1',
+    { NX: true, EX: WECHAT_LOGIN_PROOF_TTL_SEC },
+  );
+  return claimed === 'OK' ? proof : null;
+}
+
 function sendAccountAuthError(res, error) {
   if (error instanceof AccountAuthError) {
     return res.status(error.status).json({ error: error.message, code: error.code });
@@ -2229,6 +2282,70 @@ app.post('/api/auth/logout', async (req, res) => {
   return res.json({ ok: true });
 });
 
+app.get('/api/auth/providers', (_req, res) => {
+  res.json({
+    linuxdo: isLinuxdoConfigured(),
+    github: isGithubConfigured(),
+    // 账户微信登录暂未开放；原文件传输助手采集和房主 UIN 绑定能力保持不变。
+    wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
+  });
+});
+
+app.post('/api/auth/identities/:provider/unbind', async (req, res) => {
+  try {
+    const account = await requireAccountSession(req, res);
+    if (!account) return;
+    const updated = await unbindExternalIdentity(account.id, req.params.provider);
+    recordAccountAuthMetric(`${req.params.provider}_unbind`, 'success');
+    return res.json({ ok: true, account: publicAccount(updated) });
+  } catch (error) {
+    recordAccountAuthMetric(`${req.params.provider}_unbind`, error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/wechat/account', async (req, res) => {
+  if (!WECHAT_ACCOUNT_AUTH_ENABLED) {
+    return res.status(503).json({ error: '微信账户登录暂未开放', code: 'WECHAT_ACCOUNT_AUTH_DISABLED' });
+  }
+  if (!limitWechatUinAuth(`wechat-account:${getRequestIp(req)}`)) {
+    recordAccountAuthMetric('wechat', 'rate_limited');
+    return res.status(429).json({ error: '微信登录请求过于频繁，请稍后再试', code: 'LOGIN_RATE_LIMITED' });
+  }
+  try {
+    const proof = await consumeWechatLoginProof(req, res);
+    const requestedUin = normalizeWechatUin(req.body?.uin);
+    if (!proof || !requestedUin || requestedUin !== proof.uin) {
+      throw new AccountAuthError('WECHAT_PROOF_INVALID', '微信登录凭证无效或已过期，请重新扫码', 401);
+    }
+    const action = req.body?.action === 'bind' ? 'bind' : 'login';
+    let account;
+    if (action === 'bind') {
+      const current = await requireAccountSession(req, res);
+      if (!current) return;
+      account = await bindExternalIdentity(current.id, {
+        provider: 'wechat',
+        subject: proof.uin,
+        profile: { username: `微信用户 ${proof.uin.slice(-4)}` },
+      });
+    } else {
+      const result = await loginOrRegisterExternalIdentity({
+        provider: 'wechat',
+        subject: proof.uin,
+        profile: { username: `微信用户 ${proof.uin.slice(-4)}` },
+      });
+      account = result.account;
+      const token = await createAccountSession(account.id);
+      setAccountSessionCookie(res, token);
+    }
+    recordAccountAuthMetric(`wechat_${action}`, 'success');
+    return res.json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('wechat', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
 // ---------- Linux.do OAuth：房主身份绑定 / 找回 ----------
 // 只影响“把当前浏览器身份绑定到一个 Linux.do 账号”这件事，不改变匿名创建/加入房间的既有流程；
 // 不登录 Linux.do 完全不受影响。持久化只写 Redis（server/linuxdoAuth.js）。
@@ -2243,14 +2360,33 @@ app.get('/api/auth/linuxdo/status', async (req, res) => {
   res.json({ enabled, bound });
 });
 
-app.get('/api/auth/linuxdo/start', (req, res) => {
+app.get('/api/auth/linuxdo/start', async (req, res) => {
   if (!isLinuxdoConfigured()) return res.status(400).json({ error: 'Linux.do 登录未配置' });
   if (!limitLinuxdoAuth(`linuxdo-start:${getRequestIp(req)}`)) {
     return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
   }
 
-  const purpose = req.query?.purpose === 'recover' ? 'recover' : 'bind';
+  const requestedPurpose = String(req.query?.purpose || '');
+  const purpose = ['recover', 'account-login', 'account-bind'].includes(requestedPurpose)
+    ? requestedPurpose
+    : 'bind';
   const returnPath = sanitizeReturnPath(req.query?.returnPath);
+
+  if (purpose === 'account-login') {
+    const state = signLinuxdoState({ purpose, returnPath });
+    return res.redirect(buildLinuxdoAuthorizeUrl(state));
+  }
+
+  if (purpose === 'account-bind') {
+    try {
+      const account = await requireAccountSession(req, res);
+      if (!account) return;
+      const state = signLinuxdoState({ purpose, accountId: account.id, returnPath });
+      return res.redirect(buildLinuxdoAuthorizeUrl(state));
+    } catch (error) {
+      return sendAccountAuthError(res, error);
+    }
+  }
 
   if (purpose === 'bind') {
     const identity = requireSessionIdentity(req, res);
@@ -2282,6 +2418,9 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
   const state = verifyLinuxdoState(req.query?.state);
   if (!state) return fail('/', 'error');
   const returnPath = sanitizeReturnPath(state.returnPath);
+  const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
+    ? res.redirect(appendAccountAuthResult(returnPath, `linuxdo_${reason}`))
+    : fail(returnPath, reason);
 
   let profile;
   try {
@@ -2289,12 +2428,49 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
     profile = await fetchLinuxdoProfile(accessToken);
   } catch (err) {
     console.error('Linux.do OAuth 失败:', err?.message || err);
-    return fail(returnPath, 'error');
+    return failForPurpose('error');
   }
 
   if (state.purpose === 'admin-bind' || state.purpose === 'admin-login') {
     // 后台绑定 / 后台登录复用同一个已注册的 redirect_uri，只能在这里按 purpose 转发
     return handleLinuxdoAdminCallback(req, res, state, profile);
+  }
+
+  if (state.purpose === 'account-login' || state.purpose === 'account-bind') {
+    try {
+      let account;
+      if (state.purpose === 'account-bind') {
+        const current = await resolveAccountFromRequest(req);
+        if (!current || current.id !== state.accountId) {
+          return res.redirect(appendAccountAuthResult(returnPath, 'linuxdo_expired'));
+        }
+        account = await bindExternalIdentity(current.id, {
+          provider: 'linuxdo',
+          subject: profile.id,
+          profile,
+        });
+      } else {
+        const result = await loginOrRegisterExternalIdentity({
+          provider: 'linuxdo',
+          subject: profile.id,
+          profile,
+        });
+        account = result.account;
+        const token = await createAccountSession(account.id);
+        setAccountSessionCookie(res, token);
+      }
+      recordAccountAuthMetric(state.purpose.replace('account-', 'linuxdo_'), 'success');
+      return res.redirect(appendAccountAuthResult(
+        returnPath,
+        state.purpose === 'account-bind' ? 'linuxdo_bound' : 'linuxdo_logged_in',
+      ));
+    } catch (error) {
+      const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
+        ? 'linuxdo_conflict'
+        : 'linuxdo_error';
+      recordAccountAuthMetric(state.purpose.replace('account-', 'linuxdo_'), error instanceof AccountAuthError ? error.code : 'error');
+      return res.redirect(appendAccountAuthResult(returnPath, result));
+    }
   }
 
   if (state.purpose === 'bind') {
@@ -2356,14 +2532,33 @@ app.get('/api/auth/github/status', async (req, res) => {
   res.json({ enabled: true, bound });
 });
 
-app.get('/api/auth/github/start', (req, res) => {
+app.get('/api/auth/github/start', async (req, res) => {
   if (!isGithubConfigured()) return res.status(400).json({ error: 'GitHub 登录未配置' });
   if (!limitGithubAuth(`github-start:${getRequestIp(req)}`)) {
     return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
   }
 
-  const purpose = req.query?.purpose === 'recover' ? 'recover' : 'bind';
+  const requestedPurpose = String(req.query?.purpose || '');
+  const purpose = ['recover', 'account-login', 'account-bind'].includes(requestedPurpose)
+    ? requestedPurpose
+    : 'bind';
   const returnPath = sanitizeGithubReturnPath(req.query?.returnPath);
+
+  if (purpose === 'account-login') {
+    const state = signGithubState({ purpose, returnPath });
+    return res.redirect(buildGithubAuthorizeUrl(state));
+  }
+
+  if (purpose === 'account-bind') {
+    try {
+      const account = await requireAccountSession(req, res);
+      if (!account) return;
+      const state = signGithubState({ purpose, accountId: account.id, returnPath });
+      return res.redirect(buildGithubAuthorizeUrl(state));
+    } catch (error) {
+      return sendAccountAuthError(res, error);
+    }
+  }
 
   if (purpose === 'bind') {
     const identity = requireSessionIdentity(req, res);
@@ -2394,6 +2589,9 @@ app.get('/api/auth/github/callback', async (req, res) => {
   const state = verifyGithubState(req.query?.state);
   if (!state) return fail('/', 'error');
   const returnPath = sanitizeGithubReturnPath(state.returnPath);
+  const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
+    ? res.redirect(appendAccountAuthResult(returnPath, `github_${reason}`))
+    : fail(returnPath, reason);
 
   let profile;
   try {
@@ -2401,12 +2599,49 @@ app.get('/api/auth/github/callback', async (req, res) => {
     profile = await fetchGithubProfile(accessToken);
   } catch (err) {
     console.error('GitHub OAuth 失败:', err?.message || err);
-    return fail(returnPath, 'error');
+    return failForPurpose('error');
   }
 
   if (state.purpose === 'admin-bind' || state.purpose === 'admin-login') {
     // 后台绑定 / 后台登录复用同一个已注册的 redirect_uri，只能在这里按 purpose 转发
     return handleGithubAdminCallback(req, res, state, profile);
+  }
+
+  if (state.purpose === 'account-login' || state.purpose === 'account-bind') {
+    try {
+      let account;
+      if (state.purpose === 'account-bind') {
+        const current = await resolveAccountFromRequest(req);
+        if (!current || current.id !== state.accountId) {
+          return res.redirect(appendAccountAuthResult(returnPath, 'github_expired'));
+        }
+        account = await bindExternalIdentity(current.id, {
+          provider: 'github',
+          subject: profile.id,
+          profile,
+        });
+      } else {
+        const result = await loginOrRegisterExternalIdentity({
+          provider: 'github',
+          subject: profile.id,
+          profile,
+        });
+        account = result.account;
+        const token = await createAccountSession(account.id);
+        setAccountSessionCookie(res, token);
+      }
+      recordAccountAuthMetric(state.purpose.replace('account-', 'github_'), 'success');
+      return res.redirect(appendAccountAuthResult(
+        returnPath,
+        state.purpose === 'account-bind' ? 'github_bound' : 'github_logged_in',
+      ));
+    } catch (error) {
+      const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
+        ? 'github_conflict'
+        : 'github_error';
+      recordAccountAuthMetric(state.purpose.replace('account-', 'github_'), error instanceof AccountAuthError ? error.code : 'error');
+      return res.redirect(appendAccountAuthResult(returnPath, result));
+    }
   }
 
   if (state.purpose === 'bind') {

@@ -23,6 +23,7 @@ const EMAIL_CODE_MAX_ATTEMPTS = 5;
 const ACCOUNT_ID_PREFIX = 'acct_';
 const ACCOUNT_KEY_PREFIX = 'openmusic:account:';
 const EMAIL_INDEX_PREFIX = `${ACCOUNT_KEY_PREFIX}email:`;
+const IDENTITY_INDEX_PREFIX = `${ACCOUNT_KEY_PREFIX}identity:`;
 const EMAIL_CODE_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code:`;
 const EMAIL_CODE_ATTEMPTS_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-attempts:`;
 const EMAIL_CODE_COOLDOWN_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-cooldown:`;
@@ -37,6 +38,7 @@ const PASSWORD_SCRYPT_OPTIONS = {
 const CODE_HASH_SECRET = String(process.env.CLIENT_ID_SECRET || randomBytes(32).toString('hex'));
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat']);
 
 export class AccountAuthError extends Error {
   constructor(code, message, status = 400) {
@@ -73,6 +75,24 @@ function emailHash(email) {
 
 function emailIndexKey(email) {
   return `${EMAIL_INDEX_PREFIX}${emailHash(email)}`;
+}
+
+function normalizeExternalProvider(value) {
+  const provider = String(value ?? '').trim().toLowerCase();
+  return EXTERNAL_IDENTITY_PROVIDERS.has(provider) ? provider : '';
+}
+
+function normalizeIdentitySubject(value) {
+  const subject = String(value ?? '').trim();
+  return subject && subject.length <= 256 ? subject : '';
+}
+
+function identityIndexKey(provider, subject) {
+  const normalizedProvider = normalizeExternalProvider(provider);
+  const normalizedSubject = normalizeIdentitySubject(subject);
+  if (!normalizedProvider || !normalizedSubject) return '';
+  const digest = createHash('sha256').update(normalizedSubject).digest('hex');
+  return `${IDENTITY_INDEX_PREFIX}${normalizedProvider}:${digest}`;
 }
 
 function emailCodeKey(email) {
@@ -133,12 +153,20 @@ export async function verifyPassword(password, record) {
 }
 
 function publicAccount(account) {
-  if (!account) return null;
+  const normalized = normalizeAccountRecord(account);
+  if (!normalized) return null;
   return {
-    id: account.id,
-    email: account.email,
-    emailVerifiedAt: account.emailVerifiedAt,
-    createdAt: account.createdAt,
+    id: normalized.id,
+    email: normalized.email,
+    emailVerifiedAt: normalized.emailVerifiedAt || null,
+    hasPassword: Boolean(normalized.password),
+    identities: normalized.identities.map((identity) => ({
+      provider: identity.provider,
+      username: identity.username || '',
+      avatarUrl: identity.avatarUrl || '',
+      linkedAt: identity.linkedAt || 0,
+    })),
+    createdAt: normalized.createdAt,
   };
 }
 
@@ -205,6 +233,61 @@ function parseStoredJson(raw) {
   }
 }
 
+function normalizeIdentityRecord(identity) {
+  if (!identity || typeof identity !== 'object') return null;
+  const provider = String(identity.provider || '').trim().toLowerCase();
+  if (provider === 'email') {
+    const subject = normalizeEmail(identity.subject);
+    if (!subject) return null;
+    return {
+      provider,
+      subject,
+      linkedAt: Number(identity.linkedAt || identity.createdAt) || 0,
+    };
+  }
+  const normalizedProvider = normalizeExternalProvider(provider);
+  const subject = normalizeIdentitySubject(identity.subject);
+  if (!normalizedProvider || !subject) return null;
+  return {
+    provider: normalizedProvider,
+    subject,
+    username: String(identity.username || '').trim().slice(0, 128),
+    avatarUrl: String(identity.avatarUrl || '').trim().slice(0, 2048),
+    linkedAt: Number(identity.linkedAt || identity.createdAt) || 0,
+  };
+}
+
+function normalizeAccountRecord(account) {
+  if (!account || typeof account !== 'object') return null;
+  const identities = Array.isArray(account.identities)
+    ? account.identities.map(normalizeIdentityRecord).filter(Boolean)
+    : [];
+  const email = normalizeEmail(account.email);
+  if (email && !identities.some((identity) => identity.provider === 'email')) {
+    identities.unshift({
+      provider: 'email',
+      subject: email,
+      linkedAt: Number(account.emailVerifiedAt || account.createdAt) || 0,
+    });
+  }
+  return { ...account, email: email || null, identities };
+}
+
+function createExternalIdentity(provider, subject, profile, linkedAt) {
+  return {
+    provider,
+    subject,
+    username: String(profile?.username || '').trim().slice(0, 128),
+    avatarUrl: String(profile?.avatarUrl || '').trim().slice(0, 2048),
+    linkedAt,
+  };
+}
+
+function loginMethodCount(account) {
+  const externalCount = account.identities.filter((identity) => identity.provider !== 'email').length;
+  return (account.password ? 1 : 0) + externalCount;
+}
+
 export function createAccountAuthService({
   getStore = getRedisClient,
   isStoreReady = isRedisEnabled,
@@ -220,7 +303,7 @@ export function createAccountAuthService({
     const id = normalizeAccountId(userId);
     if (!id) return null;
     const store = ensureStore(getStore, isStoreReady);
-    return parseStoredJson(await store.get(accountKey(id)));
+    return normalizeAccountRecord(parseStoredJson(await store.get(accountKey(id))));
   }
 
   async function requestEmailRegistrationCode({ email: rawEmail } = {}) {
@@ -305,7 +388,7 @@ export function createAccountAuthService({
       email,
       emailVerifiedAt: createdAt,
       password: passwordRecord,
-      identities: [{ provider: 'email', subject: email, createdAt }],
+      identities: [{ provider: 'email', subject: email, linkedAt: createdAt }],
       createdAt,
       updatedAt: createdAt,
     };
@@ -342,6 +425,156 @@ export function createAccountAuthService({
     const valid = Boolean(account) && await verifyPassword(password, account.password);
     if (!valid) throw new AccountAuthError('AUTH_INVALID', '邮箱或密码错误', 401);
     return account;
+  }
+
+  async function loginOrRegisterExternalIdentity({ provider: rawProvider, subject: rawSubject, profile } = {}) {
+    const provider = normalizeExternalProvider(rawProvider);
+    const subject = normalizeIdentitySubject(rawSubject);
+    if (!provider || !subject) {
+      throw new AccountAuthError('INVALID_IDENTITY', '第三方身份无效', 400);
+    }
+    const store = ensureStore(getStore, isStoreReady);
+    const indexKey = identityIndexKey(provider, subject);
+    const existingId = await store.get(indexKey);
+    if (existingId) {
+      const existingAccount = await getAccountById(existingId);
+      if (!existingAccount) {
+        throw new AccountAuthError('IDENTITY_DATA_INVALID', '第三方身份数据异常，请联系管理员', 503);
+      }
+      return { account: existingAccount, created: false };
+    }
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const id = createId();
+      const createdAt = now();
+      const account = {
+        id,
+        email: null,
+        emailVerifiedAt: null,
+        password: null,
+        identities: [createExternalIdentity(provider, subject, profile, createdAt)],
+        createdAt,
+        updatedAt: createdAt,
+      };
+      const result = await store.eval(
+        `local existing = redis.call('GET', KEYS[1]) `
+          + `if existing then return existing end `
+          + `if redis.call('EXISTS', KEYS[2]) == 1 then return '__ACCOUNT_ID_COLLISION__' end `
+          + `redis.call('SET', KEYS[1], ARGV[1]) `
+          + `redis.call('SET', KEYS[2], ARGV[2]) `
+          + `return ARGV[1]`,
+        {
+          keys: [indexKey, accountKey(id)],
+          arguments: [id, JSON.stringify(account)],
+        },
+      );
+      if (result === '__ACCOUNT_ID_COLLISION__') continue;
+      if (result !== id) {
+        const racedAccount = await getAccountById(result);
+        if (!racedAccount) {
+          throw new AccountAuthError('IDENTITY_DATA_INVALID', '第三方身份数据异常，请联系管理员', 503);
+        }
+        return { account: racedAccount, created: false };
+      }
+      return { account, created: true };
+    }
+    throw new AccountAuthError('ACCOUNT_CREATE_FAILED', '账户创建失败，请稍后重试', 503);
+  }
+
+  async function bindExternalIdentity(userId, { provider: rawProvider, subject: rawSubject, profile } = {}) {
+    const id = normalizeAccountId(userId);
+    const provider = normalizeExternalProvider(rawProvider);
+    const subject = normalizeIdentitySubject(rawSubject);
+    if (!id || !provider || !subject) {
+      throw new AccountAuthError('INVALID_IDENTITY', '第三方身份无效', 400);
+    }
+    const store = ensureStore(getStore, isStoreReady);
+    const indexKey = identityIndexKey(provider, subject);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+      const currentProviderIdentity = account.identities.find((identity) => identity.provider === provider);
+      if (currentProviderIdentity && currentProviderIdentity.subject !== subject) {
+        throw new AccountAuthError('PROVIDER_ALREADY_BOUND', '该账户已绑定同类型的其他身份，请先解绑', 409);
+      }
+      const ownerId = await store.get(indexKey);
+      if (ownerId && ownerId !== id) {
+        throw new AccountAuthError('IDENTITY_ALREADY_BOUND', '该第三方身份已被其他账户绑定', 409);
+      }
+
+      const linkedAt = now();
+      const nextIdentity = createExternalIdentity(provider, subject, profile, linkedAt);
+      const identities = account.identities.filter((identity) => identity.provider !== provider);
+      const nextAccount = {
+        ...account,
+        identities: [...identities, nextIdentity],
+        updatedAt: linkedAt,
+      };
+      const result = Number(await store.eval(
+        `local owner = redis.call('GET', KEYS[1]) `
+          + `if owner and owner ~= ARGV[1] then return -1 end `
+          + `if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -2 end `
+          + `redis.call('SET', KEYS[1], ARGV[1]) `
+          + `redis.call('SET', KEYS[2], ARGV[3]) `
+          + `return 1`,
+        {
+          keys: [indexKey, accountKey(id)],
+          arguments: [id, currentRaw, JSON.stringify(nextAccount)],
+        },
+      ));
+      if (result === -1) {
+        throw new AccountAuthError('IDENTITY_ALREADY_BOUND', '该第三方身份已被其他账户绑定', 409);
+      }
+      if (result === -2) continue;
+      if (result === 1) return nextAccount;
+    }
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
+  }
+
+  async function unbindExternalIdentity(userId, rawProvider) {
+    const id = normalizeAccountId(userId);
+    const provider = normalizeExternalProvider(rawProvider);
+    if (!id || !provider) throw new AccountAuthError('INVALID_IDENTITY', '第三方身份无效', 400);
+    const store = ensureStore(getStore, isStoreReady);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+      const identity = account.identities.find((item) => item.provider === provider);
+      if (!identity) throw new AccountAuthError('IDENTITY_NOT_BOUND', '该登录方式尚未绑定', 404);
+      if (loginMethodCount(account) <= 1) {
+        throw new AccountAuthError('LAST_LOGIN_METHOD', '请至少保留一种可用的登录方式', 409);
+      }
+
+      const indexKey = identityIndexKey(provider, identity.subject);
+      const updatedAt = now();
+      const nextAccount = {
+        ...account,
+        identities: account.identities.filter((item) => item.provider !== provider),
+        updatedAt,
+      };
+      const result = Number(await store.eval(
+        `local owner = redis.call('GET', KEYS[1]) `
+          + `if owner and owner ~= ARGV[1] then return -1 end `
+          + `if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -2 end `
+          + `redis.call('DEL', KEYS[1]) `
+          + `redis.call('SET', KEYS[2], ARGV[3]) `
+          + `return 1`,
+        {
+          keys: [indexKey, accountKey(id)],
+          arguments: [id, currentRaw, JSON.stringify(nextAccount)],
+        },
+      ));
+      if (result === -1) {
+        throw new AccountAuthError('IDENTITY_OWNERSHIP_MISMATCH', '身份归属异常，无法解绑', 409);
+      }
+      if (result === -2) continue;
+      if (result === 1) return nextAccount;
+    }
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
   }
 
   async function createSession(userId) {
@@ -393,6 +626,9 @@ export function createAccountAuthService({
     requestEmailRegistrationCode,
     registerWithEmail,
     loginWithEmail,
+    loginOrRegisterExternalIdentity,
+    bindExternalIdentity,
+    unbindExternalIdentity,
     createSession,
     resolveSession,
     revokeSession,
@@ -405,6 +641,9 @@ const defaultService = createAccountAuthService();
 export const requestEmailRegistrationCode = defaultService.requestEmailRegistrationCode;
 export const registerWithEmail = defaultService.registerWithEmail;
 export const loginWithEmail = defaultService.loginWithEmail;
+export const loginOrRegisterExternalIdentity = defaultService.loginOrRegisterExternalIdentity;
+export const bindExternalIdentity = defaultService.bindExternalIdentity;
+export const unbindExternalIdentity = defaultService.unbindExternalIdentity;
 export const createAccountSession = defaultService.createSession;
 export const resolveAccountSession = defaultService.resolveSession;
 export const revokeAccountSession = defaultService.revokeSession;

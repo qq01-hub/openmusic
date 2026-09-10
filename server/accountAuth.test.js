@@ -33,6 +33,23 @@ class FakeRedis {
   }
 
   async eval(_script, { keys, arguments: args }) {
+    if (_script.includes("owner and owner ~= ARGV[1]")) {
+      const owner = this.values.get(keys[0]);
+      if (owner && owner !== args[0]) return -1;
+      if ((this.values.get(keys[1]) ?? null) !== args[1]) return -2;
+      if (_script.includes("redis.call('DEL', KEYS[1])")) this.values.delete(keys[0]);
+      else this.values.set(keys[0], String(args[0]));
+      this.values.set(keys[1], String(args[2]));
+      return 1;
+    }
+    if (_script.includes('__ACCOUNT_ID_COLLISION__')) {
+      const existing = this.values.get(keys[0]);
+      if (existing) return existing;
+      if (this.values.has(keys[1])) return '__ACCOUNT_ID_COLLISION__';
+      this.values.set(keys[0], String(args[0]));
+      this.values.set(keys[1], String(args[1]));
+      return args[0];
+    }
     if (this.values.has(keys[0])) return 0;
     this.values.set(keys[0], String(args[0]));
     this.values.set(keys[1], String(args[1]));
@@ -44,11 +61,12 @@ function createTestService() {
   const store = new FakeRedis();
   const sent = [];
   let now = 1_700_000_000_000;
+  let idCounter = 0;
   const service = createAccountAuthService({
     getStore: () => store,
     isStoreReady: () => true,
     now: () => now,
-    randomId: () => 'a'.repeat(24),
+    randomId: () => `${'a'.repeat(20)}${String(++idCounter).padStart(4, '0')}`,
     randomInt: () => 123456,
     sendCode: async (message) => {
       sent.push(message);
@@ -88,6 +106,13 @@ test('验证码注册、登录和会话注销闭环', async () => {
     id: account.id,
     email,
     emailVerifiedAt: account.createdAt,
+    hasPassword: true,
+    identities: [{
+      provider: 'email',
+      username: '',
+      avatarUrl: '',
+      linkedAt: account.createdAt,
+    }],
     createdAt: account.createdAt,
   });
   assert.equal(Object.hasOwn(publicProfile, 'password'), false);
@@ -109,6 +134,104 @@ test('验证码注册、登录和会话注销闭环', async () => {
   assert.equal(sessionAccount.id, account.id);
   assert.equal(await service.revokeSession(token), true);
   assert.equal(await service.resolveSession(token), null);
+});
+
+test('第三方登录按 provider 与 subject 创建和复用账户，不按邮箱合并', async () => {
+  const { service } = createTestService();
+  await service.requestEmailRegistrationCode({ email: 'same@example.com' });
+  const emailAccount = await service.registerWithEmail({
+    email: 'same@example.com',
+    password: 'correct-horse',
+    code: '123456',
+  });
+  const first = await service.loginOrRegisterExternalIdentity({
+    provider: 'github',
+    subject: '10001',
+    profile: { username: 'octocat', avatarUrl: 'https://example.com/avatar.png', email: 'same@example.com' },
+  });
+  assert.equal(first.created, true);
+  assert.equal(first.account.email, null);
+  assert.notEqual(first.account.id, emailAccount.id);
+
+  const second = await service.loginOrRegisterExternalIdentity({
+    provider: 'github',
+    subject: '10001',
+    profile: { username: 'changed' },
+  });
+  assert.equal(second.created, false);
+  assert.equal(second.account.id, first.account.id);
+});
+
+test('一个账户可绑定多个提供方，已属于其他账户的身份不能被抢绑', async () => {
+  const { service } = createTestService();
+  await service.requestEmailRegistrationCode({ email: 'owner@example.com' });
+  const owner = await service.registerWithEmail({
+    email: 'owner@example.com',
+    password: 'correct-horse',
+    code: '123456',
+  });
+  const other = await service.loginOrRegisterExternalIdentity({
+    provider: 'github',
+    subject: 'already-owned',
+    profile: { username: 'other' },
+  });
+
+  await service.bindExternalIdentity(owner.id, {
+    provider: 'linuxdo',
+    subject: 'linuxdo-owner',
+    profile: { username: 'linuxdo-user' },
+  });
+  const account = await service.bindExternalIdentity(owner.id, {
+    provider: 'github',
+    subject: 'github-owner',
+    profile: { username: 'github-user' },
+  });
+  assert.deepEqual(account.identities.map((identity) => identity.provider).sort(), ['email', 'github', 'linuxdo']);
+
+  await assert.rejects(
+    () => service.bindExternalIdentity(owner.id, {
+      provider: 'github',
+      subject: 'already-owned',
+      profile: { username: 'other' },
+    }),
+    (error) => error instanceof AccountAuthError && error.code === 'PROVIDER_ALREADY_BOUND',
+  );
+  await assert.rejects(
+    () => service.bindExternalIdentity(other.account.id, {
+      provider: 'linuxdo',
+      subject: 'linuxdo-owner',
+      profile: { username: 'linuxdo-user' },
+    }),
+    (error) => error instanceof AccountAuthError && error.code === 'IDENTITY_ALREADY_BOUND',
+  );
+});
+
+test('解绑会保留至少一种登录方式，并清理身份索引', async () => {
+  const { service } = createTestService();
+  const created = await service.loginOrRegisterExternalIdentity({
+    provider: 'github',
+    subject: 'solo',
+    profile: { username: 'solo' },
+  });
+  await assert.rejects(
+    () => service.unbindExternalIdentity(created.account.id, 'github'),
+    (error) => error instanceof AccountAuthError && error.code === 'LAST_LOGIN_METHOD',
+  );
+
+  await service.bindExternalIdentity(created.account.id, {
+    provider: 'linuxdo',
+    subject: 'backup',
+    profile: { username: 'backup' },
+  });
+  const afterUnbind = await service.unbindExternalIdentity(created.account.id, 'github');
+  assert.deepEqual(afterUnbind.identities.map((identity) => identity.provider), ['linuxdo']);
+
+  const newGithubAccount = await service.loginOrRegisterExternalIdentity({
+    provider: 'github',
+    subject: 'solo',
+    profile: { username: 'new-owner' },
+  });
+  assert.notEqual(newGithubAccount.account.id, created.account.id);
 });
 
 test('验证码错误会计数并在超过尝试次数后失效', async () => {

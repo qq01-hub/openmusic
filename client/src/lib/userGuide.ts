@@ -8,6 +8,7 @@
  */
 
 export type GuideFeatureId =
+  | 'home-account'
   | 'home-nickname'
   | 'home-match'
   | 'home-create'
@@ -51,6 +52,7 @@ const STORAGE_KEY = 'openmusic:user-guide:v1';
 const GUIDE_EVENT = 'openmusic:guide-feature-used';
 
 const ALL_FEATURE_IDS: GuideFeatureId[] = [
+  'home-account',
   'home-nickname',
   'home-match',
   'home-create',
@@ -83,6 +85,13 @@ const LEGACY_FEATURE_MAP: Record<string, GuideFeatureId> = {
 };
 
 export const GUIDE_STEPS: GuideStep[] = [
+  {
+    id: 'home-account',
+    scope: 'home',
+    title: '账户与游客身份',
+    body: '登录：可使用邮箱、Linux Do 或 GitHub，并在账户安全中绑定多个身份；微信入口暂未开放\n游客：无需注册，原有建房、进房和点歌功能保持可用',
+    side: 'bottom',
+  },
   {
     id: 'home-nickname',
     scope: 'home',

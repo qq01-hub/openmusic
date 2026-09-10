@@ -1,3 +1,5 @@
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+
 const FILEHELPER_ORIGIN = 'https://szfilehelper.weixin.qq.com';
 
 export const WX_PROXY_MOUNT = '/wx-proxy';
@@ -220,6 +222,53 @@ const WX_COOKIE_NAME = /^(wxuin|wxsid|wxloadtime|mm_lang|skey|_?wx|webwx|MM_)/i;
 
 const wxLoginCookieJar = new Map();
 const WX_LOGIN_JAR_TTL_MS = 5 * 60 * 1000;
+export const WECHAT_LOGIN_PROOF_COOKIE = 'openmusic_wx_login_proof';
+export const WECHAT_LOGIN_PROOF_TTL_SEC = 5 * 60;
+const WX_PROOF_FALLBACK_SECRET = randomBytes(32).toString('hex');
+
+function proofSecret() {
+  return String(process.env.CLIENT_ID_SECRET || WX_PROOF_FALLBACK_SECRET);
+}
+
+export function createWechatLoginProof(uin, { now = () => Date.now(), nonce = () => randomBytes(16).toString('base64url') } = {}) {
+  const payload = Buffer.from(JSON.stringify({
+    uin: String(uin || ''),
+    nonce: nonce(),
+    exp: Math.floor(now() / 1000) + WECHAT_LOGIN_PROOF_TTL_SEC,
+  }), 'utf8').toString('base64url');
+  const signature = createHmac('sha256', proofSecret()).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+export function verifyWechatLoginProof(token) {
+  const raw = String(token || '').trim();
+  const separator = raw.lastIndexOf('.');
+  if (separator <= 0) return null;
+  const payload = raw.slice(0, separator);
+  const signature = raw.slice(separator + 1);
+  const expected = Buffer.from(createHmac('sha256', proofSecret()).update(payload).digest('base64url'));
+  const actual = Buffer.from(signature);
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    const uin = String(parsed?.uin || '').trim();
+    const nonce = String(parsed?.nonce || '').trim();
+    const exp = Number(parsed?.exp);
+    if (!/^\d{1,32}$/u.test(uin) || !nonce || !Number.isFinite(exp)) return null;
+    if (exp < Math.floor(Date.now() / 1000)) return null;
+    return { uin, nonce, exp };
+  } catch {
+    return null;
+  }
+}
+
+function appendWechatLoginProofCookie(res, uin, { secure = false } = {}) {
+  const secureFlag = secure ? '; Secure' : '';
+  res.append(
+    'Set-Cookie',
+    `${WECHAT_LOGIN_PROOF_COOKIE}=${encodeURIComponent(createWechatLoginProof(uin))}; Max-Age=${WECHAT_LOGIN_PROOF_TTL_SEC}; Path=/api/auth; HttpOnly; SameSite=Strict${secureFlag}`,
+  );
+}
 
 function mergeCookieStrings(...parts) {
   const jar = new Map();
@@ -252,19 +301,35 @@ function collectRawUpstreamCookies(upstream) {
     .join('; ');
 }
 
-function rememberLoginCookies(pathname, bodyText, upstream) {
-  if (!String(pathname || '').includes('webwxnewloginpage')) return;
-  const wxsid = bodyText.match(/<wxsid>([^<]*)<\/wxsid>/i)?.[1];
-  if (!wxsid) return;
-  const cookieStr = collectRawUpstreamCookies(upstream);
-  if (!cookieStr) return;
-  const entry = { cookies: cookieStr, at: Date.now() };
-  wxLoginCookieJar.set(wxsid, entry);
-  const wxuin = bodyText.match(/<wxuin>([^<]*)<\/wxuin>/i)?.[1];
-  if (wxuin) wxLoginCookieJar.set(`uin:${wxuin}`, entry);
-  for (const [key, jarEntry] of wxLoginCookieJar) {
-    if (Date.now() - jarEntry.at > WX_LOGIN_JAR_TTL_MS) wxLoginCookieJar.delete(key);
+function readWechatXmlField(bodyText, field) {
+  const escaped = String(field).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const cdata = bodyText.match(new RegExp(`<${escaped}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${escaped}>`, 'i'));
+  const plain = bodyText.match(new RegExp(`<${escaped}>([^<]*)<\\/${escaped}>`, 'i'));
+  const value = cdata?.[1] ?? plain?.[1] ?? '';
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
   }
+}
+
+function rememberLoginCookies(pathname, bodyText, upstream) {
+  if (!String(pathname || '').includes('webwxnewloginpage')) return null;
+  const ret = readWechatXmlField(bodyText, 'ret');
+  if (ret && ret !== '0') return null;
+  const wxsid = readWechatXmlField(bodyText, 'wxsid');
+  const wxuin = readWechatXmlField(bodyText, 'wxuin');
+  if (!wxsid || !/^\d{1,32}$/u.test(String(wxuin || '').trim())) return null;
+  const cookieStr = collectRawUpstreamCookies(upstream);
+  if (cookieStr) {
+    const entry = { cookies: cookieStr, at: Date.now() };
+    wxLoginCookieJar.set(wxsid, entry);
+    wxLoginCookieJar.set(`uin:${wxuin}`, entry);
+    for (const [key, jarEntry] of wxLoginCookieJar) {
+      if (Date.now() - jarEntry.at > WX_LOGIN_JAR_TTL_MS) wxLoginCookieJar.delete(key);
+    }
+  }
+  return String(wxuin).trim();
 }
 
 function resolveUpstreamCookies(req, targetUrl, bodyBuffer) {
@@ -509,7 +574,8 @@ async function forwardWxUpstream(fetchWithTimeout, req, res, targetUrl, errorLab
 
   const buffer = Buffer.from(await upstream.arrayBuffer());
   const bodyText = buffer.toString('utf8');
-  rememberLoginCookies(upstreamTarget.pathname, bodyText, upstream);
+  const verifiedWechatUin = rememberLoginCookies(upstreamTarget.pathname, bodyText, upstream);
+  if (verifiedWechatUin) appendWechatLoginProofCookie(res, verifiedWechatUin, cookieOptions);
 
   if (process.env.DEBUG_WX === '1' && upstreamTarget.pathname.includes('webwxinit')) {
     let initRet = '';
