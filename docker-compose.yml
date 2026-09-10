@@ -22,6 +22,7 @@ services:
       - "${OPENMUSIC_PORT:-4000}:4000"
     environment:
       PORT: 4000
+      NODE_ENV: production
       DOCKER_REDIS_URL: redis://redis:6379/0
     volumes:
       # 首次部署向导与管理后台写入的配置需要持久化，否则容器重建后清空

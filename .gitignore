@@ -14,6 +14,7 @@ server/setup.lock
 client/.env.capacitor
 server/downloads/*.apk
 server/downloads/*.ipa
+server/downloads/*.exe
 .playwright-mcp
 .codex/
 
@@ -51,3 +52,10 @@ mobile/windows/flutter/ephemeral/
 mobile/linux/flutter/ephemeral/
 mobile/macos/Flutter/ephemeral/
 mobile/.android-version.local
+
+# Electron 桌面客户端构建产物
+dow/
+
+desktop-build.local.json
+
+electron/desktop-runtime-config.json

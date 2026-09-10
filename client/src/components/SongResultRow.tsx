@@ -1,11 +1,12 @@
 import { memo, useCallback } from 'react';
-import { Plus, Loader2, Play, Pause } from 'lucide-react';
+import { Plus, Loader2, Play, Pause, UserRound } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
 import SongCover from './SongCover';
 import SongRowBadges from './SongRowBadges';
 import FavoriteButton from './FavoriteButton';
 import Tooltip from './Tooltip';
+import TruncateTip from './TruncateTip';
 import { immersiveGlassListRow } from '../lib/immersiveGlass';
 import { useSongPreviewState } from '../hooks/useSongPreviewState';
 import { stopSongPreview, toggleSongPreview } from '../lib/songPreviewPlayer';
@@ -19,6 +20,7 @@ interface Props {
   favorited: boolean;
   glassRow?: boolean;
   onAdd: (song: SearchResult) => void;
+  onArtistClick?: (artist: string) => void;
 }
 
 function SongResultRow({
@@ -30,6 +32,7 @@ function SongResultRow({
   favorited,
   glassRow = false,
   onAdd,
+  onArtistClick,
 }: Props) {
   const key = songKey(song);
   const artistLine = `${song.artist}${song.album ? ` · ${song.album}` : ''}`;
@@ -54,7 +57,6 @@ function SongResultRow({
       className={`group flex cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
         glassRow ? immersiveGlassListRow : 'hover:bg-netease-card/80 active:bg-netease-card/80'
       }`}
-      title="双击点歌"
       onDoubleClick={() => handleAdd()}
     >
       <SongCover
@@ -62,12 +64,8 @@ function SongResultRow({
         className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover"
       />
       <div className="min-w-0 flex-1 space-y-0.5">
-        <p className="truncate text-sm font-medium" title={song.name}>
-          {song.name}
-        </p>
-        <p className="truncate text-xs text-netease-muted" title={artistLine}>
-          {artistLine}
-        </p>
+        <TruncateTip text={song.name} as="p" className="truncate text-sm font-medium" />
+        <TruncateTip text={artistLine} as="p" className="truncate text-xs text-netease-muted" />
         {isThisPreview && preview.status === 'error' && preview.error && (
           <p className="truncate text-[10px] text-amber-400/90">{preview.error}</p>
         )}
@@ -80,6 +78,21 @@ function SongResultRow({
         className="h-7 w-7 text-netease-muted hover:text-rose-300"
         iconClassName="h-3.5 w-3.5"
       />
+      {onArtistClick && (
+        <Tooltip content={`查找 ${song.artist} 的其他歌曲`}>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onArtistClick(song.artist);
+            }}
+            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/5 text-netease-muted transition-all hover:bg-white/10 hover:text-white ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+            aria-label={`查找 ${song.artist} 的其他歌曲`}
+          >
+            <UserRound className="h-3.5 w-3.5" />
+          </button>
+        </Tooltip>
+      )}
       <Tooltip content={previewPlaying ? '暂停试听' : '试听'}>
         <button
           type="button"
@@ -123,6 +136,7 @@ export default memo(SongResultRow, (prev, next) => (
   && prev.favorited === next.favorited
   && prev.glassRow === next.glassRow
   && prev.onAdd === next.onAdd
+  && prev.onArtistClick === next.onArtistClick
   && songKey(prev.song) === songKey(next.song)
   && prev.song.name === next.song.name
   && prev.song.artist === next.song.artist

@@ -45,6 +45,7 @@ export function sanitizeReturnPath(path) {
  */
 export function createOAuthProvider(opts) {
   const stateTtlSec = opts.stateTtlSec ?? 10 * 60;
+  const configuredRedis = opts.redis || null;
   const { idField, bindPrefix, profilePrefix } = opts;
   const normalizeRoomId = (value) => {
     const normalized = String(value ?? '').trim().toUpperCase();
@@ -86,8 +87,8 @@ export function createOAuthProvider(opts) {
   }
 
   async function getProfileForUser(userId, roomId) {
-    const client = getRedisClient();
-    if (!isRedisEnabled() || !client) return null;
+    const client = configuredRedis || getRedisClient();
+    if ((!configuredRedis && !isRedisEnabled()) || !client) return null;
     const id = String(userId || '').trim();
     if (!id) return null;
     try {
@@ -105,8 +106,8 @@ export function createOAuthProvider(opts) {
   }
 
   async function bindToUser(providerId, userId, profile, roomId) {
-    const client = getRedisClient();
-    if (!isRedisEnabled() || !client) throw new Error('Redis 不可用，无法保存绑定');
+    const client = configuredRedis || getRedisClient();
+    if ((!configuredRedis && !isRedisEnabled()) || !client) throw new Error('Redis 不可用，无法保存绑定');
 
     const rid = normalizeRoomId(roomId);
     const currentBindKey = bindKey(providerId, rid);
@@ -137,8 +138,8 @@ export function createOAuthProvider(opts) {
   }
 
   async function getUserIdFor(providerId, roomId) {
-    const client = getRedisClient();
-    if (!isRedisEnabled() || !client) return null;
+    const client = configuredRedis || getRedisClient();
+    if ((!configuredRedis && !isRedisEnabled()) || !client) return null;
     const id = String(providerId || '').trim();
     if (!id) return null;
     const rid = normalizeRoomId(roomId);
@@ -148,8 +149,8 @@ export function createOAuthProvider(opts) {
   }
 
   async function unbindForUser(userId, roomId) {
-    const client = getRedisClient();
-    if (!isRedisEnabled() || !client) return false;
+    const client = configuredRedis || getRedisClient();
+    if ((!configuredRedis && !isRedisEnabled()) || !client) return false;
     const rid = normalizeRoomId(roomId);
     const profile = await getProfileForUser(userId, rid);
     if (profile?.[idField]) {
@@ -157,6 +158,20 @@ export function createOAuthProvider(opts) {
       if (!profile.roomId) await client.del(bindKey(profile[idField], null));
     }
     await client.del(profileKey(userId, rid));
+    return true;
+  }
+
+  async function clearBindingsForRoom(roomId) {
+    const client = configuredRedis || getRedisClient();
+    if ((!configuredRedis && !isRedisEnabled()) || !client) return false;
+    const rid = normalizeRoomId(roomId);
+    if (!rid || typeof client.scanIterator !== 'function') return false;
+    const bindKeys = [];
+    for await (const key of client.scanIterator({ MATCH: `${bindPrefix}*:${rid}` })) bindKeys.push(key);
+    const profileKeys = [];
+    for await (const key of client.scanIterator({ MATCH: `${profilePrefix}*:${rid}` })) profileKeys.push(key);
+    if (bindKeys.length) await client.del(...bindKeys);
+    if (profileKeys.length) await client.del(...profileKeys);
     return true;
   }
 
@@ -170,5 +185,6 @@ export function createOAuthProvider(opts) {
     getUserIdFor,
     getProfileForUser,
     unbindForUser,
+    clearBindingsForRoom,
   };
 }

@@ -118,6 +118,15 @@ export function wasLastPlaybackCommitASeek(): boolean {
   return clientState.lastCommitWasSeek;
 }
 
+/** 新曲媒体就绪时，只采用同一队列项的服务端时间轴；不同曲目则使用初始回退位置。 */
+export function resolveInitialTrackSyncTime(trackId: string, fallbackTime = 0): number {
+  const fallback = Number(fallbackTime);
+  const safeFallback = Number.isFinite(fallback) ? Math.max(0, fallback) : 0;
+  const state = clientState.server;
+  if (!state || (state.trackId && state.trackId !== trackId)) return safeFallback;
+  return Math.max(0, getPlaybackTime(state));
+}
+
 /**
  * 播放进度：在 commit 时用服务端自洽时间戳定锚，之后仅用本机单调时钟外推。
  * 禁止 Date.now() - startedAt（client/server 时钟不一致时会跳秒，日志里常见 ~45s 固定偏差）。

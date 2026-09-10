@@ -88,5 +88,19 @@ export function createWechatUinStore({ redis, enabled } = {}) {
     return true;
   }
 
-  return { isEnabled: isAvailable, getProfileForUser, bindToUser, getUserIdForUin, unbindForUser };
+  async function clearBindingsForRoom(roomId) {
+    if (!isAvailable()) return false;
+    const rid = normalizeRoomId(roomId);
+    const client = getStoreRedis();
+    if (!rid || typeof client.scanIterator !== 'function') return false;
+    const bindKeys = [];
+    for await (const key of client.scanIterator({ MATCH: `${BIND_PREFIX}*:${rid}` })) bindKeys.push(key);
+    const profileKeys = [];
+    for await (const key of client.scanIterator({ MATCH: `${PROFILE_PREFIX}*:${rid}` })) profileKeys.push(key);
+    if (bindKeys.length) await client.del(...bindKeys);
+    if (profileKeys.length) await client.del(...profileKeys);
+    return true;
+  }
+
+  return { isEnabled: isAvailable, getProfileForUser, bindToUser, getUserIdForUin, unbindForUser, clearBindingsForRoom };
 }

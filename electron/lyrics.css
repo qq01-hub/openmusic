@@ -1,0 +1,16 @@
+:root { color-scheme: dark; font-family: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; --active-color: #a7ffb8; --active-size: 22px; --translation-color: #fff; --translation-size: 18px; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+.lyrics-shell { position: relative; width: 100%; height: 100%; border: 1px solid transparent; border-radius: 12px; background: transparent; box-shadow: none; cursor: move; transition: background .16s ease, border-color .16s ease, box-shadow .16s ease; -webkit-app-region: no-drag; }
+.lyrics-shell.is-hovered { border-color: rgba(255,255,255,.34); background: linear-gradient(90deg, rgba(12,12,16,.64), rgba(22,26,36,.70)); box-shadow: 0 4px 16px rgba(0,0,0,.30), inset 0 1px 0 rgba(255,255,255,.12); }
+.lyrics-stage { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; padding: 5px 78px 5px 16px; text-align: center; user-select: none; }
+.lyrics-shell.has-translation .lyrics-stage { flex-direction: column; gap: 2px; }
+.active, .translation { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.active { color: var(--active-color); font-size: min(var(--active-size), 26px); font-weight: 700; line-height: 1.08; }
+.translation { color: var(--translation-color); font-size: min(var(--translation-size), 20px); font-weight: 600; line-height: 1.08; }
+.lyrics-actions { position: absolute; top: 50%; right: 7px; display: flex; gap: 2px; opacity: 0; pointer-events: none; transform: translateY(-50%); transition: opacity .16s ease; }
+.lyrics-shell.is-hovered .lyrics-actions { opacity: 1; pointer-events: auto; }
+.lyrics-actions button { display: inline-flex; width: 21px; height: 21px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 6px; background: rgba(255,255,255,.12); color: rgba(255,255,255,.9); cursor: pointer; font-size: 13px; line-height: 1; }
+.lyrics-actions button:hover { background: rgba(255,255,255,.25); color: #fff; }
+#close { font-size: 22px; font-weight: 200; }
+.lyrics-shell.is-locked, .lyrics-shell.is-locked .lyrics-stage { cursor: default; }

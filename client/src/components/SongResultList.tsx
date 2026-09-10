@@ -20,6 +20,7 @@ interface Props {
   results: SearchResult[];
   addingId: string | null;
   onAdd: (song: SearchResult) => void;
+  onArtistClick?: (artist: string) => void;
   keyword?: string;
   alwaysShowActions?: boolean;
   onPageResultsChange?: (songs: SearchResult[]) => void;
@@ -31,6 +32,7 @@ function SongResultList({
   results,
   addingId,
   onAdd,
+  onArtistClick,
   keyword,
   alwaysShowActions = false,
   onPageResultsChange,
@@ -98,6 +100,7 @@ function SongResultList({
                 favorited={favoriteIds.has(key)}
                 glassRow={immersiveGlass}
                 onAdd={handleRowAdd}
+                onArtistClick={onArtistClick}
               />
             );
           })}
@@ -142,4 +145,5 @@ export default memo(SongResultList, (prev, next) => (
   && prev.fillHeight === next.fillHeight
   && prev.immersiveGlass === next.immersiveGlass
   && prev.onPageResultsChange === next.onPageResultsChange
+  && prev.onArtistClick === next.onArtistClick
 ));

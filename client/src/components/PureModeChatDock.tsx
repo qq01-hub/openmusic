@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft, MessageCircle, Pin, PinOff } from 'lucide-react';
 import ChatPanel from './ChatPanel';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import Tooltip from './Tooltip';
 
 const CLOSE_DELAY_MS = 280;
 const PANEL_WIDTH = 360;
@@ -104,16 +105,17 @@ export default function PureModeChatDock() {
         aria-hidden={!open}
       >
         <div className="flex h-10 shrink-0 items-center justify-end border-b border-white/10 px-2">
-          <button
-            type="button"
-            onClick={handlePinToggle}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white"
-            aria-label={pinned ? '取消固定聊天室' : '固定聊天室'}
-            aria-pressed={pinned}
-            title={pinned ? '取消固定聊天室' : '固定聊天室'}
-          >
-            {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
-          </button>
+          <Tooltip content={pinned ? '取消固定聊天室' : '固定聊天室'}>
+            <button
+              type="button"
+              onClick={handlePinToggle}
+              className="flex h-7 w-7 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+              aria-label={pinned ? '取消固定聊天室' : '固定聊天室'}
+              aria-pressed={pinned}
+            >
+              {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            </button>
+          </Tooltip>
         </div>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <ChatPanel className="rounded-none border-0 bg-transparent" />

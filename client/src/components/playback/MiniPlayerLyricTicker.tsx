@@ -5,6 +5,7 @@ import { useSmoothPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
 import { useTrackDuration, clampPlaybackTime } from '../../hooks/useTrackDuration';
 import { useTrackLyrics } from '../../hooks/useTrackLyrics';
 import TruncateTip from '../TruncateTip';
+import Tooltip from '../Tooltip';
 
 interface Props {
   song: QueueItem;
@@ -18,10 +19,10 @@ function MiniPlayerLyricTicker({ song }: Props) {
   const { current: currentLyric, next: nextLyric } = getActiveLyricPair(lyrics, displayTime);
 
   return (
-    <div
-      className="hidden min-w-0 flex-1 select-text px-2 text-center sm:block"
-      title="可直接选中复制歌词"
-    >
+    <Tooltip content="可直接选中复制歌词">
+      <div
+        className="hidden min-w-0 flex-1 select-text px-2 text-center sm:block"
+      >
       {currentLyric || nextLyric ? (
         <>
           {currentLyric ? (
@@ -58,6 +59,7 @@ function MiniPlayerLyricTicker({ song }: Props) {
         </>
       )}
     </div>
+    </Tooltip>
   );
 }
 

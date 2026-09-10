@@ -93,3 +93,4 @@ export const bindGithubToUser = provider.bindToUser;
 export const getUserIdForGithub = provider.getUserIdFor;
 export const getGithubProfileForUser = provider.getProfileForUser;
 export const unbindGithubForUser = provider.unbindForUser;
+export const clearGithubBindingsForRoom = provider.clearBindingsForRoom;

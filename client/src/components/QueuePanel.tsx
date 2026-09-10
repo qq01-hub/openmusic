@@ -36,6 +36,7 @@ type RowData = {
   onJump: (queueId: string) => void;
   onRemove: (queueId: string) => void;
   onBan: (song: QueueRowSong) => void;
+  onArtistClick?: (artist: string) => void;
   onDragStart: (queueId: string) => void;
   onDragOver: (queueId: string) => void;
   onDrop: (queueId: string) => void;
@@ -72,6 +73,7 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
           onJump={data.onJump}
           onRemove={data.onRemove}
           onBan={data.onBan}
+          onArtistClick={data.onArtistClick}
           onDragStart={data.onDragStart}
           onDragOver={data.onDragOver}
           onDrop={data.onDrop}
@@ -107,9 +109,10 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
 
 interface Props {
   fillHeight?: boolean;
+  onArtistClick?: (artist: string) => void;
 }
 
-export default function QueuePanel({ fillHeight = false }: Props) {
+export default function QueuePanel({ fillHeight = false, onArtistClick }: Props) {
   const queue = useRoomStore((s) => s.room?.queue);
   const currentSong = useRoomStore((s) => s.room?.current);
   const memberTiers = useRoomStore((s) => s.room?.memberTiers);
@@ -310,6 +313,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
     onJump: handleJumpRequest,
     onRemove: removeSong,
     onBan: handleBanSong,
+    onArtistClick,
     onDragStart: handleDragStart,
     onDragOver: handleDragOver,
     onDrop: handleDrop,
@@ -330,6 +334,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
     handleJumpRequest,
     removeSong,
     handleBanSong,
+    onArtistClick,
     handleDragStart,
     handleDragOver,
     handleDrop,
@@ -374,6 +379,7 @@ export default function QueuePanel({ fillHeight = false }: Props) {
         onJump={handleJumpRequest}
         onRemove={removeSong}
         onBan={handleBanSong}
+        onArtistClick={onArtistClick}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDrop={handleDrop}

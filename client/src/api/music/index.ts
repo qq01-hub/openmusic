@@ -51,6 +51,7 @@ export type SearchFilterMode = 'smart' | MusicSource;
 
 export interface SearchAllSongsOptions {
   filterMode?: SearchFilterMode;
+  suggestion?: Pick<SearchResult, 'name' | 'artist'>;
 }
 
 /** 并行搜索，多平台交替合并 */
@@ -71,7 +72,7 @@ export async function searchAllSongs(
       const songs = await searchSongs(filterMode, keyword);
       return interleaveSearchResults(
         { [filterMode]: songs },
-        { sourceOnly: filterMode, keyword },
+        { sourceOnly: filterMode, keyword, suggestion: options.suggestion },
       );
     } catch {
       return [];
@@ -90,7 +91,7 @@ export async function searchAllSongs(
     }
   }
 
-  return interleaveSearchResults(groups, { dedupeCrossSource: true, keyword });
+  return interleaveSearchResults(groups, { dedupeCrossSource: true, keyword, suggestion: options.suggestion });
 }
 
 export {
@@ -99,6 +100,7 @@ export {
   artistGroupKey,
   trackTitleKey,
   rankSearchResultsByKeyword,
+  rankSearchResultsBySuggestion,
   scoreTitleRelevance,
 } from './merge';
 export type { InterleaveOptions } from './merge';

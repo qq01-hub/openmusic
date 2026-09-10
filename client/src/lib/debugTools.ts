@@ -836,7 +836,7 @@ export function disableOpenMusicDebug(): void {
 }
 
 export function installOpenMusicDebug(): void {
-  const target = window as typeof window & {
+  const target = window as unknown as {
     debug?: () => void;
     debugOff?: () => void;
     debugNow?: () => void;

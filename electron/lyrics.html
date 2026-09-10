@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OpenMusic 桌面歌词</title><link rel="stylesheet" href="./lyrics.css"></head>
+<body>
+  <main class="lyrics-shell" aria-live="polite" title="拖动可移动；右键打开歌词样式">
+    <section class="lyrics-stage">
+      <div id="active" class="active">暂无歌词</div>
+      <div id="translation" class="translation" hidden></div>
+    </section>
+    <div class="lyrics-actions" aria-label="桌面歌词操作">
+      <button id="lock" type="button" aria-label="锁定歌词位置">🔓</button>
+      <button id="settings" type="button" aria-label="歌词样式设置">⚙</button>
+      <button id="close" type="button" aria-label="关闭桌面歌词">×</button>
+    </div>
+  </main>
+  <script src="./lyrics-renderer.js"></script>
+</body>
+</html>

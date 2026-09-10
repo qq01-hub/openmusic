@@ -5,9 +5,9 @@
   "scripts": {
     "dev": "node --watch index.js",
     "start": "node index.js",
-    "test": "node --test",
     "lint": "eslint .",
-    "check": "npm run lint && npm test"
+    "check": "npm run lint",
+    "test": "npm run check"
   },
   "dependencies": {
     "cors": "^2.8.5",

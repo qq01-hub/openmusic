@@ -189,8 +189,9 @@ const FAVORITES_PREFIX = 'openmusic:favorites:';
 const MAX_FAVORITES = 5000;
 const FAVORITES_CAS_RETRIES = 8;
 const FAVORITE_SHARE_PREFIX = 'openmusic:favorite-share:';
-const FAVORITE_SHARE_TTL_SECONDS = 7 * 24 * 60 * 60;
+const FAVORITE_SHARE_OWNER_PREFIX = 'openmusic:favorite-share-owner:';
 const FAVORITE_SHARE_CODE_LENGTH = 8;
+const FAVORITE_SHARE_VERSION = 2;
 const FAVORITES_CAS_SCRIPT = `
 local current = redis.call('GET', KEYS[1])
 if ARGV[1] == '0' then
@@ -317,6 +318,10 @@ function favoriteShareKey(code) {
   return `${FAVORITE_SHARE_PREFIX}${code}`;
 }
 
+function favoriteShareOwnerKey(userId) {
+  return `${FAVORITE_SHARE_OWNER_PREFIX}${userId}`;
+}
+
 function normalizeFavoriteShareCode(code) {
   return String(code || '').trim().toUpperCase();
 }
@@ -325,24 +330,72 @@ function createFavoriteShareCode() {
   return randomBytes(8).toString('hex').slice(0, FAVORITE_SHARE_CODE_LENGTH).toUpperCase();
 }
 
+/**
+ * 解析永久分享码引用。旧版分享码保存的是歌曲快照，由 previewFavoriteShare
+ * 继续按旧格式读取，直到它自然过期；新版只保存分享者身份，读取时实时取收藏。
+ */
+export function parseFavoriteShareReference(raw) {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw);
+    const userId = String(value?.userId || '').trim();
+    return value?.version === FAVORITE_SHARE_VERSION && userId ? { userId } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function getExistingFavoriteShareCode(userId) {
+  const code = normalizeFavoriteShareCode(await redisClient.get(favoriteShareOwnerKey(userId)));
+  if (!/^[A-Z0-9]{8}$/.test(code)) return null;
+  const reference = parseFavoriteShareReference(await redisClient.get(favoriteShareKey(code)));
+  return reference?.userId === userId ? code : null;
+}
+
 export async function createFavoriteShare(userId) {
   const id = String(userId || '').trim();
   if (!id) return { error: '用户身份无效' };
   if (!enabled || !redisClient) return { error: 'Redis 不可用，分享码无法创建' };
-  const favorites = await listFavoriteSongs(id);
-  if (!favorites.length) return { error: '暂无可分享的收藏歌曲' };
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+
+  const existing = await getExistingFavoriteShareCode(id);
+  if (existing) {
+    const favorites = await listFavoriteSongs(id);
+    return { code: existing, count: favorites.length };
+  }
+
+  for (let attempt = 0; attempt < 8; attempt += 1) {
     const code = createFavoriteShareCode();
-    const created = await redisClient.set(favoriteShareKey(code), JSON.stringify(favorites), { NX: true, EX: FAVORITE_SHARE_TTL_SECONDS });
-    if (created === 'OK') return { code, count: favorites.length, expiresIn: FAVORITE_SHARE_TTL_SECONDS };
+    const reference = JSON.stringify({ version: FAVORITE_SHARE_VERSION, userId: id });
+    const created = await redisClient.set(favoriteShareKey(code), reference, { NX: true });
+    if (created !== 'OK') continue;
+
+    const ownerSet = await redisClient.set(favoriteShareOwnerKey(id), code, { NX: true });
+    if (ownerSet === 'OK') {
+      const favorites = await listFavoriteSongs(id);
+      return { code, count: favorites.length };
+    }
+
+    // 另一个并发请求先完成了该用户的创建；删除本次未被引用的随机码。
+    await redisClient.del(favoriteShareKey(code));
+    const winner = await getExistingFavoriteShareCode(id);
+    if (winner) {
+      const favorites = await listFavoriteSongs(id);
+      return { code: winner, count: favorites.length };
+    }
   }
   return { error: '分享码创建失败，请重试' };
 }
 
 export async function previewFavoriteShare(code) {
   const normalized = normalizeFavoriteShareCode(code);
-  if (!/^[A-Z0-9]{8}$/.test(normalized) || !enabled || !redisClient) return { error: '分享码无效或已过期' };
+  if (!/^[A-Z0-9]{8}$/.test(normalized) || !enabled || !redisClient) return { error: '分享码无效' };
   const raw = await redisClient.get(favoriteShareKey(normalized));
+  const reference = parseFavoriteShareReference(raw);
+  if (reference) {
+    return { code: normalized, songs: await listFavoriteSongs(reference.userId) };
+  }
+
+  // 兼容此前的七天歌曲快照，避免已发出的旧链接立刻失效。
   const songs = parseFavorites(raw);
   if (!songs.length) return { error: '分享码无效或已过期' };
   return { code: normalized, songs };

@@ -7,6 +7,7 @@ import {
   subscribeFullscreenChange,
 } from '../../lib/browserFullscreen';
 import QueueSystemToast from '../QueueSystemToast';
+import Tooltip from '../Tooltip';
 
 type PanelId = 'search' | 'queue' | 'chat';
 
@@ -429,19 +430,20 @@ export default function RoomImmersiveShell({
         onMouseEnter={holdChrome}
         onMouseLeave={releaseChrome}
       >
-        <button
-          type="button"
-          onClick={() => {
-            void toggleNativeFullscreen();
-          }}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/25 px-3 py-1.5 text-xs text-white/70 backdrop-blur-xl transition-colors hover:bg-black/40 hover:text-white"
-          aria-label={isNativeFullscreen ? '退出浏览器全屏' : '进入浏览器全屏'}
-          aria-pressed={isNativeFullscreen}
-          title={isNativeFullscreen ? '退出全屏 (Esc)' : '浏览器原生全屏'}
-        >
-          {isNativeFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-          <span>{isNativeFullscreen ? '退出全屏' : '全屏'}</span>
-        </button>
+        <Tooltip content={isNativeFullscreen ? '退出全屏 (Esc)' : '浏览器原生全屏'}>
+          <button
+            type="button"
+            onClick={() => {
+              void toggleNativeFullscreen();
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 bg-black/25 px-3 py-1.5 text-xs text-white/70 backdrop-blur-xl transition-colors hover:bg-black/40 hover:text-white"
+            aria-label={isNativeFullscreen ? '退出浏览器全屏' : '进入浏览器全屏'}
+            aria-pressed={isNativeFullscreen}
+          >
+            {isNativeFullscreen ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            <span>{isNativeFullscreen ? '退出全屏' : '全屏'}</span>
+          </button>
+        </Tooltip>
         <button
           type="button"
           onClick={onExit}

@@ -191,6 +191,7 @@ import { importNeteasePlaylist, importQqPlaylist, importKugouPlaylist, importQis
 import { fetchNeteaseHotToplist } from './neteaseToplist.js';
 import { createNeteasePlaylistSearchHandler } from './neteasePlaylistSearch.js';
 import { getHotSongs } from './songHotRank.js';
+import { fetchMusicSuggestions } from './musicSuggestions.js';
 import { hasRedisEnvConfig, createFavoriteShare, importFavoriteShare, importFavoriteSongs, listFavoriteSongs, previewFavoriteShare, setFavoriteSong, getRedisClient } from './roomStorage.js';
 import {
   createChatImageUploadToken,
@@ -239,6 +240,7 @@ import {
   getUserIdForLinuxdo,
   getLinuxdoProfileForUser,
   unbindLinuxdoForUser,
+  clearLinuxdoBindingsForRoom,
 } from './linuxdoAuth.js';
 import {
   isGithubConfigured,
@@ -252,6 +254,7 @@ import {
   getUserIdForGithub,
   getGithubProfileForUser,
   unbindGithubForUser,
+  clearGithubBindingsForRoom,
 } from './githubAuth.js';
 import {
   ACCOUNT_SESSION_COOKIE,
@@ -274,6 +277,14 @@ let handleLinuxdoAdminCallback = null;
 let handleGithubAdminCallback = null;
 
 const wechatUinStore = createWechatUinStore();
+
+async function clearRoomOwnerBindings(roomId) {
+  await Promise.all([
+    clearLinuxdoBindingsForRoom(roomId),
+    clearGithubBindingsForRoom(roomId),
+    wechatUinStore.clearBindingsForRoom(roomId),
+  ]);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.join(__dirname, '../client/dist');
@@ -677,6 +688,8 @@ function createRateLimiter({ windowMs, max, maxBuckets = 10_000 }) {
 const limitJoinAttempt = createRateLimiter({ windowMs: 60_000, max: 30 });
 const limitJoinPasswordFail = createRateLimiter({ windowMs: 60_000, max: 8 });
 const limitProxyRequest = createRateLimiter({ windowMs: 60_000, max: 120 });
+// 联想一次会扇出多个音源请求；单独限额以保护上游，避免挤占常规搜索配额。
+const limitMusicSuggestions = createRateLimiter({ windowMs: 60_000, max: 30 });
 const limitSocketAction = createRateLimiter({ windowMs: 60_000, max: 90 });
 const limitContributionQr = createRateLimiter({ windowMs: 60_000, max: 45 });
 const limitContributionBind = createRateLimiter({ windowMs: 10 * 60_000, max: 8 });
@@ -1421,6 +1434,26 @@ app.get('/api/music/hot', async (req, res) => {
   } catch (err) {
     console.error('Hot songs error:', err.message);
     res.status(500).json({ error: '获取热榜失败' });
+  }
+});
+
+app.get('/api/music/suggestions', async (req, res) => {
+  if (!requireSessionIdentity(req, res)) return;
+  if (!limitMusicSuggestions(proxyLimitKey('music-suggestions', req))) {
+    return res.status(429).json({ error: '请求过于频繁，请稍后再试', suggestions: [] });
+  }
+  const keyword = String(req.query.q || '').trim();
+
+  if (!keyword || keyword.length < 1) {
+    return res.json({ suggestions: [] });
+  }
+
+  try {
+    const suggestions = await fetchMusicSuggestions(keyword, getRuntimeConfig().musicSourcesEnabled);
+    res.json({ suggestions });
+  } catch (err) {
+    console.error('Music suggestions error:', err.message);
+    res.status(500).json({ error: '获取搜索建议失败', suggestions: [] });
   }
 });
 
@@ -2270,8 +2303,17 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
     if (!identity?.userId || identity.userId !== state.userId) {
       return fail(returnPath, 'expired');
     }
+    const room = getRoomInternal(state.roomId);
+    if (!room || room.creatorId !== identity.userId) {
+      return fail(returnPath, 'denied');
+    }
     try {
       await bindLinuxdoToUser(profile.id, identity.userId, profile, state.roomId);
+      // 授权跳转期间后台或现房主可能刚完成转让，避免把已清理的旧绑定重新写回。
+      if (getRoomInternal(state.roomId)?.creatorId !== identity.userId) {
+        await unbindLinuxdoForUser(identity.userId, state.roomId);
+        return fail(returnPath, 'denied');
+      }
     } catch (err) {
       console.error('Linux.do 绑定写入失败:', err?.message || err);
       return fail(returnPath, 'error');
@@ -2372,8 +2414,17 @@ app.get('/api/auth/github/callback', async (req, res) => {
     if (!identity?.userId || identity.userId !== state.userId) {
       return fail(returnPath, 'expired');
     }
+    const room = getRoomInternal(state.roomId);
+    if (!room || room.creatorId !== identity.userId) {
+      return fail(returnPath, 'denied');
+    }
     try {
       await bindGithubToUser(profile.id, identity.userId, profile, state.roomId);
+      // 授权跳转期间后台或现房主可能刚完成转让，避免把已清理的旧绑定重新写回。
+      if (getRoomInternal(state.roomId)?.creatorId !== identity.userId) {
+        await unbindGithubForUser(identity.userId, state.roomId);
+        return fail(returnPath, 'denied');
+      }
     } catch (err) {
       console.error('GitHub 绑定写入失败:', err?.message || err);
       return fail(returnPath, 'error');
@@ -2780,6 +2831,16 @@ function resolveIosIpaPath() {
   return null;
 }
 
+function resolveWindowsDesktopClientPath() {
+  const candidates = [
+    path.join(__dirname, 'downloads/openmusic-desktop-setup.exe'),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 function sendAndroidApk(req, res) {
   const apkPath = resolveAndroidApkPath();
   if (!apkPath) {
@@ -2802,8 +2863,20 @@ function sendIosIpa(req, res) {
   res.download(ipaPath, 'openmusic.ipa');
 }
 
+function sendWindowsDesktopClient(req, res) {
+  const clientPath = resolveWindowsDesktopClientPath();
+  if (!clientPath) {
+    return res.status(404).type('text/plain; charset=utf-8').send(
+      'Windows 客户端尚未构建。请在项目根目录执行 npm run build。',
+    );
+  }
+  res.setHeader('Content-Type', 'application/vnd.microsoft.portable-executable');
+  res.download(clientPath, 'openmusic-desktop-setup.exe');
+}
+
 app.get('/downloads/openmusic.apk', sendAndroidApk);
 app.get('/downloads/openmusic.ipa', sendIosIpa);
+app.get('/downloads/openmusic-desktop-setup.exe', sendWindowsDesktopClient);
 
 mountWechatFileHelperProxy(app, fetchWithTimeout, {
   requireAuth: (req, res) => Boolean(requireSessionIdentity(req, res)),
@@ -2954,6 +3027,7 @@ const socketToUserId = new Map();
   getClientIp: (req) => getClientIpFromHeaders(req.headers, req.socket?.remoteAddress || ''),
   allowedOrigins: ALLOWED_ORIGINS,
   broadcastRoomUpdate,
+  clearRoomOwnerBindings,
 }));
 
 function isPrivateHostname(hostname) {
@@ -4547,7 +4621,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('transfer_owner', ({ userId: targetUserId }, callback) => {
+  socket.on('transfer_owner', async ({ userId: targetUserId }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'transfer_owner', callback)) return;
 
@@ -4564,6 +4638,11 @@ io.on('connection', (socket) => {
       return;
     }
 
+    try {
+      await clearRoomOwnerBindings(roomId);
+    } catch (err) {
+      console.error('房主转让后清理 Linux.do 绑定失败:', err?.message || err);
+    }
     broadcastRoomUpdate(roomId);
     emitSystemChat(roomId, result.systemMessage);
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId), message: result.message });

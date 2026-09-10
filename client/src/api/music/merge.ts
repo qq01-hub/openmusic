@@ -163,6 +163,35 @@ export function rankSearchResultsByKeyword(songs: SearchResult[], keyword: strin
     .map((item) => item.song);
 }
 
+/**
+ * 联想项是用户明确选择的「歌名 + 歌手」组合，不能按普通文本搜索处理。
+ * 同时命中两者的结果优先，随后才是同歌手或同歌名的结果。
+ */
+export function rankSearchResultsBySuggestion(
+  songs: SearchResult[],
+  suggestion: Pick<SearchResult, 'name' | 'artist'>,
+): SearchResult[] {
+  const name = normalizeRelevanceText(suggestion.name);
+  const artist = normalizeRelevanceText(suggestion.artist);
+  if ((!name && !artist) || songs.length <= 1) return songs;
+
+  return songs
+    .map((song, index) => {
+      const songName = normalizeRelevanceText(song.name);
+      const songArtist = normalizeRelevanceText(song.artist);
+      const nameScore = name ? scoreNameRelevance(name, songName) : 0;
+      const artistScore = artist ? scoreArtistPrimary(artist, songArtist) : 0;
+      const score = nameScore > 0 && artistScore > 0
+        ? 3_000 + nameScore + artistScore
+        : artistScore > 0
+          ? 2_000 + artistScore
+          : nameScore;
+      return { song, index, score };
+    })
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((item) => item.song);
+}
+
 /** 歌手名 + 歌名（跨平台去重键） */
 export function trackTitleKey(song: Pick<SearchResult, 'name' | 'artist'>): string {
   return `${normalize(song.name)}|${normalize(song.artist)}`;
@@ -216,6 +245,8 @@ export interface InterleaveOptions {
   sourceOnly?: MusicSource;
   /** 搜索关键词：合并后按相关度重排（所有歌曲） */
   keyword?: string;
+  /** 用户从联想列表明确选择的歌名与歌手，用于结果精排。 */
+  suggestion?: Pick<SearchResult, 'name' | 'artist'>;
 }
 
 /**
@@ -258,6 +289,7 @@ export function interleaveSearchResults(
     }
   }
 
+  if (options.suggestion) return rankSearchResultsBySuggestion(merged, options.suggestion);
   return keyword ? rankSearchResultsByKeyword(merged, keyword) : merged;
 }
 export function songKey(song: Pick<SearchResult, 'source' | 'id'>): string {

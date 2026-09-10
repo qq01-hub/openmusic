@@ -96,3 +96,4 @@ export const bindLinuxdoToUser = provider.bindToUser;
 export const getUserIdForLinuxdo = provider.getUserIdFor;
 export const getLinuxdoProfileForUser = provider.getProfileForUser;
 export const unbindLinuxdoForUser = provider.unbindForUser;
+export const clearLinuxdoBindingsForRoom = provider.clearBindingsForRoom;

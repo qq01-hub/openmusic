@@ -75,6 +75,7 @@ import {
   isLinuxdoConfigured,
   signLinuxdoState,
   buildLinuxdoAuthorizeUrl,
+  clearLinuxdoBindingsForRoom,
 } from './linuxdoAuth.js';
 import {
   isGithubConfigured,
@@ -580,6 +581,7 @@ export function mountAdminApi(app, {
   getClientIp,
   allowedOrigins = null,
   broadcastRoomUpdate = null,
+  clearRoomOwnerBindings = null,
 }) {
   const requireAdminOrigin = createRequireAdminOrigin(allowedOrigins);
 
@@ -1082,7 +1084,7 @@ export function mountAdminApi(app, {
     res.json({ rooms: await listRoomsForAdminDetailed() });
   });
 
-  app.post('/api/admin/rooms/:id/owner', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, (req, res) => {
+  app.post('/api/admin/rooms/:id/owner', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, async (req, res) => {
     const roomId = String(req.params.id || '').toUpperCase();
     const targetUserId = String(req.body?.userId || '').trim();
     const ip = getClientIp?.(req) || req.ip || '';
@@ -1091,6 +1093,15 @@ export function mountAdminApi(app, {
       const status = result.error === '房间不存在' || result.error === '用户不在房间中' ? 404 : 400;
       audit('admin_transfer_owner', { roomId, targetUserId, error: result.error }, ip);
       return res.status(status).json({ error: result.error });
+    }
+    if (typeof clearRoomOwnerBindings === 'function') {
+      await clearRoomOwnerBindings(roomId).catch((err) => {
+        console.error('管理员转让房主后清理身份绑定失败:', err?.message || err);
+      });
+    } else {
+      await clearLinuxdoBindingsForRoom(roomId).catch((err) => {
+        console.error('管理员转让房主后清理 Linux.do 绑定失败:', err?.message || err);
+      });
     }
     if (typeof broadcastRoomUpdate === 'function') broadcastRoomUpdate(roomId, { immediate: true });
     if (result.systemMessage) io.to(roomId).emit('chat_message', result.systemMessage);

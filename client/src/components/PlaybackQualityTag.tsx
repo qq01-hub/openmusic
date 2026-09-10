@@ -1,6 +1,7 @@
 /** 歌名旁实际音质标：网易红 / QQ 绿 / 汽水黄 / 酷狗蓝，简洁短标 */
 
 import type { MusicSource } from '../types';
+import Tooltip from './Tooltip';
 
 interface Props {
   label?: string | null;
@@ -119,15 +120,16 @@ export default function PlaybackQualityTag({ label, source, className = '' }: Pr
   const tierClass = tierClassForSource(source, tier);
 
   return (
-    <span
-      className={
-        `inline-flex flex-shrink-0 items-center rounded-[2px] border px-[3px] py-px ` +
-        `text-[9px] font-medium leading-[1.2] tracking-wide ` +
-        `${tierClass} ${className}`
-      }
-      title={`实际音质：${raw}`}
-    >
-      {short}
-    </span>
+    <Tooltip content={`实际音质：${raw}`}>
+      <span
+        className={
+          `inline-flex flex-shrink-0 items-center rounded-[2px] border px-[3px] py-px ` +
+          `text-[9px] font-medium leading-[1.2] tracking-wide ` +
+          `${tierClass} ${className}`
+        }
+      >
+        {short}
+      </span>
+    </Tooltip>
   );
 }

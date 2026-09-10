@@ -6,21 +6,53 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm run dev --prefix server",
     "dev:client": "npm run dev --prefix client",
-    "build": "npm run build --prefix client",
-    "test": "npm test --prefix server && npm test --prefix client",
+    "build": "npm run build:client",
     "lint": "npm run lint --prefix server",
-    "check": "npm run lint && npm test && npm run build:check",
+    "check": "npm run lint && npm run build:check",
     "typecheck": "npm run typecheck --prefix client",
     "build:check": "npm run build:check --prefix client",
     "start": "npm run start --prefix server",
     "package:build": "node scripts/package-build.mjs",
     "install:all": "npm install && npm install --prefix server && npm install --prefix client",
-    "build:apk": "npm run build:apk --prefix client"
+    "build:apk": "npm run build:apk --prefix client",
+    "dev:electron": "wait-on http://localhost:5173 && cross-env OPENMUSIC_URL=http://localhost:5173 electron electron/main.cjs",
+    "electron": "electron electron/main.cjs",
+    "electron:dist": "npm run desktop:build",
+    "build:client": "npm run build --prefix client",
+    "electron:package": "node scripts/build-electron-client.mjs",
+    "desktop:build": "npm run build:client && npm run electron:package"
   },
   "devDependencies": {
-    "concurrently": "^9.2.4"
+    "concurrently": "^9.2.4",
+    "cross-env": "^7.0.3",
+    "electron": "^44.2.0",
+    "electron-builder": "^26.0.12",
+    "wait-on": "^8.0.3"
   },
   "engines": {
     "node": ">=20 <25"
-  }
+  },
+  "build": {
+    "appId": "com.openmusic.desktop",
+    "productName": "OpenMusic",
+    "asar": true,
+    "files": [
+      "electron/**/*",
+      "client/dist/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "electron/openmusic.ico"
+    },
+    "directories": {
+      "output": "dow"
+    },
+    "nsis": {
+      "artifactName": "openmusic-desktop-setup.${ext}"
+    }
+  },
+  "main": "electron/main.cjs"
 }

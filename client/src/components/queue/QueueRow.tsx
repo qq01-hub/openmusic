@@ -37,6 +37,7 @@ interface Props {
   onJump: (queueId: string) => void;
   onRemove: (queueId: string) => void;
   onBan: (song: QueueRowSong) => void;
+  onArtistClick?: (artist: string) => void;
   onDragStart?: (queueId: string) => void;
   onDragOver?: (queueId: string, e: React.DragEvent) => void;
   onDrop?: (queueId: string) => void;
@@ -65,6 +66,7 @@ function QueueRow({
   onJump,
   onRemove,
   onBan,
+  onArtistClick,
   onDragStart,
   onDragOver,
   onDrop,
@@ -275,7 +277,22 @@ function QueueRow({
           )}
         </div>
         <div className="flex items-center gap-2 text-[11px] leading-4 text-netease-muted min-w-0">
-          <QueueText text={song.artist} className="min-w-0 truncate" />
+          {onArtistClick ? (
+            <QueueTip content={`查看 ${song.artist} 的全部歌曲`}>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onArtistClick(song.artist);
+                }}
+                className="min-w-0 truncate text-left transition-colors hover:text-white hover:underline focus:outline-none focus-visible:text-white focus-visible:underline"
+              >
+                {song.artist}
+              </button>
+            </QueueTip>
+          ) : (
+            <QueueText text={song.artist} className="min-w-0 truncate" />
+          )}
           {!song.isCurrent && song.requestedBy && (
             <QueueText
               text={`${song.requestedBy}点的歌`}

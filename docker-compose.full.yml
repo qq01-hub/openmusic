@@ -45,6 +45,7 @@ services:
       - "${OPENMUSIC_PORT:-4000}:4000"
     environment:
       PORT: 4000
+      NODE_ENV: production
       DOCKER_REDIS_URL: redis://redis:6379/0
       DOCKER_METING_URL: http://meting:3000
       ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:?请在 .env 中设置 ROOM_CREDENTIAL_ENCRYPTION_KEY}

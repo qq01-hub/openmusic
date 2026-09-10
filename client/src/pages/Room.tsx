@@ -51,6 +51,7 @@ import PlaylistChannelFilter from '../components/PlaylistChannelFilter';
 import PageNumberPagination from '../components/PageNumberPagination';
 import SearchSkeleton, { RESULT_BODY_HEIGHT } from '../components/SearchSkeleton';
 import SongResultList from '../components/SongResultList';
+import SearchInputWithSuggestions, { type SelectedMusicSuggestion } from '../components/SearchInputWithSuggestions';
 import {
   getStoredSongResultPageSize,
   setStoredSongResultPageSize,
@@ -781,7 +782,7 @@ export default function Room() {
       } catch {
         // 剪贴板权限不可用时仍保留分享码，用户可手动复制。
       }
-      showToast(`分享码 ${res.code} 已生成`, 'success');
+      showToast(`永久分享码 ${res.code} 已就绪`, 'success');
     } else showToast(res.error || '分享码创建失败', 'error');
   }, [createFavoriteShare, showToast]);
 
@@ -789,7 +790,7 @@ export default function Room() {
     setFavoriteShareLoading(true);
     const res = await previewFavoriteShare(favoriteShareCode);
     setFavoriteShareLoading(false);
-    if (!res.success) return showToast(res.error || '分享码无效或已过期', 'error');
+    if (!res.success) return showToast(res.error || '分享码无效', 'error');
     const songs = res.songs || [];
     setFavoriteShareSongs(songs);
     setFavoriteShareSelected(new Set(songs.map(songKey)));
@@ -1022,7 +1023,11 @@ export default function Room() {
     prevOverlayOpenRef.current = overlayOpen;
   }, [activeSearchMode, searchedKeyword, searching, playlistSearchLoading, playlistSearchBackup, query]);
 
-  const doSearch = useCallback(async (keyword: string, filterMode = searchFilterMode) => {
+  const doSearch = useCallback(async (
+    keyword: string,
+    filterMode = searchFilterMode,
+    suggestion?: SelectedMusicSuggestion,
+  ) => {
     const requestId = ++songSearchRequestRef.current;
 
     if (!keyword.trim()) {
@@ -1041,7 +1046,7 @@ export default function Room() {
     try {
 
       // 音源配置还在加载时不能传空数组，否则 searchAllSongs 会直接返回空结果。
-      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, { filterMode });
+      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, { filterMode, suggestion });
 
       if (requestId === songSearchRequestRef.current) setResults(songs);
 
@@ -1241,8 +1246,25 @@ export default function Room() {
     isLgUp,
   ]);
 
-  const handleSearch = useCallback(() => {
-    const keyword = query.trim();
+  const handleArtistClick = useCallback((artist: string) => {
+    const keyword = artist.trim();
+    if (!keyword) return;
+    setActiveSearchMode('song');
+    setSearchMode('song');
+    setOverlaySearchMode('song');
+    setIsPlaylistResults(false);
+    setIsRadioResults(false);
+    setSearchDetailOrigin(null);
+    setPlaylistSearchResults([]);
+    setPlaylistSearchTotal(0);
+    setQuery(keyword);
+    setOverlayQuery(keyword);
+    setSearchedKeyword(keyword);
+    void doSearch(keyword);
+  }, [doSearch]);
+
+  const handleSearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
+    const keyword = (selectedKeyword ?? query).trim();
     const detectedPlatform = detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
@@ -1259,8 +1281,8 @@ export default function Room() {
     setPlaylistSearchResults([]);
     setPlaylistSearchTotal(0);
     setSearchedKeyword(keyword);
-    doSearch(keyword);
-  }, [query, searchMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
+    void doSearch(keyword, searchFilterMode, suggestion);
+  }, [query, searchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
 
   const handleSearchModeChange = useCallback((mode: SearchMode) => {
     if (mode === searchMode) return;
@@ -1297,8 +1319,8 @@ export default function Room() {
     void doSearch(keyword);
   }, [searchMode, query, searchedKeyword, playlistSearchBackup, doPlaylistSearch, doSearch]);
 
-  const handleOverlaySearch = useCallback(() => {
-    const keyword = overlayQuery.trim();
+  const handleOverlaySearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
+    const keyword = (selectedKeyword ?? overlayQuery).trim();
     const detectedPlatform = detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
@@ -1315,8 +1337,8 @@ export default function Room() {
     setPlaylistSearchResults([]);
     setPlaylistSearchTotal(0);
     setSearchedKeyword(keyword);
-    void doSearch(keyword);
-  }, [overlayQuery, overlaySearchMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
+    void doSearch(keyword, searchFilterMode, suggestion);
+  }, [overlayQuery, overlaySearchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
 
   const handleOverlaySearchModeChange = useCallback((mode: SearchMode) => {
     if (mode === overlaySearchMode) return;
@@ -1362,6 +1384,7 @@ export default function Room() {
     setPlaylistSearchResults([]);
     setPlaylistSearchTotal(0);
     setPlaylistSearchLoading(false);
+    setSearching(false); // 立即停止搜索状态
     setSearchedKeyword('');
     setIsPlaylistResults(false);
     setIsRadioResults(false);
@@ -2301,7 +2324,7 @@ export default function Room() {
         <QueueSystemToast />
       </div>
       <div className={`p-2 ${fillHeight ? 'flex-1 min-h-0 overflow-hidden flex flex-col' : ''}`}>
-        <QueuePanel fillHeight={fillHeight} />
+        <QueuePanel fillHeight={fillHeight} onArtistClick={handleArtistClick} />
       </div>
     </div>
   );
@@ -2330,13 +2353,14 @@ export default function Room() {
         </Tooltip>
       )}
       <div className="relative flex-1 min-w-0">
-        <Search className="absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 w-4 sm:w-5 h-4 sm:h-5 text-netease-muted pointer-events-none" />
-        <input
-          type="text"
+        <Search className="absolute left-3 sm:left-4 top-1/2 -translate-y-1/2 w-4 sm:w-5 h-4 sm:h-5 text-netease-muted pointer-events-none z-10" />
+        <SearchInputWithSuggestions
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          onChange={setQuery}
+          onSearch={handleSearch}
           placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          searching={searching}
+          suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
           className="w-full bg-netease-card border border-netease-border rounded-xl sm:rounded-2xl pl-10 sm:pl-12 pr-4 py-3 sm:py-3.5 text-sm sm:text-base text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
         />
       </div>
@@ -2457,19 +2481,20 @@ export default function Room() {
         </div>
       )}
       <div className="relative flex-1 min-w-0">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-netease-muted pointer-events-none" />
-        <input
-          type="text"
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-netease-muted pointer-events-none z-10" />
+        <SearchInputWithSuggestions
           value={overlayQuery}
-          onChange={(e) => setOverlayQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleOverlaySearch()}
+          onChange={setOverlayQuery}
+          onSearch={handleOverlaySearch}
           placeholder={overlaySearchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          searching={overlaySearchMode === 'song' && searching}
+          suggestionsEnabled={overlaySearchMode === 'song'}
           className="w-full bg-netease-card border border-netease-border rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
         />
       </div>
       <button
         type="button"
-        onClick={handleOverlaySearch}
+        onClick={() => handleOverlaySearch()}
         disabled={!overlayQuery.trim() || (overlaySearchMode === 'song' && searching)}
         className="flex-shrink-0 px-3 py-2 rounded-xl bg-netease-red text-white text-sm font-medium hover:bg-netease-red/85 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
       >
@@ -2483,12 +2508,13 @@ export default function Room() {
     <div className="w-full">
       <div id="search-box" className="mineradio-glass-search-box">
         <Search className="mr-2.5 h-4 w-4 flex-shrink-0 text-white/30" />
-        <input
-          type="text"
+        <SearchInputWithSuggestions
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+          onChange={setQuery}
+          onSearch={handleSearch}
           placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          searching={searchMode === 'song' && searching}
+          suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
           className="min-w-0 flex-1 border-none bg-transparent text-[13.5px] tracking-wide text-white outline-none placeholder:text-white/22"
         />
         <button
@@ -2633,6 +2659,7 @@ export default function Room() {
             results={results}
             addingId={addingId}
             onAdd={handleAdd}
+            onArtistClick={handleArtistClick}
             keyword={searchedKeyword}
             alwaysShowActions
             fillHeight
@@ -2710,7 +2737,7 @@ export default function Room() {
                 </div>
               ) : null
             }
-            queueContent={<QueuePanel fillHeight />}
+            queueContent={<QueuePanel fillHeight onArtistClick={handleArtistClick} />}
             chatContent={<ChatPanel />}
             settingsPanel={
               <ImmersiveFxSettingsPanel
@@ -3503,6 +3530,7 @@ export default function Room() {
                   results={results}
                   addingId={addingId}
                   onAdd={handleAdd}
+                  onArtistClick={handleArtistClick}
                   keyword={searchedKeyword}
                   alwaysShowActions
                   fillHeight
@@ -3620,9 +3648,9 @@ export default function Room() {
             <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3"><div><h2 className="text-sm font-medium">收藏分享</h2><p className="mt-0.5 text-xs text-netease-muted">分享出去或导入他人的收藏</p></div><button type="button" onClick={() => setFavoriteShareOpen(false)}><X className="h-5 w-5 text-netease-muted" /></button></div>
             <div className="flex border-b border-netease-border/50"><button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'create' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>我的分享码</button><button type="button" onClick={() => { setFavoriteShareMode('import'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'import' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>输入分享码</button></div>
             {favoriteShareMode === 'create' ? (
-              <div className="p-5"><p className="text-sm text-netease-muted">当前收藏 {favorites.length} 首。点击按钮后才会生成分享码，有效期 7 天。</p><button type="button" onClick={() => void createShareCode()} disabled={favorites.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-netease-red py-2.5 text-sm disabled:opacity-50"><Share2 className="h-4 w-4" />生成我的分享码</button>{favoriteShareCode && <div className="mt-4 rounded-lg border border-netease-border bg-netease-dark p-3 text-center"><p className="text-xs text-netease-muted">分享码（已自动复制，可手动复制）</p><p className="mt-1 select-all text-xl font-semibold tracking-[0.2em]">{favoriteShareCode}</p></div>}</div>
+              <div className="p-5"><p className="text-sm text-netease-muted">当前收藏 {favorites.length} 首。分享码长期有效，其他人预览时会看到你的最新收藏。</p><button type="button" onClick={() => void createShareCode()} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg bg-netease-red py-2.5 text-sm disabled:opacity-50"><Share2 className="h-4 w-4" />获取我的永久分享码</button>{favoriteShareCode && <div className="mt-4 rounded-lg border border-netease-border bg-netease-dark p-3 text-center"><p className="text-xs text-netease-muted">永久分享码（已自动复制，可手动复制）</p><p className="mt-1 select-all text-xl font-semibold tracking-[0.2em]">{favoriteShareCode}</p></div>}</div>
             ) : (
-              <div className="flex min-h-0 flex-1 flex-col p-5"><div className="flex gap-2"><input value={favoriteShareCode} onChange={e => setFavoriteShareCode(e.target.value.toUpperCase())} placeholder="输入 8 位分享码" maxLength={8} className="min-w-0 flex-1 rounded-lg border border-netease-border bg-netease-dark px-3 py-2 text-sm" /><button type="button" onClick={() => void previewShareCode()} disabled={favoriteShareLoading || favoriteShareCode.length !== 8} className="rounded-lg bg-netease-red px-3 text-sm disabled:opacity-50">预览</button></div>{favoriteShareSongs.length > 0 && (() => { const totalPages = Math.max(1, Math.ceil(favoriteShareSongs.length / favoriteSharePageSize)); const pageSongs = favoriteShareSongs.slice((favoriteSharePage - 1) * favoriteSharePageSize, favoriteSharePage * favoriteSharePageSize); const pageKeys = pageSongs.map(songKey); const pageAll = pageKeys.every(key => favoriteShareSelected.has(key)); return <><div className="mt-4 flex items-center justify-between text-xs text-netease-muted"><span>已选 {favoriteShareSelected.size} / {favoriteShareSongs.length} 首</span><button type="button" onClick={() => setFavoriteShareSelected(prev => { const next = new Set(prev); pageKeys.forEach(key => pageAll ? next.delete(key) : next.add(key)); return next; })} className="text-netease-red">{pageAll ? '取消本页全选' : '全选本页'}</button></div><div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">{pageSongs.map(song => { const key = songKey(song); return <label key={key} className="flex items-center gap-2 rounded-lg p-2 hover:bg-white/5"><input type="checkbox" checked={favoriteShareSelected.has(key)} onChange={() => setFavoriteShareSelected(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; })} /><span className="truncate text-sm">{song.name}<span className="text-xs text-netease-muted"> · {song.artist}</span></span></label>; })}</div><div className="mt-3 flex items-center justify-between"><button type="button" disabled={favoriteSharePage <= 1} onClick={() => setFavoriteSharePage(page => page - 1)} className="rounded px-2 py-1 text-xs text-netease-muted disabled:opacity-40">上一页</button><span className="text-xs text-netease-muted">第 {favoriteSharePage} / {totalPages} 页</span><button type="button" disabled={favoriteSharePage >= totalPages} onClick={() => setFavoriteSharePage(page => page + 1)} className="rounded px-2 py-1 text-xs text-netease-muted disabled:opacity-40">下一页</button></div><button type="button" onClick={() => void importShareFavorites()} disabled={!favoriteShareSelected.size} className="mt-3 w-full rounded-lg bg-netease-red py-2 text-sm disabled:opacity-50">导入选中收藏</button></> })()}</div>
+              <div className="flex min-h-0 flex-1 flex-col p-5"><div className="flex gap-2"><input value={favoriteShareCode} onChange={e => setFavoriteShareCode(e.target.value.toUpperCase())} placeholder="输入 8 位永久分享码" maxLength={8} className="min-w-0 flex-1 rounded-lg border border-netease-border bg-netease-dark px-3 py-2 text-sm" /><button type="button" onClick={() => void previewShareCode()} disabled={favoriteShareLoading || favoriteShareCode.length !== 8} className="rounded-lg bg-netease-red px-3 text-sm disabled:opacity-50">预览</button></div>{favoriteShareSongs.length > 0 && (() => { const totalPages = Math.max(1, Math.ceil(favoriteShareSongs.length / favoriteSharePageSize)); const pageSongs = favoriteShareSongs.slice((favoriteSharePage - 1) * favoriteSharePageSize, favoriteSharePage * favoriteSharePageSize); const pageKeys = pageSongs.map(songKey); const pageAll = pageKeys.every(key => favoriteShareSelected.has(key)); return <><div className="mt-4 flex items-center justify-between text-xs text-netease-muted"><span>已选 {favoriteShareSelected.size} / {favoriteShareSongs.length} 首</span><button type="button" onClick={() => setFavoriteShareSelected(prev => { const next = new Set(prev); pageKeys.forEach(key => pageAll ? next.delete(key) : next.add(key)); return next; })} className="text-netease-red">{pageAll ? '取消本页全选' : '全选本页'}</button></div><div className="mt-2 min-h-0 flex-1 space-y-1 overflow-y-auto">{pageSongs.map(song => { const key = songKey(song); return <label key={key} className="flex items-center gap-2 rounded-lg p-2 hover:bg-white/5"><input type="checkbox" checked={favoriteShareSelected.has(key)} onChange={() => setFavoriteShareSelected(prev => { const next = new Set(prev); next.has(key) ? next.delete(key) : next.add(key); return next; })} /><span className="truncate text-sm">{song.name}<span className="text-xs text-netease-muted"> · {song.artist}</span></span></label>; })}</div><div className="mt-3 flex items-center justify-between"><button type="button" disabled={favoriteSharePage <= 1} onClick={() => setFavoriteSharePage(page => page - 1)} className="rounded px-2 py-1 text-xs text-netease-muted disabled:opacity-40">上一页</button><span className="text-xs text-netease-muted">第 {favoriteSharePage} / {totalPages} 页</span><button type="button" disabled={favoriteSharePage >= totalPages} onClick={() => setFavoriteSharePage(page => page + 1)} className="rounded px-2 py-1 text-xs text-netease-muted disabled:opacity-40">下一页</button></div><button type="button" onClick={() => void importShareFavorites()} disabled={!favoriteShareSelected.size} className="mt-3 w-full rounded-lg bg-netease-red py-2 text-sm disabled:opacity-50">导入选中收藏</button></> })()}</div>
             )}
           </div>
         </div>, document.body,

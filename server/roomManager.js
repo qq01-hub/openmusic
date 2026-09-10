@@ -4010,7 +4010,13 @@ export function adminTransferOwner(roomId, targetUserId) {
   };
 }
 
-/** 微信身份找回房主：将已绑定身份提升为房主，原房主退为正式管理员。 */
+/**
+ * 外部身份找回房主。
+ *
+ * 第三方账号绑定的是创建者的内部 userId，而不是一张可永久夺回房间的凭证。
+ * 因此房主已经通过前台或后台转让给其他人后，旧 creatorId 即使仍命中残留的
+ * 绑定记录也必须被拒绝，不能覆盖已完成的转让。
+ */
 export function recoverRoomOwner(roomId, recoveredUserId, recoveryDeviceId = null) {
   const room = rooms.get(String(roomId || '').toUpperCase());
   if (!room) return { error: '房间不存在' };
@@ -4018,6 +4024,7 @@ export function recoverRoomOwner(roomId, recoveredUserId, recoveryDeviceId = nul
   const targetId = sanitizeCreatorId(recoveredUserId) || String(recoveredUserId || '').trim();
   if (!/^[a-zA-Z0-9_-]{8,64}$/.test(targetId)) return { error: '无效用户' };
   if (targetId === room.creatorId) return { ok: true, room: serializeRoom(room), changed: false };
+  if (room.creatorId) return { error: '该身份已不再是当前房主' };
   if (!wasKnownRoomUser(room, targetId) && !room.users.has(targetId)) {
     return { error: '该身份不是当前房间成员' };
   }

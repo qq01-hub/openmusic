@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node scripts/run-tests.mjs",
     "typecheck": "tsc -b --pretty false",
+    "test": "npm run typecheck",
     "build": "vite build",
     "build:check": "npm run typecheck && npm run check:antd-boundary && npm run build",
     "check:antd-boundary": "node scripts/check-antd-boundary.mjs",

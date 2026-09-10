@@ -10,6 +10,7 @@ import {
 } from '../api/music/toplist';
 import SongCover from './SongCover';
 import TruncateTip from './TruncateTip';
+import Tooltip from './Tooltip';
 
 interface Props {
   addingId: string | null;
@@ -60,11 +61,11 @@ function ToplistRow({
   onAdd: () => void;
 }) {
   return (
-    <div
-      className="group flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/[0.04] [content-visibility:auto] [contain-intrinsic-size:auto_48px]"
-      title="双击点歌"
-      onDoubleClick={() => onAdd()}
-    >
+    <Tooltip content="双击点歌">
+      <div
+        className="group flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/[0.04] [content-visibility:auto] [contain-intrinsic-size:auto_48px]"
+        onDoubleClick={() => onAdd()}
+      >
       <span className={`w-4 flex-shrink-0 text-center text-[10px] leading-none ${rankClass(rank)}`}>
         {rank}
       </span>
@@ -102,7 +103,8 @@ function ToplistRow({
           <Plus className="h-3.5 w-3.5" />
         )}
       </button>
-    </div>
+      </div>
+    </Tooltip>
   );
 }
 

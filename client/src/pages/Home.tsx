@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Users, ArrowRight, Lock, ListMusic,
   Loader2, RefreshCw, Plus, X, Disc3, Sparkles, Github, History, HeartHandshake, Heart,
-  Play, Activity, Search, ShieldCheck, Crown, Smartphone, Shuffle
+  Play, Activity, Search, ShieldCheck, Crown, Download, Shuffle
 } from 'lucide-react';
 import { createRoom, checkRoom, listRooms, randomMatchRoom } from '../api/meting';
 import { useRoomStore } from '../stores/roomStore';
@@ -13,7 +13,6 @@ import { usePageSeo, useSiteSeoConfig } from '../lib/seo';
 import { partitionRoomsByRecent, sortRecentRooms } from '../lib/recentRooms';
 import { getStoredRoomPassword } from '../lib/roomPassword';
 import { areRoomListsEqual, isLobbyHardLocked, sortLobbyRooms } from '../lib/roomListCompare';
-import { ANDROID_APK_URL } from '../lib/androidDownload';
 import { resizeCoverUrl } from '../lib/coverUrl';
 import { markRoomConfigApplyPending, rememberLatestCreatedRoom } from '../lib/roomConfigCache';
 import {
@@ -177,13 +176,14 @@ const RoomCard = memo(function RoomCard({
       )}
 
       {(room.isOwner || room.isAdmin) && (
-        <div
-          className="absolute right-4 top-4 z-20 inline-flex items-center justify-center rounded-full border border-white/10 bg-black/45 p-2 text-amber-300 shadow-lg backdrop-blur-md"
-          title={room.isOwner ? '房主' : '管理员'}
-          aria-label={room.isOwner ? '房主' : '管理员'}
-        >
-          {room.isOwner ? <Crown className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4 text-sky-300" />}
-        </div>
+        <Tooltip content={room.isOwner ? '房主' : '管理员'}>
+          <div
+            className="absolute right-4 top-4 z-20 inline-flex items-center justify-center rounded-full border border-white/10 bg-black/45 p-2 text-amber-300 shadow-lg backdrop-blur-md"
+            aria-label={room.isOwner ? '房主' : '管理员'}
+          >
+            {room.isOwner ? <Crown className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4 text-sky-300" />}
+          </div>
+        </Tooltip>
       )}
 
       <div className="relative p-5 sm:p-6" style={{ transformStyle: 'preserve-3d' }}>
@@ -725,14 +725,9 @@ export default function Home() {
                   </Tooltip>
                 </>
               )}
-              <Tooltip content="下载 Android 客户端">
-                <a href={ANDROID_APK_URL} download="openmusic.apk" className={`hidden sm:inline-flex ${headerIconCls}`} aria-label="下载 Android 客户端">
-                  <Smartphone className="home-header-icon__download h-5 w-5" />
-                </a>
-              </Tooltip>
-              <Tooltip content="下载 Android 客户端">
-                <button type="button" onClick={() => setDownloadModalOpen(true)} className={`inline-flex sm:hidden ${headerIconCls}`} aria-label="下载 Android 客户端">
-                  <Smartphone className="home-header-icon__download h-5 w-5" />
+              <Tooltip content="下载客户端">
+                <button type="button" onClick={() => setDownloadModalOpen(true)} className={`inline-flex ${headerIconCls}`} aria-label="下载客户端">
+                  <Download className="home-header-icon__download h-5 w-5" />
                 </button>
               </Tooltip>
               {adminEntryPath && (

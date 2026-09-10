@@ -76,7 +76,7 @@ import {
 import { waitForAudioCanPlay } from '../lib/audioReady';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
 import { resetDriftController } from '../lib/driftController';
-import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying } from '../lib/playbackState';
+import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying, resolveInitialTrackSyncTime } from '../lib/playbackState';
 import { attachAudioBufferingListeners, isAudioBuffering, setAudioBufferEndHandler } from '../lib/audioBuffering';
 import { flushPendingPlaybackSnapshot } from '../lib/playbackSchedule';
 import { isSongPreviewSuppressingRoom, stopSongPreview } from '../lib/songPreviewPlayer';
@@ -1410,12 +1410,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             && trackKeyOf(live.current) === trackKey
             && canSyncAudioForQueue(controller.audio, live.current.queueId)
           ) {
-            const forceZero = justSkippedRef.current;
+            const wasNewTrack = justSkippedRef.current;
             justSkippedRef.current = false;
-            // 换源后 audio 停在 0：必须 mandatory seek，不能只靠 forceCorrection（中途会 midtrack_no_seek）
+            // 换源后 audio 停在 0：必须 mandatory seek；若服务端已为同曲建立时间轴，沿用其当前进度。
             tryFlushPendingSnapshot();
-            if (forceZero) {
-              applySync({ forceZero: true });
+            if (wasNewTrack) {
+              applySync({ forceTime: resolveInitialTrackSyncTime(queueId, live.currentTime) });
             } else {
               const pb = getClientPlaybackState();
               const targetTime = pb
@@ -1581,11 +1581,13 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (!playbackStateMatchesCurrentTrack(liveRoom.current)) return;
     if (skippingRef.current) return;
 
-    const forceZero = justSkippedRef.current;
+    const wasNewTrack = justSkippedRef.current;
     justSkippedRef.current = false;
-    if (!forceZero && shouldSkipForEndedTrackKey(liveRoom.current, controller.audio)) return;
+    if (!wasNewTrack && shouldSkipForEndedTrackKey(liveRoom.current, controller.audio)) return;
 
-    applySync(forceZero ? { forceZero: true } : { forceCorrection: true });
+    applySync(wasNewTrack
+      ? { forceTime: resolveInitialTrackSyncTime(liveRoom.current.queueId, liveRoom.currentTime) }
+      : { forceCorrection: true });
   }, [playbackVersion, trackLoading, applySync, shouldSkipForEndedTrackKey, controller]);
 
   // 离散同步：NORMAL 不追赶，FINAL（≤3s）一次性对齐；6s 仅检查是否进入 FINAL

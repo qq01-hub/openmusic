@@ -63,39 +63,40 @@
 
 > Docker 全量版已内置 Redis 与 Meting，打开站点后填域名即可。
 
-### Docker（推荐）
+### Docker 一键部署（推荐）
 
 ```bash
-curl -O https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.full.yml
-curl -O https://raw.githubusercontent.com/qq01-hub/openmusic/main/.env.full.example
-cp .env.full.example .env
-# 编辑 .env，填写所有空值；可用 openssl rand -hex 32 生成随机密钥
-mkdir -p data/downloads data/meting
-touch data/.env data/setup.lock
-echo '{}' > data/runtimeConfig.json
-echo '{}' > data/adminConfig.json
-docker compose --env-file .env -f docker-compose.full.yml up -d
+curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | bash
 ```
 
-| 服务 | 地址 | 说明 |
-|------|------|------|
-| OpenMusic | `http://<IP>:4000` | 首次进入部署向导，完成后自动重启 |
-| Meting 后台 | `http://127.0.0.1:3000/<METING_ADMIN_PATH>` | 仅服务器本机访问，凭据来自 `.env` |
+**访问地址：**
+- OpenMusic：`http://<服务器IP>:4000`（首次进入部署向导）
+- Meting 管理后台：`http://127.0.0.1:3000/<管理路径>`（仅本机，凭据保存在部署目录的 `.env`）
 
+**常用命令：**
 ```bash
-# 更新
-docker compose --env-file .env -f docker-compose.full.yml pull
-docker compose --env-file .env -f docker-compose.full.yml up -d
+# 查看日志
+docker compose --env-file .env -f docker-compose.full.yml logs -f
 
-# 自定义端口
-OPENMUSIC_PORT=8080 docker compose --env-file .env -f docker-compose.full.yml up -d
+# 停止服务
+docker compose --env-file .env -f docker-compose.full.yml down
+
+# 重启服务
+docker compose --env-file .env -f docker-compose.full.yml restart
+
+# 更新到最新版
+docker compose --env-file .env -f docker-compose.full.yml pull && docker compose --env-file .env -f docker-compose.full.yml up -d
 ```
 
-远程管理 Meting 时先建立 SSH 隧道：`ssh -L 3000:127.0.0.1:3000 user@server`，再在本机打开管理地址。不要把 Meting 管理端口直接暴露到公网。
+**远程管理 Meting：**
+```bash
+ssh -L 3000:127.0.0.1:3000 user@server
+# 然后在本机浏览器访问 http://127.0.0.1:3000/<管理路径>
+```
 
-旧版全量部署升级前也要先创建根目录 `.env`。已有 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 时必须沿用原值；Meting 已初始化时填写现有管理路径和账号信息即可，容器不会重置已有数据。
+> 💡 **提示：** 不要把 Meting 管理端口直接暴露到公网。已有部署升级时，脚本会保留原有的 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 和 Meting 数据。
 
-不需要内置 Meting 时改用 `docker-compose.yml`。宝塔面板见 [宝塔部署](deploy/DEPLOY-BAOTA.md)。
+**手动部署或自定义配置：** 见 [详细部署文档](docs/DEPLOY.md) 或 [宝塔部署指南](deploy/DEPLOY-BAOTA.md)。
 
 ### 源码部署
 
@@ -117,22 +118,22 @@ npm run dev
 
 ### 🎧 听歌
 
-- 多音源搜索：网易云音乐、QQ 音乐、汽水音乐等（酷狗等可通过自定义 Music API 接入）
-- **账号与漫游**：网易、QQ、汽水统一支持扫码、手动 Cookie、账号状态展示与个性化漫游；房间账号优先，否则走共享会员池；无可用汽水账号时自动锁定汽水漫游
+- 多音源搜索：网易云音乐、QQ 音乐、汽水音乐、酷狗音乐
+- **账号与漫游**：网易、QQ、汽水、酷狗支持账号状态与个性化漫游；房间账号优先，否则走共享会员池；无可用汽水账号时自动锁定汽水漫游
 - **本机音质**：自选偏好（含无损 / 臻音等档位，受平台与 SVIP 开关约束）；弱设备可自动降档；切换后当前曲继续播放，下一首起生效
-- 多人实时同步播放；顺序 / 随机 / 收藏随机 / 单曲 / 列表循环等播放模式；可授权成员暂停与拖进度
+- 多人实时同步播放；顺序 / 随机 / 按用户轮流 / 收藏随机 / 单曲循环 / 列表循环 / 列表内随机等播放模式；可授权成员暂停与拖进度
 - 网易云热歌榜（服务端缓存每 3 小时刷新）、推荐歌单、音乐电台
-- 歌单导入（网易 / QQ / 汽水链接）、个人收藏与点歌历史（JSON 导入 / 导出）
+- 歌单导入（网易 / QQ / 汽水 / 酷狗链接或 ID）；支持多歌单漫游、按歌名去重（网易云 > QQ > 汽水 > 酷狗），每个指定歌单最多保留 5000 首歌曲；个人收藏与点歌历史支持 JSON 导入 / 导出
 - 队列拖拽排序、插队、清空；系统媒体键（可分别开关，防误触）
-- 移动端后台播放（Flutter 原生客户端，见 [`mobile/`](mobile/)）
+- 移动端后台播放（Android Flutter WebView 容器，见 [`mobile/`](mobile/)）
 
 ### 🏠 房间
 
 - 大厅、随机匹配、密码房、最近访问、分享链接
 - **自定义封面**：房主可上传房间封面，大厅卡片同步；取消后恢复跟随当前歌曲
-- 站点公告 / 房间公告（进房弹窗）、网易与汽水漫游、主题色
-- 房主转让、正式管理员、房主离线时临时控播
-- 贵宾角标与进房欢迎、成员归属地
+- 站点公告 / 房间公告（进房弹窗）、网易 / QQ / 汽水 / 酷狗漫游、主题色
+- 房主转让、正式管理员、房主离线时临时控播；房间分享支持复制链接与二维码
+- 可自定义贵宾等级：角标、颜色、边框、欢迎语、礼花与迎宾冷却；成员归属地
 - 点歌规则、禁播、踩歌切歌
 - **新房间沿用常用规则**：同一浏览器内，房主再次创建房间时会自动应用最近一次创建房间的点歌、队列与聊天设置
 - **纯净模式**：隐藏动效与热榜；聊天图/贴纸可遮罩；浏览器标签页标题与图标可伪装
@@ -158,7 +159,7 @@ npm run dev
 ### 🌌 视觉与客户端
 
 - 星河 / 声波地形 3D 背景、封面模糊背景、桌面沉浸模式（舞台歌词）
-- Android / iOS（重构中，暂不建议作稳定版）
+- Android（Flutter WebView 容器）：网页负责房间、登录与播放，原生提供通知栏 / 锁屏控件、悬浮歌词和受限工具调用
 - 静默 / 强制更新提示
 
 ### ⚙️ 点歌规则（房主 / 管理员）
@@ -264,7 +265,7 @@ node scripts/build-flutter-apk.mjs --release --server-url=https://your-host
 | 层级 | 技术 |
 |------|------|
 | 前端 | React · Vite · Tailwind CSS · Socket.IO Client · Three.js / R3F |
-| 移动端 | Flutter · just_audio · audio_service · Socket.IO Client |
+| 移动端 | Flutter · WebView · just_audio · audio_service |
 | 后端 | Node.js · Express · Socket.IO · Redis（必需） |
 
 ---
@@ -288,6 +289,11 @@ npm run install:all   # 安装根 / server / client 依赖
 npm run build         # 构建前端 → client/dist
 npm start             # 启动后端（生产）
 npm run dev           # 前后端同时开发
+npm run dev:electron  # 启动 Electron 客户端（需先启动前端）
+npm run desktop:build # 首次输入站点地址后，单独构建 Windows 安装包 → server/downloads/
+# 本机地址保存在 desktop-build.local.json（已忽略，不会上传 GitHub）
+# 如需无交互构建：$env:OPENMUSIC_DESKTOP_URL='https://music.example.com'; npm run desktop:build
+npm run electron:dist # desktop:build 的兼容别名
 npm run package:build # 组装发版包
 ```
 

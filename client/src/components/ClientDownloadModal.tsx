@@ -1,5 +1,6 @@
-import { Download, Smartphone, X } from 'lucide-react';
+import { Download, MonitorDown, Smartphone, X } from 'lucide-react';
 import { ANDROID_APK_URL } from '../lib/androidDownload';
+import { WINDOWS_DESKTOP_CLIENT_URL } from '../lib/desktopDownload';
 
 interface Props {
   open: boolean;
@@ -21,7 +22,7 @@ export default function ClientDownloadModal({ open, onClose }: Props) {
         <div className="flex items-center justify-between gap-3 border-b border-netease-border/50 px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">
             <Smartphone className="h-4 w-4 flex-shrink-0 text-netease-muted" />
-            <h2 className="text-sm font-semibold text-white">下载 Android 客户端</h2>
+            <h2 className="text-sm font-semibold text-white">下载客户端</h2>
           </div>
           <button
             type="button"
@@ -34,6 +35,20 @@ export default function ClientDownloadModal({ open, onClose }: Props) {
         </div>
 
         <div className="space-y-3 p-4">
+          <a
+            href={WINDOWS_DESKTOP_CLIENT_URL}
+            download="openmusic-desktop-setup.exe"
+            className="flex items-center gap-3 rounded-xl border border-sky-500/25 bg-sky-500/10 px-3 py-3 transition-colors hover:bg-sky-500/15"
+          >
+            <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-sky-500/15 text-sky-300">
+              <MonitorDown className="h-5 w-5" />
+            </span>
+            <span className="min-w-0">
+              <span className="block text-sm font-medium text-sky-300">Windows 桌面客户端</span>
+              <span className="mt-0.5 block text-xs text-sky-200/70">下载安装版</span>
+            </span>
+          </a>
+
           <a
             href={ANDROID_APK_URL}
             download="openmusic.apk"
