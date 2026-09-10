@@ -253,6 +253,19 @@ import {
   getGithubProfileForUser,
   unbindGithubForUser,
 } from './githubAuth.js';
+import {
+  ACCOUNT_SESSION_COOKIE,
+  ACCOUNT_SESSION_TTL_SEC,
+  requestEmailRegistrationCode,
+  registerWithEmail,
+  loginWithEmail,
+  createAccountSession,
+  resolveAccountSession,
+  revokeAccountSession,
+  publicAccount,
+  AccountAuthError,
+  normalizeEmail,
+} from './accountAuth.js';
 
 // 由 mountAdminApi() 返回赋值：房主 OAuth 回调路由与后台 OAuth 回调共用同一个
 // 已在第三方平台注册的 redirect_uri，只能在这一个路由里按 state.purpose 分发，
@@ -672,6 +685,9 @@ const limitOwnerDestroyRoom = createRateLimiter({ windowMs: 60_000, max: 3 });
 const limitErrorReport = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
 const limitSessionBootstrap = createRateLimiter({ windowMs: 60_000, max: 90 });
 const limitNewSessionBootstrap = createRateLimiter({ windowMs: 60_000, max: 45 });
+const limitAccountEmailCodeIp = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
+const limitAccountEmailCodeEmail = createRateLimiter({ windowMs: 10 * 60_000, max: 3 });
+const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitLinuxdoAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitGithubAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitWechatUinAuth = createRateLimiter({ windowMs: 10 * 60_000, max: 10 });
@@ -1929,6 +1945,43 @@ function setIdentityCookieHeaders(res, userId, token, deviceId = null) {
   res.setHeader('Set-Cookie', cookies);
 }
 
+function accountCookieBase(res, maxAgeSec) {
+  const useSecureCookie = (IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure;
+  const secure = useSecureCookie ? '; Secure' : '';
+  return `Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax${secure}`;
+}
+
+function setAccountSessionCookie(res, token) {
+  res.setHeader(
+    'Set-Cookie',
+    `${ACCOUNT_SESSION_COOKIE}=${encodeURIComponent(token)}; ${accountCookieBase(res, ACCOUNT_SESSION_TTL_SEC)}`,
+  );
+}
+
+function clearAccountSessionCookie(res) {
+  res.setHeader(
+    'Set-Cookie',
+    `${ACCOUNT_SESSION_COOKIE}=; ${accountCookieBase(res, 0)}`,
+  );
+}
+
+function resolveAccountSessionToken(req) {
+  const cookies = parseCookieHeader(req.headers?.cookie || '');
+  return String(cookies[ACCOUNT_SESSION_COOKIE] || '').trim();
+}
+
+function sendAccountAuthError(res, error) {
+  if (error instanceof AccountAuthError) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  console.error('账户认证请求失败:', error?.message || error);
+  return res.status(500).json({ error: '账户服务暂不可用，请稍后重试', code: 'ACCOUNT_SERVICE_ERROR' });
+}
+
+function recordAccountAuthMetric(action, outcome) {
+  incrementMetric('account_auth_total', { action, outcome });
+}
+
 /** 仅读取 HttpOnly 设备 Cookie（不可用 body/localStorage 冒充恢复） */
 function resolveDeviceIdFromCookieHeader(cookieHeader) {
   const cookies = parseCookieHeader(cookieHeader || '');
@@ -2039,6 +2092,108 @@ app.post('/api/session/bootstrap', async (req, res) => {
   await linkDeviceToUser(deviceId, userId);
   const signIat = now;
   return sendBootstrapResponse(res, userId, signIat, signClientId(userId, signIat), deviceId);
+});
+
+// ---------- 普通用户账户：邮箱验证码注册 / 账号密码登录 ----------
+// 账户会话使用独立 Cookie，不覆盖现有匿名会话，保证未登录用户的房间行为兼容。
+
+app.post('/api/auth/email/code', async (req, res) => {
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  if (!limitAccountEmailCodeIp(`account-email-code:${ip}`)) {
+    recordAccountAuthMetric('email_code', 'rate_limited');
+    return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+  }
+  if (email && !limitAccountEmailCodeEmail(`account-email-code:${email}`)) {
+    recordAccountAuthMetric('email_code', 'rate_limited');
+    return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+  }
+
+  try {
+    const result = await requestEmailRegistrationCode({ email: req.body?.email });
+    recordAccountAuthMetric('email_code', 'success');
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    recordAccountAuthMetric('email_code', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/register', async (req, res) => {
+  try {
+    const account = await registerWithEmail({
+      email: req.body?.email,
+      password: req.body?.password,
+      code: req.body?.code,
+    });
+    const token = await createAccountSession(account.id);
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('email_register', 'success');
+    return res.status(201).json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('email_register', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/login', async (req, res) => {
+  if (!limitAccountLogin(`account-login:${getRequestIp(req)}`)) {
+    recordAccountAuthMetric('email_login', 'rate_limited');
+    return res.status(429).json({ error: '登录尝试过于频繁，请稍后重试', code: 'LOGIN_RATE_LIMITED' });
+  }
+
+  try {
+    const account = await loginWithEmail({
+      email: req.body?.email,
+      password: req.body?.password,
+    });
+    const token = await createAccountSession(account.id);
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('email_login', 'success');
+    return res.json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('email_login', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.get('/api/auth/session', async (req, res) => {
+  const token = resolveAccountSessionToken(req);
+  if (!token) {
+    recordAccountAuthMetric('session', 'anonymous');
+    return res.json({ authenticated: false, account: null });
+  }
+
+  try {
+    const account = await resolveAccountSession(token);
+    if (!account) {
+      clearAccountSessionCookie(res);
+      recordAccountAuthMetric('session', 'expired');
+      return res.json({ authenticated: false, account: null });
+    }
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('session', 'authenticated');
+    return res.json({ authenticated: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('session', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  let outcome = 'success';
+  try {
+    await revokeAccountSession(resolveAccountSessionToken(req));
+  } catch (error) {
+    // 即使 Redis 暂时不可用，也清掉浏览器 Cookie，避免把旧凭据继续留在客户端。
+    if (!(error instanceof AccountAuthError && error.code === 'REDIS_UNAVAILABLE')) {
+      outcome = 'error';
+      console.error('账户会话注销失败:', error?.message || error);
+    }
+  }
+  clearAccountSessionCookie(res);
+  recordAccountAuthMetric('logout', outcome);
+  return res.json({ ok: true });
 });
 
 // ---------- Linux.do OAuth：房主身份绑定 / 找回 ----------
@@ -2770,7 +2925,7 @@ app.use(express.static(clientDist, {
     }
   },
 }));
-app.get('*', (req, res, next) => {
+app.get('/{*splat}', (req, res, next) => {
   if (
     req.path.startsWith('/api')
     || req.path.startsWith('/socket.io')

@@ -6,6 +6,11 @@ const PUBLIC_API_PATHS = new Set([
   '/api/site-announcement',
   '/api/site-seo',
   '/api/session/bootstrap',
+  '/api/auth/email/code',
+  '/api/auth/email/register',
+  '/api/auth/email/login',
+  '/api/auth/logout',
+  '/api/auth/session',
 ]);
 
 let apiSignKey: string | null = null;

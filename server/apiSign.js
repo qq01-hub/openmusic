@@ -58,6 +58,13 @@ const OAUTH_PUBLIC_GET_PATHS = new Set([
   '/api/auth/github/callback',
 ]);
 
+const ACCOUNT_PUBLIC_POST_PATHS = new Set([
+  '/api/auth/email/code',
+  '/api/auth/email/register',
+  '/api/auth/email/login',
+  '/api/auth/logout',
+]);
+
 export function isPublicApiPath(req) {
   const path = req.path || '';
   if (
@@ -79,6 +86,8 @@ export function isPublicApiPath(req) {
   // OAuth 找回/后台登录场景下浏览器可能压根没有房主身份 Cookie（这正是找回要解决的问题），
   // 这几条路由自己会按 purpose 做对应的身份/会话校验，不能被这里的通用身份门槛提前拦掉。
   if (req.method === 'GET' && OAUTH_PUBLIC_GET_PATHS.has(path)) return true;
+  if (ACCOUNT_PUBLIC_POST_PATHS.has(path) && req.method === 'POST') return true;
+  if (path === '/api/auth/session' && req.method === 'GET') return true;
   return false;
 }
 
