@@ -4,7 +4,8 @@
 
 - 验证日期：2026-09-12
 - 当前分支：`main`
-- 当前提交：`c5c2c74 fix: follow wechat login redirect session`
+- 核心功能提交：`c5c2c74 fix: follow wechat login redirect session`
+- 当前文档提交：`ca3a6d7 docs: add wechat login self-test report`
 - 关联功能提交：
   - `8012295 feat: 增加邮箱验证码账户认证`
   - `807208c feat: add multi-provider account login`
