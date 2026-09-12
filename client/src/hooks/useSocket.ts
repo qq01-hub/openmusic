@@ -580,6 +580,23 @@ async function attemptRoomRejoin(trigger: string) {
   }
 }
 
+/** 账户会话切换后刷新 Socket 握手身份；已在房间时复用原会话重新进房。 */
+export async function refreshSocketSession(): Promise<void> {
+  resetSessionBootstrap();
+  const s = getSocket();
+  if (shouldMaintainRoomSession()) {
+    await attemptRoomRejoin('account_session_changed');
+    return;
+  }
+  if (s.connected || s.active) {
+    try {
+      await reconnectSocketSession(true);
+    } catch {
+      // 账户登录本身已完成，Socket 可在下一次进入房间时重试。
+    }
+  }
+}
+
 function handleSocketDisconnect(reason: string) {
   debugLog('socket_disconnect', debugLine({ reason }));
   const { mySocketId } = useRoomStore.getState();

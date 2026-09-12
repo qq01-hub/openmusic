@@ -39,6 +39,7 @@ import {
   getWechatFileHelperUin,
   pollWechatLogin,
 } from '../lib/wechatFileHelperBridge';
+import { refreshSocketSession } from '../hooks/useSocket';
 
 const GUEST_CHOICE_KEY = 'openmusic:account-entry-choice:v1';
 const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false };
@@ -48,7 +49,7 @@ type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'wechat-l
 const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: string; description: string }> = {
   linuxdo: { label: 'Linux Do', description: '社区身份' },
   github: { label: 'GitHub', description: '开发者身份' },
-  wechat: { label: '微信', description: '暂未开放，入口预留' },
+  wechat: { label: '微信', description: '使用微信扫码登录' },
 };
 
 function LinuxDoMark() {
@@ -278,6 +279,8 @@ export default function AccountAccess({
       const next = register
         ? await registerAccountWithEmail(email, password, code)
         : await loginAccountWithEmail(email, password);
+      await refreshSocketSession();
+      window.dispatchEvent(new Event('openmusic:account-session-changed'));
       setAccount(next);
       setView('manage');
       setToast({ message: register ? '账户创建完成' : '欢迎回来', type: 'success' });
@@ -307,6 +310,9 @@ export default function AccountAccess({
   };
 
   const finishWechat = useCallback((next: AccountProfile) => {
+    void refreshSocketSession().finally(() => {
+      window.dispatchEvent(new Event('openmusic:account-session-changed'));
+    });
     setAccount(next);
     setView('manage');
     setToast({ message: '微信身份验证成功', type: 'success' });
@@ -330,6 +336,8 @@ export default function AccountAccess({
     setSubmitting(true);
     try {
       await logoutAccount();
+      await refreshSocketSession();
+      window.dispatchEvent(new Event('openmusic:account-session-changed'));
       setAccount(null);
       setView('welcome');
       setToast({ message: '已退出账户，当前继续使用游客身份', type: 'success' });
@@ -416,19 +424,16 @@ export default function AccountAccess({
               <span className="flex-1"><span className="block text-sm font-semibold text-white">邮箱</span><span className="mt-0.5 block text-xs text-white/38">密码登录或验证码注册</span></span>
               <ChevronRight className="h-4 w-4 text-white/25" />
             </button>
-            {(['linuxdo', 'wechat', 'github'] as const).map((provider) => (provider === 'wechat' || providers[provider]) && (
+            {(['linuxdo', 'wechat', 'github'] as const).map((provider) => providers[provider] && (
               <button
                 key={provider}
                 type="button"
-                disabled={provider === 'wechat'}
-                onClick={() => provider !== 'wechat' && startAccountOAuth(provider, 'login')}
+                onClick={() => provider === 'wechat' ? setView('wechat-login') : startAccountOAuth(provider, 'login')}
                 className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-white/[0.045]"
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider={provider} /></span>
                 <span className="flex-1"><span className="block text-sm font-semibold text-white">{providerMeta[provider].label}</span><span className="mt-0.5 block text-xs text-white/38">{providerMeta[provider].description}</span></span>
-                {provider === 'wechat'
-                  ? <span className="text-[11px] text-white/30">敬请期待</span>
-                  : <ChevronRight className="h-4 w-4 text-white/25" />}
+                <ChevronRight className="h-4 w-4 text-white/25" />
               </button>
             ))}
             <button type="button" onClick={chooseGuest} className="w-full py-3 text-sm text-white/42 transition hover:text-white/70">暂不登录，继续使用游客身份</button>
@@ -464,7 +469,7 @@ export default function AccountAccess({
               )}
               {(['linuxdo', 'wechat', 'github'] as const).map((provider) => {
                 const identity = identityMap.get(provider);
-                const enabled = provider === 'wechat' || providers[provider];
+                const enabled = providers[provider];
                 if (!identity && !enabled) return null;
                 return (
                   <div key={provider} className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
@@ -473,7 +478,7 @@ export default function AccountAccess({
                     {identity ? (
                       <button type="button" disabled={submitting} onClick={() => void unbind(provider)} className="rounded-full p-2 text-white/28 transition hover:bg-red-400/10 hover:text-red-300 disabled:opacity-40" aria-label={`解绑 ${providerMeta[provider].label}`}><Unlink className="h-4 w-4" /></button>
                     ) : provider === 'wechat' ? (
-                      <span className="text-[11px] text-white/30">暂未开放</span>
+                      <button type="button" onClick={() => setView('wechat-bind')} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
                     ) : (
                       <button type="button" onClick={() => startAccountOAuth(provider, 'bind')} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
                     )}

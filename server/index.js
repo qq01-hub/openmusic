@@ -269,6 +269,7 @@ import {
   loginWithEmail,
   loginOrRegisterExternalIdentity,
   bindExternalIdentity,
+  ensureRoomUserId,
   unbindExternalIdentity,
   createAccountSession,
   resolveAccountSession,
@@ -712,7 +713,7 @@ const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitLinuxdoAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitGithubAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitWechatUinAuth = createRateLimiter({ windowMs: 10 * 60_000, max: 10 });
-const WECHAT_ACCOUNT_AUTH_ENABLED = false;
+const WECHAT_ACCOUNT_AUTH_ENABLED = true;
 const socketRateLog = createLogger('socket-rate-limit');
 let lastSocketRateRedisErrorAt = 0;
 const distributedSocketRateLimiter = createDistributedSocketRateLimiter({
@@ -1984,7 +1985,17 @@ function setIdentityCookieHeaders(res, userId, token, deviceId = null) {
   if (did) {
     cookies.push(`${DEVICE_ID_COOKIE}=${encodeURIComponent(did)}; ${base}`);
   }
-  res.setHeader('Set-Cookie', cookies);
+  appendSetCookieHeaders(res, cookies);
+}
+
+function appendSetCookieHeaders(res, cookies) {
+  const existing = res.getHeader('Set-Cookie');
+  const current = Array.isArray(existing)
+    ? existing
+    : existing
+      ? [String(existing)]
+      : [];
+  res.setHeader('Set-Cookie', [...current, ...cookies]);
 }
 
 function accountCookieBase(res, maxAgeSec) {
@@ -1994,17 +2005,15 @@ function accountCookieBase(res, maxAgeSec) {
 }
 
 function setAccountSessionCookie(res, token) {
-  res.setHeader(
-    'Set-Cookie',
+  appendSetCookieHeaders(res, [
     `${ACCOUNT_SESSION_COOKIE}=${encodeURIComponent(token)}; ${accountCookieBase(res, ACCOUNT_SESSION_TTL_SEC)}`,
-  );
+  ]);
 }
 
 function clearAccountSessionCookie(res) {
-  res.setHeader(
-    'Set-Cookie',
+  appendSetCookieHeaders(res, [
     `${ACCOUNT_SESSION_COOKIE}=; ${accountCookieBase(res, 0)}`,
-  );
+  ]);
 }
 
 function resolveAccountSessionToken(req) {
@@ -2016,6 +2025,19 @@ async function resolveAccountFromRequest(req) {
   const token = resolveAccountSessionToken(req);
   if (!token) return null;
   return resolveAccountSession(token);
+}
+
+/** 将账户会话绑定到稳定的房间 userId，并把当前设备切换到该身份。 */
+async function syncAccountRoomIdentity(req, res, account) {
+  if (!account?.id) return null;
+  const currentIdentity = resolveIdentityFromRequest(req);
+  const roomUserId = await ensureRoomUserId(account.id, currentIdentity?.userId || '');
+  const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
+  const deviceId = cookieDeviceId || createServerClientId();
+  const now = Math.floor(Date.now() / 1000);
+  await linkDeviceToUser(deviceId, roomUserId);
+  setIdentityCookieHeaders(res, roomUserId, signClientId(roomUserId, now), deviceId);
+  return roomUserId;
 }
 
 async function requireAccountSession(req, res) {
@@ -2213,6 +2235,7 @@ app.post('/api/auth/email/register', async (req, res) => {
       code: req.body?.code,
     });
     const token = await createAccountSession(account.id);
+    await syncAccountRoomIdentity(req, res, account);
     setAccountSessionCookie(res, token);
     recordAccountAuthMetric('email_register', 'success');
     return res.status(201).json({ ok: true, account: publicAccount(account) });
@@ -2234,6 +2257,7 @@ app.post('/api/auth/email/login', async (req, res) => {
       password: req.body?.password,
     });
     const token = await createAccountSession(account.id);
+    await syncAccountRoomIdentity(req, res, account);
     setAccountSessionCookie(res, token);
     recordAccountAuthMetric('email_login', 'success');
     return res.json({ ok: true, account: publicAccount(account) });
@@ -2257,6 +2281,7 @@ app.get('/api/auth/session', async (req, res) => {
       recordAccountAuthMetric('session', 'expired');
       return res.json({ authenticated: false, account: null });
     }
+    await syncAccountRoomIdentity(req, res, account);
     setAccountSessionCookie(res, token);
     recordAccountAuthMetric('session', 'authenticated');
     return res.json({ authenticated: true, account: publicAccount(account) });
@@ -2268,6 +2293,7 @@ app.get('/api/auth/session', async (req, res) => {
 
 app.post('/api/auth/logout', async (req, res) => {
   let outcome = 'success';
+  const hadAccountSession = Boolean(resolveAccountSessionToken(req));
   try {
     await revokeAccountSession(resolveAccountSessionToken(req));
   } catch (error) {
@@ -2278,6 +2304,15 @@ app.post('/api/auth/logout', async (req, res) => {
     }
   }
   clearAccountSessionCookie(res);
+  if (hadAccountSession) {
+    // 注销后切换到新的游客身份，避免同一设备在未登录状态继续读取账户数据。
+    const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
+    const userId = createServerClientId();
+    const deviceId = cookieDeviceId || createServerClientId();
+    const now = Math.floor(Date.now() / 1000);
+    await linkDeviceToUser(deviceId, userId);
+    setIdentityCookieHeaders(res, userId, signClientId(userId, now), deviceId);
+  }
   recordAccountAuthMetric('logout', outcome);
   return res.json({ ok: true });
 });
@@ -2286,7 +2321,7 @@ app.get('/api/auth/providers', (_req, res) => {
   res.json({
     linuxdo: isLinuxdoConfigured(),
     github: isGithubConfigured(),
-    // 账户微信登录暂未开放；原文件传输助手采集和房主 UIN 绑定能力保持不变。
+    // 账户微信登录复用文件传输助手扫码；会话证明由服务端签发。
     wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
   });
 });
@@ -2336,6 +2371,7 @@ app.post('/api/auth/wechat/account', async (req, res) => {
       });
       account = result.account;
       const token = await createAccountSession(account.id);
+      await syncAccountRoomIdentity(req, res, account);
       setAccountSessionCookie(res, token);
     }
     recordAccountAuthMetric(`wechat_${action}`, 'success');
@@ -2457,6 +2493,7 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
         });
         account = result.account;
         const token = await createAccountSession(account.id);
+        await syncAccountRoomIdentity(req, res, account);
         setAccountSessionCookie(res, token);
       }
       recordAccountAuthMetric(state.purpose.replace('account-', 'linuxdo_'), 'success');
@@ -2628,6 +2665,7 @@ app.get('/api/auth/github/callback', async (req, res) => {
         });
         account = result.account;
         const token = await createAccountSession(account.id);
+        await syncAccountRoomIdentity(req, res, account);
         setAccountSessionCookie(res, token);
       }
       recordAccountAuthMetric(state.purpose.replace('account-', 'github_'), 'success');

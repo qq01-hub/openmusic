@@ -33,6 +33,15 @@ class FakeRedis {
   }
 
   async eval(_script, { keys, arguments: args }) {
+    if (_script.includes("redis.call('GET', KEYS[1]) ~= ARGV[1]")) {
+      if ((this.values.get(keys[0]) ?? null) !== args[0]) return -1;
+      const owner = this.values.get(keys[1]);
+      if (owner && owner !== args[1]) return -2;
+      this.values.set(keys[1], String(args[1]));
+      this.values.set(keys[2], String(args[1]));
+      this.values.set(keys[0], String(args[2]));
+      return 1;
+    }
     if (_script.includes("owner and owner ~= ARGV[1]")) {
       const owner = this.values.get(keys[0]);
       if (owner && owner !== args[0]) return -1;
@@ -232,6 +241,27 @@ test('解绑会保留至少一种登录方式，并清理身份索引', async ()
     profile: { username: 'new-owner' },
   });
   assert.notEqual(newGithubAccount.account.id, created.account.id);
+});
+
+test('账户首次登录继承游客身份，后续登录恢复同一房间身份', async () => {
+  const { service } = createTestService();
+  const created = await service.loginOrRegisterExternalIdentity({
+    provider: 'wechat',
+    subject: 'uin-1',
+    profile: { username: '微信用户' },
+  });
+
+  const adopted = await service.ensureRoomUserId(created.account.id, 'guest-user-1');
+  assert.equal(adopted, 'guest-user-1');
+  assert.equal(await service.ensureRoomUserId(created.account.id, 'guest-user-2'), 'guest-user-1');
+
+  const second = await service.loginOrRegisterExternalIdentity({
+    provider: 'wechat',
+    subject: 'uin-2',
+    profile: { username: '另一个微信用户' },
+  });
+  const other = await service.ensureRoomUserId(second.account.id, 'guest-user-1');
+  assert.notEqual(other, 'guest-user-1');
 });
 
 test('验证码错误会计数并在超过尝试次数后失效', async () => {

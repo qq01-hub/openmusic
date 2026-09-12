@@ -89,7 +89,7 @@ export const GUIDE_STEPS: GuideStep[] = [
     id: 'home-account',
     scope: 'home',
     title: '账户与游客身份',
-    body: '登录：可使用邮箱、Linux Do 或 GitHub，并在账户安全中绑定多个身份；微信入口暂未开放\n游客：无需注册，原有建房、进房和点歌功能保持可用',
+    body: '登录：可使用邮箱、Linux Do、GitHub 或微信扫码，并在账户安全中绑定多个身份\n游客：无需注册，原有建房、进房和点歌功能保持可用；登录后可恢复跨设备的账户收藏',
     side: 'bottom',
   },
   {

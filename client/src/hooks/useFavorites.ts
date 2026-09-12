@@ -42,6 +42,16 @@ export function useFavorites() {
     void ensureLoaded();
   }, [ensureLoaded]);
 
+  useEffect(() => {
+    const onAccountSessionChanged = () => {
+      loadPromise = null;
+      updateSharedFavoriteIds(new Set());
+      void ensureLoaded();
+    };
+    window.addEventListener('openmusic:account-session-changed', onAccountSessionChanged);
+    return () => window.removeEventListener('openmusic:account-session-changed', onAccountSessionChanged);
+  }, [ensureLoaded]);
+
   const isFavorite = useCallback(
     (song: Song | null) => (song ? favoriteIds.has(songKey(song)) : false),
     [favoriteIds],

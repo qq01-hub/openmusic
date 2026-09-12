@@ -28,6 +28,8 @@ const EMAIL_CODE_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code:`;
 const EMAIL_CODE_ATTEMPTS_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-attempts:`;
 const EMAIL_CODE_COOLDOWN_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-cooldown:`;
 const SESSION_PREFIX = `${ACCOUNT_KEY_PREFIX}session:`;
+const ROOM_IDENTITY_PREFIX = `${ACCOUNT_KEY_PREFIX}room-identity:`;
+const ROOM_IDENTITY_ACCOUNT_PREFIX = `${ACCOUNT_KEY_PREFIX}room-identity-account:`;
 const PASSWORD_KEY_LENGTH = 64;
 const PASSWORD_SCRYPT_OPTIONS = {
   N: 32_768,
@@ -65,8 +67,21 @@ function normalizeAccountId(value) {
   return /^acct_[a-zA-Z0-9_-]{16,64}$/u.test(id) ? id : '';
 }
 
+function normalizeRoomUserId(value) {
+  const id = String(value ?? '').trim();
+  return /^[a-zA-Z0-9_-]{8,64}$/u.test(id) ? id : '';
+}
+
 function accountKey(userId) {
   return `${ACCOUNT_KEY_PREFIX}${userId}`;
+}
+
+function roomIdentityKey(userId) {
+  return `${ROOM_IDENTITY_PREFIX}${userId}`;
+}
+
+function accountRoomIdentityKey(accountId) {
+  return `${ROOM_IDENTITY_ACCOUNT_PREFIX}${accountId}`;
 }
 
 function emailHash(email) {
@@ -295,6 +310,7 @@ export function createAccountAuthService({
   now = () => Date.now(),
   randomId,
   randomInt,
+  roomRandomId = () => randomBytes(18).toString('base64url'),
 } = {}) {
   const createId = () => createAccountId(randomId);
   const createCode = () => createVerificationCode(randomInt);
@@ -533,6 +549,74 @@ export function createAccountAuthService({
     throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
   }
 
+  /**
+   * 为账户绑定稳定的房间身份。首次登录优先继承当前游客 userId；
+   * 若该身份已属于其他账户，则为账户生成新的身份，避免跨账户串号。
+   */
+  async function ensureRoomUserId(userId, candidateUserId = '') {
+    const id = normalizeAccountId(userId);
+    if (!id) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+    const store = ensureStore(getStore, isStoreReady);
+    const candidate = normalizeRoomUserId(candidateUserId);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+
+      const existing = normalizeRoomUserId(account.roomUserId);
+      if (existing) {
+        const reverseOwner = await store.get(roomIdentityKey(existing));
+        if (reverseOwner && reverseOwner !== id) {
+          throw new AccountAuthError('ROOM_IDENTITY_CONFLICT', '账户身份数据异常，请联系管理员', 503);
+        }
+        if (!reverseOwner) {
+          const claimed = await store.set(roomIdentityKey(existing), id, { NX: true });
+          if (claimed !== 'OK') {
+            const owner = await store.get(roomIdentityKey(existing));
+            if (owner && owner !== id) {
+              throw new AccountAuthError('ROOM_IDENTITY_CONFLICT', '账户身份数据异常，请联系管理员', 503);
+            }
+          }
+        }
+        await store.set(accountRoomIdentityKey(id), existing);
+        return existing;
+      }
+
+      let roomUserId = candidate;
+      if (!roomUserId || (await store.get(roomIdentityKey(roomUserId))) !== null) {
+        roomUserId = normalizeRoomUserId(roomRandomId());
+      }
+      if (!roomUserId) {
+        throw new AccountAuthError('ROOM_IDENTITY_CREATE_FAILED', '房间身份创建失败，请稍后重试', 503);
+      }
+
+      const updatedAt = now();
+      const nextAccount = {
+        ...account,
+        roomUserId,
+        updatedAt,
+      };
+      const result = Number(await store.eval(
+        `if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end `
+          + `local owner = redis.call('GET', KEYS[2]) `
+          + `if owner and owner ~= ARGV[2] then return -2 end `
+          + `redis.call('SET', KEYS[2], ARGV[2]) `
+          + `redis.call('SET', KEYS[3], ARGV[2]) `
+          + `redis.call('SET', KEYS[1], ARGV[3]) `
+          + `return 1`,
+        {
+          keys: [accountKey(id), roomIdentityKey(roomUserId), accountRoomIdentityKey(id)],
+          arguments: [currentRaw, id, JSON.stringify(nextAccount)],
+        },
+      ));
+      if (result === 1) return roomUserId;
+      if (result === -2) continue;
+    }
+
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
+  }
+
   async function unbindExternalIdentity(userId, rawProvider) {
     const id = normalizeAccountId(userId);
     const provider = normalizeExternalProvider(rawProvider);
@@ -628,6 +712,7 @@ export function createAccountAuthService({
     loginWithEmail,
     loginOrRegisterExternalIdentity,
     bindExternalIdentity,
+    ensureRoomUserId,
     unbindExternalIdentity,
     createSession,
     resolveSession,
@@ -643,6 +728,7 @@ export const registerWithEmail = defaultService.registerWithEmail;
 export const loginWithEmail = defaultService.loginWithEmail;
 export const loginOrRegisterExternalIdentity = defaultService.loginOrRegisterExternalIdentity;
 export const bindExternalIdentity = defaultService.bindExternalIdentity;
+export const ensureRoomUserId = defaultService.ensureRoomUserId;
 export const unbindExternalIdentity = defaultService.unbindExternalIdentity;
 export const createAccountSession = defaultService.createSession;
 export const resolveAccountSession = defaultService.resolveSession;
