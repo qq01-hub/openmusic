@@ -42,7 +42,12 @@ import {
   startManagedQishuiVerification,
 } from './musicQrSessions.js';
 import { hasRoomCredentialEncryptionKey } from './roomCredentialCrypto.js';
-import { mountWechatFileHelperProxy } from './wechatFileHelperProxy.js';
+import {
+  mountWechatFileHelperProxy,
+  verifyWechatLoginProof,
+  WECHAT_LOGIN_PROOF_COOKIE,
+  WECHAT_LOGIN_PROOF_TTL_SEC,
+} from './wechatFileHelperProxy.js';
 import {
   WECHAT_UIN_CONFLICT,
   createWechatUinStore,
@@ -256,6 +261,23 @@ import {
   unbindGithubForUser,
   clearGithubBindingsForRoom,
 } from './githubAuth.js';
+import {
+  ACCOUNT_SESSION_COOKIE,
+  ACCOUNT_SESSION_TTL_SEC,
+  requestEmailRegistrationCode,
+  registerWithEmail,
+  loginWithEmail,
+  loginOrRegisterExternalIdentity,
+  bindExternalIdentity,
+  ensureRoomUserId,
+  unbindExternalIdentity,
+  createAccountSession,
+  resolveAccountSession,
+  revokeAccountSession,
+  publicAccount,
+  AccountAuthError,
+  normalizeEmail,
+} from './accountAuth.js';
 
 // 由 mountAdminApi() 返回赋值：房主 OAuth 回调路由与后台 OAuth 回调共用同一个
 // 已在第三方平台注册的 redirect_uri，只能在这一个路由里按 state.purpose 分发，
@@ -685,9 +707,13 @@ const limitOwnerDestroyRoom = createRateLimiter({ windowMs: 60_000, max: 3 });
 const limitErrorReport = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
 const limitSessionBootstrap = createRateLimiter({ windowMs: 60_000, max: 90 });
 const limitNewSessionBootstrap = createRateLimiter({ windowMs: 60_000, max: 45 });
+const limitAccountEmailCodeIp = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
+const limitAccountEmailCodeEmail = createRateLimiter({ windowMs: 10 * 60_000, max: 3 });
+const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitLinuxdoAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitGithubAuth = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitWechatUinAuth = createRateLimiter({ windowMs: 10 * 60_000, max: 10 });
+const WECHAT_ACCOUNT_AUTH_ENABLED = true;
 const socketRateLog = createLogger('socket-rate-limit');
 let lastSocketRateRedisErrorAt = 0;
 const distributedSocketRateLimiter = createDistributedSocketRateLimiter({
@@ -1959,7 +1985,109 @@ function setIdentityCookieHeaders(res, userId, token, deviceId = null) {
   if (did) {
     cookies.push(`${DEVICE_ID_COOKIE}=${encodeURIComponent(did)}; ${base}`);
   }
-  res.setHeader('Set-Cookie', cookies);
+  appendSetCookieHeaders(res, cookies);
+}
+
+function appendSetCookieHeaders(res, cookies) {
+  const existing = res.getHeader('Set-Cookie');
+  const current = Array.isArray(existing)
+    ? existing
+    : existing
+      ? [String(existing)]
+      : [];
+  res.setHeader('Set-Cookie', [...current, ...cookies]);
+}
+
+function accountCookieBase(res, maxAgeSec) {
+  const useSecureCookie = (IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure;
+  const secure = useSecureCookie ? '; Secure' : '';
+  return `Path=/; Max-Age=${maxAgeSec}; HttpOnly; SameSite=Lax${secure}`;
+}
+
+function setAccountSessionCookie(res, token) {
+  appendSetCookieHeaders(res, [
+    `${ACCOUNT_SESSION_COOKIE}=${encodeURIComponent(token)}; ${accountCookieBase(res, ACCOUNT_SESSION_TTL_SEC)}`,
+  ]);
+}
+
+function clearAccountSessionCookie(res) {
+  appendSetCookieHeaders(res, [
+    `${ACCOUNT_SESSION_COOKIE}=; ${accountCookieBase(res, 0)}`,
+  ]);
+}
+
+function resolveAccountSessionToken(req) {
+  const cookies = parseCookieHeader(req.headers?.cookie || '');
+  return String(cookies[ACCOUNT_SESSION_COOKIE] || '').trim();
+}
+
+async function resolveAccountFromRequest(req) {
+  const token = resolveAccountSessionToken(req);
+  if (!token) return null;
+  return resolveAccountSession(token);
+}
+
+/** 将账户会话绑定到稳定的房间 userId，并把当前设备切换到该身份。 */
+async function syncAccountRoomIdentity(req, res, account) {
+  if (!account?.id) return null;
+  const currentIdentity = resolveIdentityFromRequest(req);
+  const roomUserId = await ensureRoomUserId(account.id, currentIdentity?.userId || '');
+  const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
+  const deviceId = cookieDeviceId || createServerClientId();
+  const now = Math.floor(Date.now() / 1000);
+  await linkDeviceToUser(deviceId, roomUserId);
+  setIdentityCookieHeaders(res, roomUserId, signClientId(roomUserId, now), deviceId);
+  return roomUserId;
+}
+
+async function requireAccountSession(req, res) {
+  const account = await resolveAccountFromRequest(req);
+  if (account) return account;
+  clearAccountSessionCookie(res);
+  res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
+  return null;
+}
+
+function appendAccountAuthResult(returnPath, result) {
+  const path = sanitizeReturnPath(returnPath);
+  return `${path}?account_auth=${encodeURIComponent(result)}`;
+}
+
+function clearWechatLoginProofCookie(res) {
+  res.append(
+    'Set-Cookie',
+    `${WECHAT_LOGIN_PROOF_COOKIE}=; Max-Age=0; Path=/api/auth; HttpOnly; SameSite=Strict${res.req?.secure ? '; Secure' : ''}`,
+  );
+}
+
+async function consumeWechatLoginProof(req, res) {
+  const cookies = parseCookieHeader(req.headers?.cookie || '');
+  const proof = verifyWechatLoginProof(cookies[WECHAT_LOGIN_PROOF_COOKIE]);
+  clearWechatLoginProofCookie(res);
+  if (!proof) return null;
+  const store = getRedisClient();
+  if (!isRedisEnabled() || !store) {
+    throw new AccountAuthError('REDIS_UNAVAILABLE', '账户服务暂不可用，请稍后重试', 503);
+  }
+  const nonceDigest = createHash('sha256').update(proof.nonce).digest('hex');
+  const claimed = await store.set(
+    `openmusic:account:wechat-proof:${nonceDigest}`,
+    '1',
+    { NX: true, EX: WECHAT_LOGIN_PROOF_TTL_SEC },
+  );
+  return claimed === 'OK' ? proof : null;
+}
+
+function sendAccountAuthError(res, error) {
+  if (error instanceof AccountAuthError) {
+    return res.status(error.status).json({ error: error.message, code: error.code });
+  }
+  console.error('账户认证请求失败:', error?.message || error);
+  return res.status(500).json({ error: '账户服务暂不可用，请稍后重试', code: 'ACCOUNT_SERVICE_ERROR' });
+}
+
+function recordAccountAuthMetric(action, outcome) {
+  incrementMetric('account_auth_total', { action, outcome });
 }
 
 /** 仅读取 HttpOnly 设备 Cookie（不可用 body/localStorage 冒充恢复） */
@@ -2074,6 +2202,186 @@ app.post('/api/session/bootstrap', async (req, res) => {
   return sendBootstrapResponse(res, userId, signIat, signClientId(userId, signIat), deviceId);
 });
 
+// ---------- 普通用户账户：邮箱验证码注册 / 账号密码登录 ----------
+// 账户会话使用独立 Cookie，不覆盖现有匿名会话，保证未登录用户的房间行为兼容。
+
+app.post('/api/auth/email/code', async (req, res) => {
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  if (!limitAccountEmailCodeIp(`account-email-code:${ip}`)) {
+    recordAccountAuthMetric('email_code', 'rate_limited');
+    return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+  }
+  if (email && !limitAccountEmailCodeEmail(`account-email-code:${email}`)) {
+    recordAccountAuthMetric('email_code', 'rate_limited');
+    return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+  }
+
+  try {
+    const result = await requestEmailRegistrationCode({ email: req.body?.email });
+    recordAccountAuthMetric('email_code', 'success');
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    recordAccountAuthMetric('email_code', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/register', async (req, res) => {
+  try {
+    const account = await registerWithEmail({
+      email: req.body?.email,
+      password: req.body?.password,
+      code: req.body?.code,
+    });
+    const token = await createAccountSession(account.id);
+    await syncAccountRoomIdentity(req, res, account);
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('email_register', 'success');
+    return res.status(201).json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('email_register', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/login', async (req, res) => {
+  if (!limitAccountLogin(`account-login:${getRequestIp(req)}`)) {
+    recordAccountAuthMetric('email_login', 'rate_limited');
+    return res.status(429).json({ error: '登录尝试过于频繁，请稍后重试', code: 'LOGIN_RATE_LIMITED' });
+  }
+
+  try {
+    const account = await loginWithEmail({
+      email: req.body?.email,
+      password: req.body?.password,
+    });
+    const token = await createAccountSession(account.id);
+    await syncAccountRoomIdentity(req, res, account);
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('email_login', 'success');
+    return res.json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('email_login', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.get('/api/auth/session', async (req, res) => {
+  const token = resolveAccountSessionToken(req);
+  if (!token) {
+    recordAccountAuthMetric('session', 'anonymous');
+    return res.json({ authenticated: false, account: null });
+  }
+
+  try {
+    const account = await resolveAccountSession(token);
+    if (!account) {
+      clearAccountSessionCookie(res);
+      recordAccountAuthMetric('session', 'expired');
+      return res.json({ authenticated: false, account: null });
+    }
+    await syncAccountRoomIdentity(req, res, account);
+    setAccountSessionCookie(res, token);
+    recordAccountAuthMetric('session', 'authenticated');
+    return res.json({ authenticated: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('session', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  let outcome = 'success';
+  const hadAccountSession = Boolean(resolveAccountSessionToken(req));
+  try {
+    await revokeAccountSession(resolveAccountSessionToken(req));
+  } catch (error) {
+    // 即使 Redis 暂时不可用，也清掉浏览器 Cookie，避免把旧凭据继续留在客户端。
+    if (!(error instanceof AccountAuthError && error.code === 'REDIS_UNAVAILABLE')) {
+      outcome = 'error';
+      console.error('账户会话注销失败:', error?.message || error);
+    }
+  }
+  clearAccountSessionCookie(res);
+  if (hadAccountSession) {
+    // 注销后切换到新的游客身份，避免同一设备在未登录状态继续读取账户数据。
+    const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
+    const userId = createServerClientId();
+    const deviceId = cookieDeviceId || createServerClientId();
+    const now = Math.floor(Date.now() / 1000);
+    await linkDeviceToUser(deviceId, userId);
+    setIdentityCookieHeaders(res, userId, signClientId(userId, now), deviceId);
+  }
+  recordAccountAuthMetric('logout', outcome);
+  return res.json({ ok: true });
+});
+
+app.get('/api/auth/providers', (_req, res) => {
+  res.json({
+    linuxdo: isLinuxdoConfigured(),
+    github: isGithubConfigured(),
+    // 账户微信登录复用文件传输助手扫码；会话证明由服务端签发。
+    wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
+  });
+});
+
+app.post('/api/auth/identities/:provider/unbind', async (req, res) => {
+  try {
+    const account = await requireAccountSession(req, res);
+    if (!account) return;
+    const updated = await unbindExternalIdentity(account.id, req.params.provider);
+    recordAccountAuthMetric(`${req.params.provider}_unbind`, 'success');
+    return res.json({ ok: true, account: publicAccount(updated) });
+  } catch (error) {
+    recordAccountAuthMetric(`${req.params.provider}_unbind`, error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/wechat/account', async (req, res) => {
+  if (!WECHAT_ACCOUNT_AUTH_ENABLED) {
+    return res.status(503).json({ error: '微信账户登录暂未开放', code: 'WECHAT_ACCOUNT_AUTH_DISABLED' });
+  }
+  if (!limitWechatUinAuth(`wechat-account:${getRequestIp(req)}`)) {
+    recordAccountAuthMetric('wechat', 'rate_limited');
+    return res.status(429).json({ error: '微信登录请求过于频繁，请稍后再试', code: 'LOGIN_RATE_LIMITED' });
+  }
+  try {
+    const proof = await consumeWechatLoginProof(req, res);
+    const requestedUin = normalizeWechatUin(req.body?.uin);
+    if (!proof || !requestedUin || requestedUin !== proof.uin) {
+      throw new AccountAuthError('WECHAT_PROOF_INVALID', '微信登录凭证无效或已过期，请重新扫码', 401);
+    }
+    const action = req.body?.action === 'bind' ? 'bind' : 'login';
+    let account;
+    if (action === 'bind') {
+      const current = await requireAccountSession(req, res);
+      if (!current) return;
+      account = await bindExternalIdentity(current.id, {
+        provider: 'wechat',
+        subject: proof.uin,
+        profile: { username: `微信用户 ${proof.uin.slice(-4)}` },
+      });
+    } else {
+      const result = await loginOrRegisterExternalIdentity({
+        provider: 'wechat',
+        subject: proof.uin,
+        profile: { username: `微信用户 ${proof.uin.slice(-4)}` },
+      });
+      account = result.account;
+      const token = await createAccountSession(account.id);
+      await syncAccountRoomIdentity(req, res, account);
+      setAccountSessionCookie(res, token);
+    }
+    recordAccountAuthMetric(`wechat_${action}`, 'success');
+    return res.json({ ok: true, account: publicAccount(account) });
+  } catch (error) {
+    recordAccountAuthMetric('wechat', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
 // ---------- Linux.do OAuth：房主身份绑定 / 找回 ----------
 // 只影响“把当前浏览器身份绑定到一个 Linux.do 账号”这件事，不改变匿名创建/加入房间的既有流程；
 // 不登录 Linux.do 完全不受影响。持久化只写 Redis（server/linuxdoAuth.js）。
@@ -2088,14 +2396,33 @@ app.get('/api/auth/linuxdo/status', async (req, res) => {
   res.json({ enabled, bound });
 });
 
-app.get('/api/auth/linuxdo/start', (req, res) => {
+app.get('/api/auth/linuxdo/start', async (req, res) => {
   if (!isLinuxdoConfigured()) return res.status(400).json({ error: 'Linux.do 登录未配置' });
   if (!limitLinuxdoAuth(`linuxdo-start:${getRequestIp(req)}`)) {
     return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
   }
 
-  const purpose = req.query?.purpose === 'recover' ? 'recover' : 'bind';
+  const requestedPurpose = String(req.query?.purpose || '');
+  const purpose = ['recover', 'account-login', 'account-bind'].includes(requestedPurpose)
+    ? requestedPurpose
+    : 'bind';
   const returnPath = sanitizeReturnPath(req.query?.returnPath);
+
+  if (purpose === 'account-login') {
+    const state = signLinuxdoState({ purpose, returnPath });
+    return res.redirect(buildLinuxdoAuthorizeUrl(state));
+  }
+
+  if (purpose === 'account-bind') {
+    try {
+      const account = await requireAccountSession(req, res);
+      if (!account) return;
+      const state = signLinuxdoState({ purpose, accountId: account.id, returnPath });
+      return res.redirect(buildLinuxdoAuthorizeUrl(state));
+    } catch (error) {
+      return sendAccountAuthError(res, error);
+    }
+  }
 
   if (purpose === 'bind') {
     const identity = requireSessionIdentity(req, res);
@@ -2127,6 +2454,9 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
   const state = verifyLinuxdoState(req.query?.state);
   if (!state) return fail('/', 'error');
   const returnPath = sanitizeReturnPath(state.returnPath);
+  const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
+    ? res.redirect(appendAccountAuthResult(returnPath, `linuxdo_${reason}`))
+    : fail(returnPath, reason);
 
   let profile;
   try {
@@ -2134,12 +2464,50 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
     profile = await fetchLinuxdoProfile(accessToken);
   } catch (err) {
     console.error('Linux.do OAuth 失败:', err?.message || err);
-    return fail(returnPath, 'error');
+    return failForPurpose('error');
   }
 
   if (state.purpose === 'admin-bind' || state.purpose === 'admin-login') {
     // 后台绑定 / 后台登录复用同一个已注册的 redirect_uri，只能在这里按 purpose 转发
     return handleLinuxdoAdminCallback(req, res, state, profile);
+  }
+
+  if (state.purpose === 'account-login' || state.purpose === 'account-bind') {
+    try {
+      let account;
+      if (state.purpose === 'account-bind') {
+        const current = await resolveAccountFromRequest(req);
+        if (!current || current.id !== state.accountId) {
+          return res.redirect(appendAccountAuthResult(returnPath, 'linuxdo_expired'));
+        }
+        account = await bindExternalIdentity(current.id, {
+          provider: 'linuxdo',
+          subject: profile.id,
+          profile,
+        });
+      } else {
+        const result = await loginOrRegisterExternalIdentity({
+          provider: 'linuxdo',
+          subject: profile.id,
+          profile,
+        });
+        account = result.account;
+        const token = await createAccountSession(account.id);
+        await syncAccountRoomIdentity(req, res, account);
+        setAccountSessionCookie(res, token);
+      }
+      recordAccountAuthMetric(state.purpose.replace('account-', 'linuxdo_'), 'success');
+      return res.redirect(appendAccountAuthResult(
+        returnPath,
+        state.purpose === 'account-bind' ? 'linuxdo_bound' : 'linuxdo_logged_in',
+      ));
+    } catch (error) {
+      const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
+        ? 'linuxdo_conflict'
+        : 'linuxdo_error';
+      recordAccountAuthMetric(state.purpose.replace('account-', 'linuxdo_'), error instanceof AccountAuthError ? error.code : 'error');
+      return res.redirect(appendAccountAuthResult(returnPath, result));
+    }
   }
 
   if (state.purpose === 'bind') {
@@ -2201,14 +2569,33 @@ app.get('/api/auth/github/status', async (req, res) => {
   res.json({ enabled: true, bound });
 });
 
-app.get('/api/auth/github/start', (req, res) => {
+app.get('/api/auth/github/start', async (req, res) => {
   if (!isGithubConfigured()) return res.status(400).json({ error: 'GitHub 登录未配置' });
   if (!limitGithubAuth(`github-start:${getRequestIp(req)}`)) {
     return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
   }
 
-  const purpose = req.query?.purpose === 'recover' ? 'recover' : 'bind';
+  const requestedPurpose = String(req.query?.purpose || '');
+  const purpose = ['recover', 'account-login', 'account-bind'].includes(requestedPurpose)
+    ? requestedPurpose
+    : 'bind';
   const returnPath = sanitizeGithubReturnPath(req.query?.returnPath);
+
+  if (purpose === 'account-login') {
+    const state = signGithubState({ purpose, returnPath });
+    return res.redirect(buildGithubAuthorizeUrl(state));
+  }
+
+  if (purpose === 'account-bind') {
+    try {
+      const account = await requireAccountSession(req, res);
+      if (!account) return;
+      const state = signGithubState({ purpose, accountId: account.id, returnPath });
+      return res.redirect(buildGithubAuthorizeUrl(state));
+    } catch (error) {
+      return sendAccountAuthError(res, error);
+    }
+  }
 
   if (purpose === 'bind') {
     const identity = requireSessionIdentity(req, res);
@@ -2239,6 +2626,9 @@ app.get('/api/auth/github/callback', async (req, res) => {
   const state = verifyGithubState(req.query?.state);
   if (!state) return fail('/', 'error');
   const returnPath = sanitizeGithubReturnPath(state.returnPath);
+  const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
+    ? res.redirect(appendAccountAuthResult(returnPath, `github_${reason}`))
+    : fail(returnPath, reason);
 
   let profile;
   try {
@@ -2246,12 +2636,50 @@ app.get('/api/auth/github/callback', async (req, res) => {
     profile = await fetchGithubProfile(accessToken);
   } catch (err) {
     console.error('GitHub OAuth 失败:', err?.message || err);
-    return fail(returnPath, 'error');
+    return failForPurpose('error');
   }
 
   if (state.purpose === 'admin-bind' || state.purpose === 'admin-login') {
     // 后台绑定 / 后台登录复用同一个已注册的 redirect_uri，只能在这里按 purpose 转发
     return handleGithubAdminCallback(req, res, state, profile);
+  }
+
+  if (state.purpose === 'account-login' || state.purpose === 'account-bind') {
+    try {
+      let account;
+      if (state.purpose === 'account-bind') {
+        const current = await resolveAccountFromRequest(req);
+        if (!current || current.id !== state.accountId) {
+          return res.redirect(appendAccountAuthResult(returnPath, 'github_expired'));
+        }
+        account = await bindExternalIdentity(current.id, {
+          provider: 'github',
+          subject: profile.id,
+          profile,
+        });
+      } else {
+        const result = await loginOrRegisterExternalIdentity({
+          provider: 'github',
+          subject: profile.id,
+          profile,
+        });
+        account = result.account;
+        const token = await createAccountSession(account.id);
+        await syncAccountRoomIdentity(req, res, account);
+        setAccountSessionCookie(res, token);
+      }
+      recordAccountAuthMetric(state.purpose.replace('account-', 'github_'), 'success');
+      return res.redirect(appendAccountAuthResult(
+        returnPath,
+        state.purpose === 'account-bind' ? 'github_bound' : 'github_logged_in',
+      ));
+    } catch (error) {
+      const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
+        ? 'github_conflict'
+        : 'github_error';
+      recordAccountAuthMetric(state.purpose.replace('account-', 'github_'), error instanceof AccountAuthError ? error.code : 'error');
+      return res.redirect(appendAccountAuthResult(returnPath, result));
+    }
   }
 
   if (state.purpose === 'bind') {

@@ -41,6 +41,7 @@ import { markGuideFeatureUsed } from '../lib/userGuide';
 import { useSiteFeaturesStore } from '../stores/siteFeaturesStore';
 import type { MusicAccountPlatform } from '../lib/musicAccountQr';
 import { fetchDonations, type DonationEntry } from '../lib/donations';
+import AccountAccess from '../components/AccountAccess';
 
 /** 大厅只用接口带回的 CDN 直链，不走 meting type=pic 再查 */
 function lobbyDirectCoverUrl(pic?: string): string | null {
@@ -428,6 +429,7 @@ export default function Home() {
   const [donations, setDonations] = useState<DonationEntry[]>([]);
   const [siteAnnouncement, setSiteAnnouncement] = useState<SiteAnnouncement | null>(null);
   const [siteAnnouncementOpen, setSiteAnnouncementOpen] = useState(false);
+  const [accountPanelOpen, setAccountPanelOpen] = useState(false);
 
   const roomsFetchSeq = useRef(0);
   const roomsRef = useRef(rooms);
@@ -699,6 +701,10 @@ export default function Home() {
 
           <div className="flex items-center gap-2 sm:gap-2.5">
             <div className="flex items-center gap-1.5 sm:gap-2">
+              <AccountAccess
+                allowAutoPrompt={!siteAnnouncementOpen}
+                onOpenChange={setAccountPanelOpen}
+              />
               <Tooltip content="支持 OpenMusic">
                 <button type="button" onClick={() => setDonationOpen(true)} className={`hidden sm:inline-flex ${headerPillCls}`} aria-label="支持 OpenMusic">
                   <Heart className="h-4 w-4 text-pink-300 fill-current" />
@@ -1233,7 +1239,7 @@ export default function Home() {
         />
       )}
 
-      <UserGuideTour scope="home" paused={siteAnnouncementOpen || showCreate || showJoin} delayMs={1000} />
+      <UserGuideTour scope="home" paused={siteAnnouncementOpen || accountPanelOpen || showCreate || showJoin} delayMs={1000} />
     </div>
   );
 }

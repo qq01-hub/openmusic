@@ -4,6 +4,7 @@ dist/
 *.log
 *.tsbuildinfo
 .DS_Store
+.idea/
 release/
 server/.env
 server/runtimeConfig.json

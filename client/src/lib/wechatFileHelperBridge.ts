@@ -85,6 +85,7 @@ interface WxFileHelperSession {
   passTicket: string;
   /** XML 中的 pass_ticket 原样保留（已单次 URL 编码），用于拼 query */
   passTicketQuery: string;
+  apiOrigin: string;
   deviceId: string;
   syncKey: string;
 }
@@ -93,6 +94,19 @@ let activeSession: WxFileHelperSession | null = null;
 
 function isFileHelperHostname(hostname: string): boolean {
   return hostname === 'szfilehelper.weixin.qq.com';
+}
+
+function isAllowedWechatHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/\.$/u, '');
+  return normalized === 'qq.com' || normalized.endsWith('.qq.com');
+}
+
+function resolveWechatTargetUrl(raw: string, base: URL): URL {
+  const target = new URL(unwrapProxyTargetUrl(raw), base);
+  if (target.protocol !== 'https:' || !isAllowedWechatHostname(target.hostname)) {
+    throw new Error('微信登录跳转地址不受支持');
+  }
+  return target;
 }
 
 /** 文件传输助手 API 走短路径 /cgi-bin，避免生产环境 nginx 对嵌套 wx-proxy URL 二次解码 */
@@ -276,10 +290,9 @@ function parseWxLoginCode(text: string): number | null {
 }
 
 /** 官方登录页必须带 fun=new&version=v2，且 ticket 中的 @ 需要正确编码 */
-function buildLoginPageUrl(redirectUri: string): string {
-  const raw = unwrapProxyTargetUrl(redirectUri);
-  const source = new URL(raw);
-  const url = new URL(FILEHELPER_NEW_LOGIN_PAGE);
+function buildLoginPageTargetUrl(redirectUri: string): URL {
+  const source = resolveWechatTargetUrl(redirectUri, new URL(FILEHELPER_ORIGIN));
+  const url = new URL(source.toString());
 
   source.searchParams.forEach((value, key) => {
     url.searchParams.set(key, value);
@@ -288,7 +301,7 @@ function buildLoginPageUrl(redirectUri: string): string {
   if (!url.searchParams.has('version')) url.searchParams.set('version', 'v2');
   if (!url.searchParams.has('lang')) url.searchParams.set('lang', 'zh_CN');
 
-  return resolveProxyAssetUrl(url.toString());
+  return url;
 }
 
 function parseXmlField(xml: string, tag: string): string {
@@ -296,10 +309,16 @@ function parseXmlField(xml: string, tag: string): string {
   const plain = new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i');
   const match = xml.match(cdata) || xml.match(plain);
   if (!match?.[1]) return '';
+  const value = match[1]
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
   try {
-    return decodeURIComponent(match[1]);
+    return decodeURIComponent(value);
   } catch {
-    return match[1];
+    return value;
   }
 }
 
@@ -308,7 +327,13 @@ function parseXmlFieldRaw(xml: string, tag: string): string {
   const cdata = new RegExp(`<${tag}><!\\[CDATA\\[([\\s\\S]*?)\\]\\]></${tag}>`, 'i');
   const plain = new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i');
   const match = xml.match(cdata) || xml.match(plain);
-  return match?.[1] || '';
+  return match?.[1]
+    ?.replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    || '';
 }
 
 function createDeviceId(): string {
@@ -350,34 +375,56 @@ function buildWebwxInitUrl(session: WxFileHelperSession): string {
     `pass_ticket=${session.passTicketQuery}`,
     `skey=${encodeURIComponent(session.skey)}`,
   ].join('&');
-  return fileHelperApiUrl(`/mmwebwx-bin/webwxinit?${params}`);
+  return session.apiOrigin === FILEHELPER_ORIGIN
+    ? fileHelperApiUrl(`/mmwebwx-bin/webwxinit?${params}`)
+    : resolveProxyAssetUrl(`${session.apiOrigin}/cgi-bin/mmwebwx-bin/webwxinit?${params}`);
 }
 
+const MAX_LOGIN_REDIRECTS = 3;
+
 async function establishWechatFileHelperSession(redirectUri: string): Promise<WxFileHelperSession> {
-  const loginUrl = buildLoginPageUrl(redirectUri);
+  let targetUrl = buildLoginPageTargetUrl(redirectUri);
+  let xml = '';
 
-  const loginResp = await wxFetch(loginUrl, {
-    method: 'GET',
-    redirect: 'manual',
-  });
+  for (let redirectCount = 0; redirectCount <= MAX_LOGIN_REDIRECTS; redirectCount += 1) {
+    const loginResp = await wxFetch(resolveProxyAssetUrl(targetUrl.toString()), {
+      method: 'GET',
+      redirect: 'manual',
+    });
 
-  if (loginResp.status >= 300 && loginResp.status < 400) {
-    const location = loginResp.headers.get('Location') || '';
-    throw new Error(`webwxnewloginpage 被重定向 (${loginResp.status})${location ? `: ${location}` : ''}`);
-  }
+    if (loginResp.status >= 300 && loginResp.status < 400) {
+      const location = loginResp.headers.get('Location') || '';
+      if (!location || redirectCount >= MAX_LOGIN_REDIRECTS) {
+        throw new Error('webwxnewloginpage 重定向次数过多或缺少目标地址');
+      }
+      targetUrl = resolveWechatTargetUrl(location, targetUrl);
+      continue;
+    }
 
-  if (!loginResp.ok) {
-    throw new Error(`webwxnewloginpage 失败 (${loginResp.status})`);
-  }
+    if (!loginResp.ok) {
+      throw new Error(`webwxnewloginpage 请求失败 (${loginResp.status})`);
+    }
 
-  const xml = await loginResp.text();
-  if (!xml.trim()) {
-    throw new Error('webwxnewloginpage 返回空响应');
-  }
+    xml = await loginResp.text();
+    if (!xml.trim()) {
+      throw new Error('webwxnewloginpage 返回空响应');
+    }
 
-  const ret = parseXmlField(xml, 'ret');
-  if (ret && ret !== '0') {
-    throw new Error(`webwxnewloginpage 返回错误 (${ret || 'unknown'})`);
+    const ret = parseXmlField(xml, 'ret');
+    if (ret && ret !== '0') {
+      throw new Error(`webwxnewloginpage 返回错误 (${ret || 'unknown'})`);
+    }
+
+    const xmlRedirect = parseXmlField(xml, 'redirecturl');
+    if (xmlRedirect) {
+      if (redirectCount >= MAX_LOGIN_REDIRECTS) {
+        throw new Error('webwxnewloginpage XML 重定向次数过多');
+      }
+      targetUrl = buildLoginPageTargetUrl(xmlRedirect);
+      continue;
+    }
+
+    break;
   }
 
   const passTicketQuery = parseXmlFieldRaw(xml, 'pass_ticket');
@@ -387,12 +434,13 @@ async function establishWechatFileHelperSession(redirectUri: string): Promise<Wx
     skey: parseXmlField(xml, 'skey'),
     passTicket: parseXmlField(xml, 'pass_ticket'),
     passTicketQuery,
+    apiOrigin: targetUrl.origin,
     deviceId: createDeviceId(),
     syncKey: '',
   };
 
   if (!session.uin || !session.sid || !session.skey || !session.passTicketQuery) {
-    throw new Error(`未解析到完整登录会话: ${xml.replace(/\s+/g, ' ').slice(0, 160)}`);
+    throw new Error('未解析到完整登录会话（微信未返回必要凭据）');
   }
 
   const initUrl = buildWebwxInitUrl(session);
@@ -404,7 +452,7 @@ async function establishWechatFileHelperSession(redirectUri: string): Promise<Wx
   });
 
   if (!initResp.ok) {
-    throw new Error(`webwxinit 失败 (${initResp.status})`);
+    throw new Error(`webwxinit 请求失败 (${initResp.status})`);
   }
 
   const initText = await initResp.text();
@@ -416,7 +464,7 @@ async function establishWechatFileHelperSession(redirectUri: string): Promise<Wx
   try {
     initJson = JSON.parse(initText) as typeof initJson;
   } catch {
-    throw new Error(`webwxinit 响应不是 JSON: ${initText.replace(/\s+/g, ' ').slice(0, 160)}`);
+    throw new Error('webwxinit 响应不是 JSON');
   }
 
   if (initJson.BaseResponse?.Ret && initJson.BaseResponse.Ret !== 0) {
@@ -536,9 +584,10 @@ interface WxSyncResult {
 }
 
 async function syncWechatMessages(session: WxFileHelperSession): Promise<WxSyncResult> {
-  const syncUrl = fileHelperApiUrl(
-    `/mmwebwx-bin/webwxsync?sid=${encodeURIComponent(session.sid)}&skey=${encodeURIComponent(session.skey)}&pass_ticket=${session.passTicketQuery}`,
-  );
+  const syncPath = `/mmwebwx-bin/webwxsync?sid=${encodeURIComponent(session.sid)}&skey=${encodeURIComponent(session.skey)}&pass_ticket=${session.passTicketQuery}`;
+  const syncUrl = session.apiOrigin === FILEHELPER_ORIGIN
+    ? fileHelperApiUrl(syncPath)
+    : resolveProxyAssetUrl(`${session.apiOrigin}/cgi-bin${syncPath}`);
 
   const resp = await wxFetch(syncUrl, {
     method: 'POST',
