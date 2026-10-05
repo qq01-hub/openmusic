@@ -71,7 +71,7 @@ const LYRIC_LINE_HEIGHT = 1.04;
 const LYRIC_WORLD_W = 6.1;
 /** worldScale='row' 的基准画布宽：逻辑 1200px ↔ 6.1 世界宽 */
 const LYRIC_ROW_REF_W = 1200;
-/** 行轨道排版预算：约 7.8 世界宽，长句缩字号而不是撑爆视口 */
+/** 行轨道排版预算：约 7.8 世界宽，长句换行而不是缩小整叠歌词 */
 export const LYRIC_ROW_FIT_BUDGET_W = 1536;
 
 /** Mineradio 按行数阶梯抬高画布，避免多行把字号压到糊成白板 */
@@ -297,7 +297,11 @@ function fitLyricRowsLayout(
   const normalized = rows
     .map((row) => ({ ...row, text: String(row.text || '').trim() }))
     .filter((row) => row.text)
-    .slice(0, 24);
+    .slice(0, 24)
+    .flatMap((row) => budgetW
+      ? wrapLyricTrackText(ctx, row.text, LYRIC_BASE_FONT * Math.max(0.46, Math.min(1.12, row.scale ?? 1)), budgetW)
+        .map((text, index) => ({ ...row, text, gapBefore: index === 0 ? row.gapBefore : 0 }))
+      : [row]);
   const maxContentW = Math.min(LYRIC_CANVAS_MAX_W - 88, budgetW || LYRIC_CANVAS_MAX_W - 88);
   const rowCount = Math.max(1, normalized.length);
   // Mineradio：行数越多画布越高，字号下限保持 42/46，不靠压到 18px 硬塞
@@ -344,6 +348,33 @@ function splitLyricForWrap(text: string): string[] {
 
   const hard = Math.max(1, Math.min(trimmed.length - 1, mid));
   return [trimmed.slice(0, hard).trim(), trimmed.slice(hard).trim()].filter(Boolean);
+}
+
+export function wrapLyricTrackText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  fontSize = LYRIC_BASE_FONT,
+  budgetW = LYRIC_ROW_FIT_BUDGET_W,
+): string[] {
+  const wrapped: string[] = [];
+  for (const line of text.split(/\r?\n/u)) {
+    let current = '';
+    const tokens = line.trim().match(/\s+|[a-zA-Z0-9]+(?:['’-][a-zA-Z0-9]+)*|[^\s]/gu) ?? [];
+    for (const token of tokens) {
+      const parts = measureLyricLineWidth(ctx, token, fontSize) <= budgetW ? [token] : Array.from(token);
+      for (const part of parts) {
+        const candidate = current + part;
+        if (current && measureLyricLineWidth(ctx, candidate, fontSize) > budgetW) {
+          if (current.trim()) wrapped.push(current.trim());
+          current = part.trimStart();
+        } else {
+          current = candidate;
+        }
+      }
+    }
+    if (current.trim()) wrapped.push(current.trim());
+  }
+  return wrapped;
 }
 
 function fitWrappedLyricLayout(
@@ -494,13 +525,13 @@ export function buildLyricMaskAsset(
   const measureCtx = canvas.getContext('2d');
   if (!measureCtx) throw new Error('canvas 2d unavailable');
 
-  const fallbackLayout = fitLyricLayout(
+  const fallbackLayout = options?.rows?.length ? null : fitLyricLayout(
     measureCtx,
     text,
     translation,
     showTranslation && (options?.translationMode ?? roomVisualFxLive.current.lyricTranslationMode) !== 'off',
   );
-  const fallbackRows = fallbackLayout.lines.map((line, index) => ({
+  const fallbackRows = (fallbackLayout?.lines ?? []).map((line, index) => ({
     text: line,
     alpha: 1,
     scale: index === 0 ? 1 : 0.74,
@@ -514,7 +545,9 @@ export function buildLyricMaskAsset(
     options?.fitBudgetW,
   );
   const { rows, fontSize, measured, blockH } = rowLayout;
-  const activeMetrics = activeRowMetrics(rows, fontSize);
+  const activeMetrics = options?.worldScale === 'row'
+    ? { centerOffset: 0, step: blockH }
+    : activeRowMetrics(rows, fontSize);
   const lines = rows.map((row) => row.text);
   const padX = Math.max(96, fontSize * 1.15);
   const padY = Math.max(36, fontSize * 0.55);

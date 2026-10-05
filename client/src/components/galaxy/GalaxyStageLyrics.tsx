@@ -24,6 +24,7 @@ import {
 } from './lib/galaxyStageLyricMaterial';
 import {
   LYRIC_CONTEXT_SCALE,
+  LYRIC_ROW_WORLD_EM,
   createLyricRowTrack,
   disposeLyricRowTrack,
   invalidateLyricRowTrack,
@@ -64,7 +65,8 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
   const activeIndex = findActiveLyricIndex(lyrics, currentTime);
   const activeLine = activeIndex >= 0 ? lyrics[activeIndex] : null;
   const currentLine = activeLine?.text ?? null;
-  const { camera, gl } = useThree();
+  const { camera, gl, size } = useThree();
+  const fitBudgetW = Math.max(480, Math.min(LYRIC_ROW_FIT_BUDGET_W, LYRIC_ROW_FIT_BUDGET_W * size.width / Math.max(1, size.height)));
 
   const stageRootRef = useRef<StageLyricStageRoot | null>(null);
   const trackRef = useRef(createLyricRowTrack());
@@ -90,8 +92,8 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
   // 只有真正会改变画布内容的设置才该让纹理作废；配色是运行时 uniform，不算。
   const textureSignature = useMemo(
     () => `${fx.lyricFont}|${fx.lyricWeight}|${fx.lyricLetterSpacing}|${fx.lyricTextureClarity}`
-      + `|${fx.performanceQuality}|${fx.lyricEdgeFade}|${fontRevision}`,
-    [fx.lyricFont, fx.lyricWeight, fx.lyricLetterSpacing, fx.lyricTextureClarity, fx.performanceQuality, fx.lyricEdgeFade, fontRevision, fxRevision],
+      + `|${fx.performanceQuality}|${fx.lyricEdgeFade}|${fontRevision}|${Math.round(fitBudgetW)}`,
+    [fx.lyricFont, fx.lyricWeight, fx.lyricLetterSpacing, fx.lyricTextureClarity, fx.performanceQuality, fx.lyricEdgeFade, fontRevision, fxRevision, fitBudgetW],
   );
 
   const visibleIndexes = useMemo(
@@ -111,14 +113,14 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
         rows: [{ text, alpha: 1, scale: 1, active: true }],
         translationMode: 'off',
         worldScale: 'row',
-        fitBudgetW: LYRIC_ROW_FIT_BUDGET_W,
+        fitBudgetW,
       });
       const mesh = buildLyricMesh(mask);
       mesh.position.x = 0;
       applyLyricPaletteToMesh(mesh);
       return mesh;
     },
-    [lyrics, textureSignature],
+    [lyrics, textureSignature, fitBudgetW],
   );
 
   useEffect(() => {
@@ -151,8 +153,9 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
       activeIndex,
       visibleIndexes.length,
       `${current?.queueId ?? ''}|${lyrics.length}`,
+      fitBudgetW,
     );
-  }, [lyrics, activeIndex, visibleIndexes.length, current?.queueId, fxRevision]);
+  }, [lyrics, activeIndex, visibleIndexes.length, current?.queueId, fxRevision, textureSignature, fitBudgetW]);
 
   const heroMesh = useMemo(() => {
     if (!heroKey || !currentLine) return null;
@@ -364,7 +367,10 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
       ? lyricStackViewportFit({
           camera: persp,
           stackWidth: Math.max(metrics.stackWidth, heroData?.textWorldW ?? 0, 0.6),
-          stackHeight: Math.max(metrics.stackHeight, 0.5),
+          stackHeight: Math.max(0.5, Math.min(metrics.stackHeight, Math.max(
+            Math.max(heroData?.textWorldH ?? 0, metrics.activeHeight) * 0.6,
+            visibleIndexes.length * LYRIC_ROW_WORLD_EM * 1.3,
+          ))),
           layoutScale: Math.max(0.35, Math.min(1.65, liveFx.lyricScale || 1)),
           layoutX: liveFx.lyricOffsetX || 0,
           layoutY: liveFx.lyricOffsetY || 0,

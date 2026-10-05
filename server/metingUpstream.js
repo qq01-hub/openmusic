@@ -305,6 +305,7 @@ export const __test = {
   roomNeedsScopedProxy,
   buildUpstreamRequest,
   buildMetingCacheKey,
+  markFailure,
 };
 
 function buildUpstreamUrl(upstream, query) {
@@ -395,9 +396,10 @@ async function requestUpstream(upstream, query, options, timeoutMs) {
   throw lastError || new Error('音源请求失败');
 }
 
-function markFailure(upstream, err, query = {}) {
+function markFailure(upstream, err, query = {}, status = Number(err?.status || 0)) {
   upstream.failCount += 1;
   upstream.cooldownUntil = Date.now() + FAIL_COOLDOWN_MS;
+  if (status === 500 && query.type === 'search' && getMetingRequestContext().musicSuggestions === true) return;
   const message = typeof err === 'string' ? err : formatMetingFetchError(err);
   pushRecentError(upstream, message, query);
 }
@@ -492,7 +494,7 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
         }
       }
       if (response.status >= 400) {
-        markFailure(upstream, `上游返回 ${response.status}`, query);
+        markFailure(upstream, `上游返回 ${response.status}`, query, response.status);
         lastError = new Error(`Meting 上游返回 ${response.status}（${upstream.base}）`);
         continue;
       }

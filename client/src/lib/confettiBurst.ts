@@ -1,5 +1,7 @@
 /** 贵宾进房欢迎礼花 — 轻量 canvas；聊天区不可用时回退全屏，保证房内全员可见 */
 
+const activeBursts = new WeakMap<HTMLElement, () => void>();
+
 function resolveConfettiHost(container?: HTMLElement | null): {
   host: HTMLElement;
   width: number;
@@ -28,14 +30,15 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
   }
 
   const resolved = resolveConfettiHost(container);
-  if (!resolved) return;
+  if (!resolved || document.hidden) return;
 
   const { host, width, height, fullscreen } = resolved;
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { alpha: true });
   if (!ctx) return;
+  activeBursts.get(host)?.();
 
-  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+  const dpr = 1;
   canvas.width = Math.round(width * dpr);
   canvas.height = Math.round(height * dpr);
   canvas.style.cssText = fullscreen
@@ -55,6 +58,32 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
 
   type ParticleKind = 'circle' | 'rect' | 'ribbon';
   type Side = 'left' | 'right' | 'center';
+  const sprites = new Map<string, HTMLCanvasElement>();
+  for (const kind of ['circle', 'rect', 'ribbon'] as const) {
+    for (const color of colors) {
+      const sprite = document.createElement('canvas');
+      sprite.width = sprite.height = 24;
+      const spriteCtx = sprite.getContext('2d');
+      if (!spriteCtx) continue;
+      spriteCtx.translate(12, 12);
+      spriteCtx.scale(2, 2);
+      spriteCtx.fillStyle = color;
+      spriteCtx.beginPath();
+      if (kind === 'circle') {
+        spriteCtx.arc(0, 0, 3.6, 0, Math.PI * 2);
+      } else {
+        const spriteWidth = kind === 'rect' ? 8 : 10.8;
+        const spriteHeight = kind === 'rect' ? 4.4 : 2.56;
+        if (typeof spriteCtx.roundRect === 'function') {
+          spriteCtx.roundRect(-spriteWidth / 2, -spriteHeight / 2, spriteWidth, spriteHeight, kind === 'rect' ? 1 : spriteHeight / 2);
+        } else {
+          spriteCtx.rect(-spriteWidth / 2, -spriteHeight / 2, spriteWidth, spriteHeight);
+        }
+      }
+      spriteCtx.fill();
+      sprites.set(`${kind}:${color}`, sprite);
+    }
+  }
 
   /**
    * 两侧 + 底部轻喷：以向上为主、略向室内铺开，速度/重力偏「正常礼花」节奏，
@@ -86,6 +115,7 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
 
     const kindRoll = Math.random();
     const kind: ParticleKind = kindRoll < 0.38 ? 'circle' : kindRoll < 0.78 ? 'rect' : 'ribbon';
+    const color = colors[Math.floor(Math.random() * colors.length)];
 
     return {
       x: originX,
@@ -93,7 +123,7 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       size: kind === 'ribbon' ? 4 + Math.random() * 4 : 3.2 + Math.random() * 3.8,
-      color: colors[Math.floor(Math.random() * colors.length)],
+      sprite: sprites.get(`${kind}:${color}`),
       rot: Math.random() * Math.PI,
       vr: (Math.random() - 0.5) * 0.22,
       // 温和重力：升一会儿再落下，总时长约 2.5–3s
@@ -107,8 +137,8 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
     };
   };
 
-  // 手机聊天区宽度约 360 → ~150；桌面更密一点
-  const count = Math.round(Math.min(180, Math.max(120, width * 0.42)));
+  // 手机聊天区宽度约 360 → ~86；桌面更密一点
+  const count = Math.round(Math.min(108, Math.max(72, width * 0.24)));
   const particles = Array.from({ length: count }, (_, index) => {
     const lane = index % 5;
     const side: Side = lane === 0 || lane === 1 ? 'left' : lane === 2 || lane === 3 ? 'right' : 'center';
@@ -116,54 +146,39 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
   });
 
   const start = performance.now();
+  let previousFrame = start;
   let raf = 0;
-  const baseTransform = () => ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  const roundRectPath = (x: number, y: number, w: number, h: number, r: number) => {
-    if (typeof ctx.roundRect === 'function') {
-      ctx.roundRect(x, y, w, h, r);
-      return;
-    }
-    ctx.rect(x, y, w, h);
+  const cleanup = () => {
+    cancelAnimationFrame(raf);
+    canvas.remove();
+    document.removeEventListener('visibilitychange', onVisibility);
+    activeBursts.delete(host);
   };
+  const onVisibility = () => { if (document.hidden) cleanup(); };
+  document.addEventListener('visibilitychange', onVisibility);
+  activeBursts.set(host, cleanup);
 
   const drawParticle = (
     p: (typeof particles)[number],
     alpha: number,
   ) => {
+    if (!p.sprite) return;
     ctx.globalAlpha = alpha;
-    ctx.fillStyle = p.color;
-
-    if (p.kind === 'circle') {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size * 0.45, 0, Math.PI * 2);
-      ctx.fill();
-      return;
-    }
-
-    const cos = Math.cos(p.rot);
-    const sin = Math.sin(p.rot);
+    const cos = p.kind === 'circle' ? 1 : Math.cos(p.rot);
+    const sin = p.kind === 'circle' ? 0 : Math.sin(p.rot);
     ctx.setTransform(cos * dpr, sin * dpr, -sin * dpr, cos * dpr, p.x * dpr, p.y * dpr);
-
-    if (p.kind === 'rect') {
-      const w = p.size;
-      const h = p.size * 0.55;
-      ctx.beginPath();
-      roundRectPath(-w / 2, -h / 2, w, h, 1);
-      ctx.fill();
-    } else {
-      const w = p.size * 1.35;
-      const h = p.size * 0.32;
-      ctx.beginPath();
-      roundRectPath(-w / 2, -h / 2, w, h, h / 2);
-      ctx.fill();
-    }
-
-    baseTransform();
+    const spriteSize = p.size * 1.5;
+    ctx.drawImage(p.sprite, -spriteSize / 2, -spriteSize / 2, spriteSize, spriteSize);
   };
 
   const tick = (now: number) => {
     const elapsed = now - start;
+    if (!host.isConnected || document.hidden || elapsed >= durationMs + 500) {
+      cleanup();
+      return;
+    }
+    const frameStep = Math.max(0, Math.min(3, (now - previousFrame) / (1000 / 60)));
+    previousFrame = now;
     clearCanvas();
 
     let alive = 0;
@@ -174,12 +189,13 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
         continue;
       }
 
-      p.wobble += p.wobbleSpeed;
-      p.x += p.vx + Math.sin(p.wobble) * p.wobbleAmp;
-      p.y += p.vy;
-      p.vy += p.gravity;
-      p.vx *= p.drag;
-      p.rot += p.vr;
+      const step = Math.min(frameStep, localElapsed / (1000 / 60));
+      p.wobble += p.wobbleSpeed * step;
+      p.x += (p.vx + Math.sin(p.wobble) * p.wobbleAmp) * step;
+      p.y += p.vy * step;
+      p.vy += p.gravity * step;
+      p.vx *= Math.pow(p.drag, step);
+      p.rot += p.vr * step;
 
       // 侧壁轻弹一下，避免贴边堆叠
       if (p.x < edgePad) {
@@ -209,8 +225,7 @@ export function fireWelcomeConfetti(container?: HTMLElement | null, durationMs =
     }
 
     if (alive === 0 || elapsed >= durationMs + 500) {
-      cancelAnimationFrame(raf);
-      canvas.remove();
+      cleanup();
       return;
     }
 

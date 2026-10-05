@@ -3,6 +3,32 @@ import assert from 'node:assert/strict';
 import { createMetingResponseCache } from './metingCache.js';
 import { __test as metingUpstreamTest, runWithMetingRequestContext } from './metingUpstream.js';
 
+test('搜索联想的 Meting 500 不写后台错误记录，但保留失败计数和冷却', () => {
+  const upstream = { failCount: 0, recentErrors: [], lastError: '已有错误', lastErrorAt: 1 };
+  runWithMetingRequestContext({ musicSuggestions: true }, () => {
+    metingUpstreamTest.markFailure(upstream, '上游返回 500', { type: 'search' }, 500);
+  });
+  assert.equal(upstream.failCount, 1);
+  assert.ok(upstream.cooldownUntil > Date.now());
+  assert.deepEqual(upstream.recentErrors, []);
+  assert.equal(upstream.lastError, '已有错误');
+  assert.equal(upstream.lastErrorAt, 1);
+
+  for (const { context, type, status } of [
+    { context: {}, type: 'search', status: 500 },
+    { context: { musicSuggestions: true }, type: 'search', status: 502 },
+    { context: { musicSuggestions: true }, type: 'search', status: 403 },
+    { context: { musicSuggestions: true }, type: 'search', status: 0 },
+    { context: { musicSuggestions: true }, type: 'url', status: 500 },
+  ]) {
+    runWithMetingRequestContext(context, () => {
+      metingUpstreamTest.markFailure(upstream, `上游返回 ${status}`, { type }, status);
+    });
+  }
+  assert.equal(upstream.recentErrors.length, 5);
+  assert.equal(upstream.failCount, 6);
+});
+
 test('相同 Meting 请求并发时只执行一次加载，并复用响应', async () => {
   const cache = createMetingResponseCache({ ttlMs: 60_000 });
   let loads = 0;

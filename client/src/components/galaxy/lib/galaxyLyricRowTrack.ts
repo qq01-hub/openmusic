@@ -8,6 +8,7 @@ import {
   buildLyricMesh,
   disposeLyricMesh,
   primeLyricMeshTextures,
+  wrapLyricTrackText,
   type LyricMeshGroup,
 } from './galaxyStageLyricMaterial';
 
@@ -43,6 +44,7 @@ interface TrackSlot {
   text: string;
   /** 相对首行的纵向位置，单位 em（向下为负） */
   unitY: number;
+  height: number;
 }
 
 interface TrackRow {
@@ -60,6 +62,8 @@ export interface LyricRowTrack {
   primed: boolean;
   layoutSignature: string;
   meshSignature: string;
+  lineHeights: Map<string, number>;
+  fitBudgetW: number;
 }
 
 export function createLyricRowTrack(): LyricRowTrack {
@@ -75,6 +79,8 @@ export function createLyricRowTrack(): LyricRowTrack {
     primed: false,
     layoutSignature: '',
     meshSignature: '',
+    lineHeights: new Map(),
+    fitBudgetW: LYRIC_ROW_FIT_BUDGET_W,
   };
 }
 
@@ -118,13 +124,16 @@ export function syncLyricRowTrackLayout(
   activeIndex: number,
   visibleCount: number,
   contentSignature: string,
+  fitBudgetW = LYRIC_ROW_FIT_BUDGET_W,
 ): void {
   const mode = fx.lyricTranslationMode;
   const translationAnchor = mode === 'multi' || mode === 'off' ? -1 : activeIndex;
   const signature = `${contentSignature}|${mode}|${fx.lyricContextSpread}|${fx.lyricTranslationGap}`
-    + `|${fx.lyricTranslationScale}|${visibleCount}|${translationAnchor}`;
+    + `|${fx.lyricTranslationScale}|${visibleCount}|${translationAnchor}|${fitBudgetW}`;
   if (track.layoutSignature === signature) return;
   track.layoutSignature = signature;
+  if (track.fitBudgetW !== fitBudgetW) track.lineHeights.clear();
+  track.fitBudgetW = fitBudgetW;
 
   const gapScale = contextGapScale(visibleCount);
   const primaryStep = LINE_HEIGHT + (0.08 + fx.lyricContextSpread * 0.08) * gapScale;
@@ -139,22 +148,33 @@ export function syncLyricRowTrackLayout(
   const translationByLine = new Map<number, TrackSlot>();
   let cursor = 0;
   let prevStep = 0;
+  const measureCtx = document.createElement('canvas').getContext('2d');
+  const lineHeight = (text: string) => {
+    const cached = track.lineHeights.get(text);
+    if (cached !== undefined) return cached;
+    const height = LINE_HEIGHT * (measureCtx ? wrapLyricTrackText(measureCtx, text, BASE_FONT, fitBudgetW).length : 1);
+    track.lineHeights.set(text, height);
+    return height;
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i]?.text?.trim();
     if (!text) continue;
 
-    if (slots.length) cursor -= (prevStep + primaryStep) / 2;
-    const primary: TrackSlot = { key: `${i}:p`, lineIndex: i, isTranslation: false, text, unitY: cursor };
+    const height = lineHeight(text);
+    const step = primaryStep + height - LINE_HEIGHT;
+    if (slots.length) cursor -= (prevStep + step) / 2;
+    const primary: TrackSlot = { key: `${i}:p`, lineIndex: i, isTranslation: false, text, unitY: cursor, height };
     slots.push(primary);
     slotByLine.set(i, primary);
-    prevStep = primaryStep;
+    prevStep = step;
 
     const translation = translationSlotAllowed(mode, i, activeIndex) ? normalizedTranslation(lines[i]) : null;
     if (!translation) continue;
-    const transStep = translationRowScale(fx, i === activeIndex) * LINE_HEIGHT + translationGap;
+    const transHeight = lineHeight(translation) * translationRowScale(fx, i === activeIndex);
+    const transStep = transHeight + translationGap;
     cursor -= (prevStep + transStep) / 2;
-    const transSlot: TrackSlot = { key: `${i}:t`, lineIndex: i, isTranslation: true, text: translation, unitY: cursor };
+    const transSlot: TrackSlot = { key: `${i}:t`, lineIndex: i, isTranslation: true, text: translation, unitY: cursor, height: transHeight };
     slots.push(transSlot);
     translationByLine.set(i, transSlot);
     prevStep = transStep;
@@ -165,12 +185,12 @@ export function syncLyricRowTrackLayout(
   track.translationByLine = translationByLine;
 }
 
-function buildTrackRowMesh(text: string, renderOrderBoost: number): LyricMeshGroup {
+function buildTrackRowMesh(text: string, renderOrderBoost: number, fitBudgetW: number): LyricMeshGroup {
   const mask = buildLyricMaskAsset(text, null, false, {
     rows: [{ text, alpha: 1, scale: 1, active: false }],
     translationMode: 'off',
     worldScale: 'row',
-    fitBudgetW: LYRIC_ROW_FIT_BUDGET_W,
+    fitBudgetW,
   });
   const mesh = buildLyricMesh(mask, { decorations: false });
   mesh.position.set(0, 0, ROW_PLANE_Z);
@@ -198,6 +218,8 @@ export function invalidateLyricRowTrack(track: LyricRowTrack, meshSignature: str
   });
   track.rows.clear();
   track.primed = false;
+  track.layoutSignature = '';
+  track.lineHeights.clear();
 }
 
 export function refreshLyricRowTrackPalette(track: LyricRowTrack): void {
@@ -226,6 +248,7 @@ export interface LyricRowTrackMetrics {
   stackWidth: number;
   /** 可见行叠起来的世界高度 */
   stackHeight: number;
+  activeHeight: number;
 }
 
 export function updateLyricRowTrack(track: LyricRowTrack, frame: LyricRowTrackFrame): LyricRowTrackMetrics {
@@ -265,15 +288,15 @@ export function updateLyricRowTrack(track: LyricRowTrack, frame: LyricRowTrackFr
     const shown = visible.has(slot.lineIndex)
       && (slot.isTranslation || !ownedLines.has(slot.lineIndex));
     if (visible.has(slot.lineIndex)) {
-      stackTop = Math.max(stackTop, slot.unitY);
-      stackBottom = Math.min(stackBottom, slot.unitY);
+      stackTop = Math.max(stackTop, slot.unitY + slot.height / 2);
+      stackBottom = Math.min(stackBottom, slot.unitY - slot.height / 2);
     }
     let row = track.rows.get(slot.key);
 
     if (!row) {
       if (!shown || buildBudget <= 0) continue;
       buildBudget -= 1;
-      const mesh = buildTrackRowMesh(slot.text, frame.renderOrderBoost ?? 0);
+      const mesh = buildTrackRowMesh(slot.text, frame.renderOrderBoost ?? 0, track.fitBudgetW);
       primeLyricMeshTextures(frame.renderer, mesh);
       track.group.add(mesh);
       row = { mesh, opacity: 0 };
@@ -323,11 +346,17 @@ export function updateLyricRowTrack(track: LyricRowTrack, frame: LyricRowTrackFr
   });
 
   const spanEm = stackTop > stackBottom ? stackTop - stackBottom : 0;
+  const translationSlot = track.translationByLine.get(activeIndex);
+  const activeHalfHeight = (activeSlot?.height ?? LINE_HEIGHT) / 2;
+  const activeBottom = translationSlot
+    ? (activeSlot?.unitY ?? 0) - translationSlot.unitY + translationSlot.height / 2
+    : activeHalfHeight;
   return {
     activeAnchorY:
       LYRIC_TRACK_ANCHOR_Y + ((activeSlot?.unitY ?? track.scrollUnit) - track.scrollUnit) * LYRIC_ROW_WORLD_EM,
     stackWidth,
-    stackHeight: (spanEm + LINE_HEIGHT) * LYRIC_ROW_WORLD_EM,
+    stackHeight: Math.max(spanEm, LINE_HEIGHT) * LYRIC_ROW_WORLD_EM,
+    activeHeight: 2 * Math.max(activeHalfHeight, activeBottom) * LYRIC_ROW_WORLD_EM,
   };
 }
 
@@ -347,4 +376,5 @@ export function disposeLyricRowTrack(track: LyricRowTrack): void {
   track.slots = [];
   track.slotByLine.clear();
   track.translationByLine.clear();
+  track.lineHeights.clear();
 }

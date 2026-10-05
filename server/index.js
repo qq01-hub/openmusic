@@ -1522,7 +1522,10 @@ app.get('/api/music/suggestions', async (req, res) => {
   }
 
   try {
-    const suggestions = await fetchMusicSuggestions(keyword, getRuntimeConfig().musicSourcesEnabled);
+    const suggestions = await runWithMetingRequestContext(
+      { musicSuggestions: true },
+      () => fetchMusicSuggestions(keyword, getRuntimeConfig().musicSourcesEnabled),
+    );
     res.json({ suggestions });
   } catch (err) {
     console.error('Music suggestions error:', err.message);
