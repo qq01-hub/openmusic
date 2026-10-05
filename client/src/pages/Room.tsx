@@ -244,7 +244,7 @@ function formatHistoryTime(time: number) {
 }
 
 const FAVORITES_IMPORT_BATCH_SIZE = 500;
-const FAVORITES_PAGE_SIZE_OPTIONS = [15, 30, 50] as const;
+const FAVORITES_PAGE_SIZE_OPTIONS = [15, 30, 50, 100] as const;
 type FavoritesPageSize = (typeof FAVORITES_PAGE_SIZE_OPTIONS)[number];
 const DEFAULT_FAVORITES_PAGE_SIZE: FavoritesPageSize = 15;
 type SearchMode = 'song' | 'playlist';

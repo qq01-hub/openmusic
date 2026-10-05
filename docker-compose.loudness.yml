@@ -4,6 +4,10 @@ services:
   loudness:
     image: ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:latest
     restart: unless-stopped
+    networks:
+      openmusic:
+        aliases:
+          - meting-api-audio-loudness
     init: true
     stop_grace_period: 10s
     environment:
@@ -28,7 +32,7 @@ services:
 
   meting:
     environment:
-      LOUDNESS_SERVICE_URL: http://loudness:3100/analyze
+      LOUDNESS_SERVICE_URL: http://meting-api-audio-loudness:3100/analyze
     depends_on:
       loudness:
         condition: service_healthy

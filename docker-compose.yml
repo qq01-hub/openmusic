@@ -2,6 +2,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    networks:
+      - openmusic
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -18,6 +20,8 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     stop_grace_period: 30s
+    networks:
+      - openmusic
     ports:
       - "${OPENMUSIC_PORT:-4000}:4000"
     environment:
@@ -53,3 +57,10 @@ services:
 
 volumes:
   redis-data:
+
+networks:
+  openmusic:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}

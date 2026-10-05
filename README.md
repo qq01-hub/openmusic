@@ -70,12 +70,21 @@
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | bash
 ```
 
+新部署会创建宿主机目录 `/opt/openmusic`，配置和 Meting 数据保存在 `/opt/openmusic/data`，不会因从 `/root` 执行命令而写入 `/root/data`。执行账号需有该目录的写入权限；可通过 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | OPENMUSIC_DEPLOY_DIR=/srv/openmusic bash` 指定其他目录。
+
+已有部署请先进入原部署目录再运行脚本，脚本会沿用原路径，不会自动搬移或清空数据。Redis 仍使用原有命名卷，停止服务不要使用 `down -v`。完整迁移和备份说明见 [部署文档](docs/DEPLOY.md#持久化备份与旧部署迁移)。
+
+OpenMusic、Meting 和可选响度服务（含 Redis）统一加入 `<项目名>_openmusic` 桥接网络，显式子网默认 `172.30.80.0/24`，无需手工固定 IP。与现有网络冲突时，在部署目录 `.env` 设置未占用的 `OPENMUSIC_NETWORK_SUBNET`。自动部署响度服务可用 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | OPENMUSIC_ENABLE_LOUDNESS=y bash`；详细排障见 [容器互访与网络迁移](docs/DEPLOY.md#容器互访与网络迁移)。
+
 **访问地址：**
 - OpenMusic：`http://<服务器IP>:4000`（首次进入部署向导）
 - Meting 管理后台：`http://127.0.0.1:3000/<管理路径>`（仅本机，凭据保存在部署目录的 `.env`）
 
 **常用命令：**
 ```bash
+# 新部署默认目录；已有部署改为原路径
+cd /opt/openmusic
+
 # 查看日志
 docker compose --env-file .env -f docker-compose.full.yml logs -f
 

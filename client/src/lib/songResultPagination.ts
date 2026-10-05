@@ -1,4 +1,4 @@
-export const SONG_RESULT_PAGE_SIZE_OPTIONS = [6, 20, 50] as const;
+export const SONG_RESULT_PAGE_SIZE_OPTIONS = [6, 20, 50, 100] as const;
 export type SongResultPageSize = (typeof SONG_RESULT_PAGE_SIZE_OPTIONS)[number];
 
 export const DEFAULT_SONG_RESULT_PAGE_SIZE: SongResultPageSize = 20;

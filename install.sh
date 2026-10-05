@@ -1,20 +1,37 @@
 #!/bin/bash
 set -euo pipefail
 
-DEPLOY_DIR="$(pwd)"
+DEPLOY_DIR="${OPENMUSIC_DEPLOY_DIR:-/opt/openmusic}"
 COMPOSE_FILE="docker-compose.full.yml"
 LOUDNESS_COMPOSE_FILE="docker-compose.loudness.yml"
 ENV_FILE=".env"
 
+if [ -z "${OPENMUSIC_DEPLOY_DIR:-}" ] && { [ -e "$COMPOSE_FILE" ] || [ -e data/.env ]; }; then
+    DEPLOY_DIR="$(pwd)"
+    echo "检测到当前目录已有部署，沿用 $DEPLOY_DIR；迁移前请备份配置、数据及 Redis 卷。"
+fi
+if ! mkdir -p "$DEPLOY_DIR"; then
+    echo "错误: 无法创建部署目录 $DEPLOY_DIR，请使用有写入权限的账号或通过 OPENMUSIC_DEPLOY_DIR 指定目录。" >&2
+    exit 1
+fi
 cd "$DEPLOY_DIR"
 echo "部署目录: $DEPLOY_DIR"
+echo "宿主机持久化目录: $DEPLOY_DIR/data（删除容器不会删除此目录，请勿手动删除）"
 
 echo "========================================"
 echo "  OpenMusic 一键部署"
 echo "========================================"
 echo ""
 
-read -r -p "是否部署 Meting-API 响度辅助服务（统一不同平台音量基准）？[y/N] " enable_loudness
+enable_loudness="${OPENMUSIC_ENABLE_LOUDNESS:-}"
+if [ -z "$enable_loudness" ]; then
+    enable_loudness=N
+    if [ -t 0 ]; then
+        read -r -p "是否部署 Meting-API 响度辅助服务（统一不同平台音量基准）？[y/N] " enable_loudness
+    elif [ -r /dev/tty ]; then
+        read -r -p "是否部署 Meting-API 响度辅助服务（统一不同平台音量基准）？[y/N] " enable_loudness < /dev/tty || enable_loudness=N
+    fi
+fi
 COMPOSE_FILES=(-f "$COMPOSE_FILE")
 if [[ "$enable_loudness" =~ ^[Yy]$ ]]; then
     echo "已选择响度辅助服务，将额外拉取 GHCR 镜像。"
@@ -33,6 +50,10 @@ if ! docker compose version &> /dev/null; then
     echo "错误: Docker Compose 不可用"
     exit 1
 fi
+if ! docker info > /dev/null 2>&1; then
+    echo "错误: Docker 引擎不可访问，请先启动 Docker 并确认当前账号权限。" >&2
+    exit 1
+fi
 
 random_hex() {
     local bytes=$1
@@ -49,11 +70,14 @@ generate_key() {
 
 echo "正在下载配置文件..."
 tmp_compose="$(mktemp "${COMPOSE_FILE}.tmp.XXXXXX")"
-trap 'rm -f "$tmp_compose"' EXIT
+tmp_loudness=""
+trap 'rm -f "$tmp_compose"; [ -z "$tmp_loudness" ] || rm -f "$tmp_loudness"' EXIT
 curl -fsSL -o "$tmp_compose" https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.full.yml
 mv "$tmp_compose" "$COMPOSE_FILE"
 if [[ "$enable_loudness" =~ ^[Yy]$ ]]; then
-    curl -fsSL -o "$LOUDNESS_COMPOSE_FILE" https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.loudness.yml
+    tmp_loudness="$(mktemp "${LOUDNESS_COMPOSE_FILE}.tmp.XXXXXX")"
+    curl -fsSL -o "$tmp_loudness" https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.loudness.yml
+    mv "$tmp_loudness" "$LOUDNESS_COMPOSE_FILE"
 fi
 
 echo ""
@@ -69,6 +93,7 @@ if [ ! -f "$ENV_FILE" ]; then
     cat > "$ENV_FILE" << EOF
 OPENMUSIC_PORT=$OPENMUSIC_PORT
 METING_PORT=$METING_PORT
+OPENMUSIC_NETWORK_SUBNET=${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
 METING_ADMIN_PATH=$METING_ADMIN_PATH
 METING_ADMIN_USERNAME=$METING_USERNAME
 METING_ADMIN_PASSWORD=$METING_PASSWORD
@@ -107,11 +132,28 @@ done
 
 echo ""
 echo "正在启动 OpenMusic..."
-compose_up_args=(-d)
+if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" config --quiet; then
+    echo "错误: Compose 配置校验失败，未启动或重建容器；请检查 .env 中的凭据和 OPENMUSIC_NETWORK_SUBNET。" >&2
+    exit 1
+fi
+echo "所有服务使用同一项目的 openmusic 网络（显式子网），通过 redis、meting-api、meting-api-audio-loudness 网络名称互访。"
+echo "如子网与现有 Docker 网络或宿主机路由冲突，请调整部署目录 .env 的 OPENMUSIC_NETWORK_SUBNET 后重试；不要手动修改容器 IP。"
+compose_up_args=(-d --wait --wait-timeout 180)
 if [ "$config_files_repaired" -eq 1 ]; then
-    compose_up_args+=(--force-recreate openmusic)
+    compose_up_args+=(--force-recreate)
 fi
 if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_args[@]}"; then
+    echo "正在检查容器间 DNS 和 HTTP 连通性..."
+    if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T openmusic node -e 'fetch("http://meting-api:3000", {signal: AbortSignal.timeout(10000), redirect: "manual"}).then(r => { if (r.status >= 500) throw new Error("Meting HTTP " + r.status); console.log("OpenMusic -> meting-api:3000 OK"); }).catch(e => { console.error(e.message); process.exit(1); })'; then
+        echo "错误: OpenMusic 无法访问 Meting，请检查服务网络和日志；配置及数据已保留。" >&2
+        exit 1
+    fi
+    if [[ "$enable_loudness" =~ ^[Yy]$ ]]; then
+        if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T meting node -e 'fetch("http://meting-api-audio-loudness:3100/healthz", {signal: AbortSignal.timeout(10000)}).then(r => { if (!r.ok) throw new Error("响度 HTTP " + r.status); console.log("Meting -> meting-api-audio-loudness:3100 OK"); }).catch(e => { console.error(e.message); process.exit(1); })'; then
+            echo "错误: Meting 无法访问响度服务，请检查统一网络和日志；配置及数据已保留。" >&2
+            exit 1
+        fi
+    fi
     echo ""
     echo "========================================"
     echo "  部署成功！"
@@ -125,10 +167,12 @@ if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull && docker co
     echo "提示: 首次访问会进入部署向导。"
     echo ""
     echo "常用命令:"
+    echo "  先进入部署目录: cd \"$DEPLOY_DIR\""
     echo "  查看日志: docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} logs -f"
     echo "  停止: docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} down"
     echo "  重启: docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} restart"
     echo "  更新: docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} pull && docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} up -d"
+    echo "备份时保留部署目录的 .env、data/ 和 Redis 命名卷；不要执行 down -v。"
     echo ""
 else
     echo "部署失败，请查看服务状态和日志" >&2

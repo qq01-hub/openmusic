@@ -9,6 +9,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    networks:
+      - openmusic
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -21,6 +23,10 @@ services:
   meting:
     image: w3126197382/meting-api:latest
     restart: unless-stopped
+    networks:
+      openmusic:
+        aliases:
+          - meting-api
     ports:
       - "3000:3000"
     environment:
@@ -39,12 +45,14 @@ services:
   openmusic:
     image: w3126197382/openmusic:latest
     restart: unless-stopped
+    networks:
+      - openmusic
     ports:
       - "4000:4000"
     environment:
       PORT: 4000
       DOCKER_REDIS_URL: redis://redis:6379/0
-      DOCKER_METING_URL: ${METING_API_URL:-https://meting.example.com}
+      DOCKER_METING_URL: http://meting-api:3000
       ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:-}
     volumes:
       - type: bind
@@ -76,7 +84,16 @@ services:
 
 volumes:
   redis-data:
+
+networks:
+  openmusic:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
 ```
+
+所有服务都加入 `<项目名>_openmusic` 网络，已声明子网；面板编辑容器时保留该网络并使用自动分配 IP，不要选择独立响度项目的默认网络。部署响度增强版请使用仓库的全量 Compose 与响度覆盖文件，在同一项目启动，见 [容器互访与网络迁移](../docs/DEPLOY.md#容器互访与网络迁移)。若子网冲突，先确认未占用网段，再设置 `OPENMUSIC_NETWORK_SUBNET`；已创建网络变更子网时需本项目停服重建，不能加 `down -v`。
 
 或者用 SSH 终端：
 

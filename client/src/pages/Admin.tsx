@@ -1484,7 +1484,7 @@ function AdminPage() {
                   },
                   showTotal: (total) => `共 ${total} 条`,
                   showSizeChanger: true,
-                  pageSizeOptions: [10, 15, 20, 50],
+                  pageSizeOptions: [10, 15, 20, 50, 100],
                   size: 'small',
                 }}
                 locale={{ emptyText: rooms.length === 0 ? '当前没有活跃房间' : '没有匹配的房间' }}
@@ -1977,7 +1977,7 @@ function AdminPage() {
                   hideOnSinglePage: false,
                   showQuickJumper: true,
                   showSizeChanger: true,
-                  pageSizeOptions: [10, 15, 30, 50],
+                  pageSizeOptions: [10, 15, 30, 50, 100],
                   showTotal: (total) => `共 ${total} 条`,
                   onChange: (page, pageSize) => {
                     setDonationsPage(page);

@@ -68,7 +68,7 @@ export function createNeteasePlaylistSearchHandler({
 
     const keyword = String(req.query?.keyword || req.query?.s || '').trim().slice(0, 80);
     const page = Math.max(1, parseInt(String(req.query?.page || '1'), 10) || 1);
-    const limit = Math.min(50, Math.max(
+    const limit = Math.min(100, Math.max(
       1,
       parseInt(String(req.query?.limit || '20'), 10) || 20,
     ));

@@ -884,10 +884,15 @@ function extractMetingLyricText(raw) {
 function normalizeMetingSongIds(data) {
   const list = Array.isArray(data)
     ? data
-    : (data && Array.isArray(data.data) ? data.data : (data && Array.isArray(data.list) ? data.list : []));
+    : (data && Array.isArray(data.data) ? data.data : (data && Array.isArray(data.list) ? data.list : [data]));
 
   for (const item of list) {
     if (!item || typeof item !== 'object') continue;
+    for (const field of ['url', 'pic', 'lrc']) {
+      if (typeof item[field] === 'string' && /^https?:\/\//i.test(item[field])) {
+        item[field] = browserMetingMediaUrl(item[field]);
+      }
+    }
     if (item.id !== undefined && item.id !== null && String(item.id).trim() !== '') continue;
 
     const url = item.url;
@@ -1161,8 +1166,25 @@ async function resolveQishuiSourceToken(token) {
   return '';
 }
 
+function browserMetingMediaUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '';
+    if (isBlockedMediaHostname(url.hostname) || !url.hostname.includes('.') && !url.hostname.includes(':')) {
+      const query = parseMetingMediaQuery(rawUrl);
+      return query ? `/api/meting?${new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined))}` : '';
+    }
+    return rawUrl;
+  } catch {
+    return '';
+  }
+}
+
 async function localizeQishuiPayload(payload, metingQuery, req) {
-  if (metingQuery?.server !== 'qishui' || metingQuery?.type !== 'url' || !isQishuiPlayUrl(payload?.url)) return payload;
+  if (metingQuery?.server !== 'qishui' || metingQuery?.type !== 'url' || !isQishuiPlayUrl(payload?.url)) {
+    return { ...payload, url: browserMetingMediaUrl(payload?.url) };
+  }
+  if (!isConfiguredMetingUrl(payload.url)) return { ...payload, url: '' };
   const token = createQishuiSourceToken(payload.url);
   const path = `/api/qishui-source?t=${encodeURIComponent(token)}`;
   const origin = requestPublicOrigin(req);
