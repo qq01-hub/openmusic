@@ -239,6 +239,8 @@ export function getSourceLabel(source?: MusicSource): string {
 export function parseLrc(lrc: string): import('../../types').LyricLine[] {
   const lines: import('../../types').LyricLine[] = [];
   const regex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  const offsetMs = Number(lrc.match(/^\s*\[offset\s*:\s*([+-]?\d+)\s*\]\s*$/im)?.[1] ?? 0);
+  const offsetSec = Number.isSafeInteger(offsetMs) ? offsetMs / 1000 : 0;
   /** 部分音源常用 99:xx 存放页脚推广，非真实歌词时间 */
   const PHANTOM_LRC_MINUTES = 90;
 
@@ -259,7 +261,10 @@ export function parseLrc(lrc: string): import('../../types').LyricLine[] {
     }
   }
 
-  return mergeLyricTranslations(lines.sort((a, b) => a.time - b.time));
+  return mergeLyricTranslations(lines.sort((a, b) => a.time - b.time)).map((line) => ({
+    ...line,
+    time: Math.max(0, line.time - offsetSec),
+  }));
 }
 
 /** 过滤 LRC 中的制作信息、推广文案等非演唱歌词 */

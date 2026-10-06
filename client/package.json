@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "typecheck": "tsc -b --pretty false",
-    "test": "npm run check:header-actions && tsx --test src/lib/accountSessionSignal.test.ts src/lib/avatarImage.test.ts src/lib/favoritesSync.test.ts src/lib/socketSessionRefresh.test.ts src/lib/startupSplash.test.ts && npm run check:room-visuals && npm run typecheck",
+    "test": "npm run check:header-actions && tsx --test src/lib/accountSessionSignal.test.ts src/lib/avatarImage.test.ts src/lib/favoritesSync.test.ts src/lib/socketSessionRefresh.test.ts src/lib/startupSplash.test.ts && npm run check:lrc && npm run check:room-visuals && npm run typecheck",
+    "check:lrc": "tsx scripts/check-lrc-offset.ts",
     "check:header-actions": "node scripts/check-header-action-style.mjs",
     "check:room-visuals": "tsx scripts/check-room-visuals.ts",
     "build": "vite build",
