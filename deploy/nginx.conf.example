@@ -223,6 +223,15 @@ server {
         try_files $uri =404;
     }
 
+    # Sonic Workshop 的 sandbox iframe 使用 opaque origin；仅为公开静态资源允许 Origin: null，不允许凭据。
+    location ^~ /vendor/sonic-workshop/ {
+        expires 30d;
+        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Access-Control-Allow-Origin "null" always;
+        access_log off;
+        try_files $uri =404;
+    }
+
     location ^~ /vendor/ {
         expires 30d;
         add_header Cache-Control "public, max-age=2592000" always;

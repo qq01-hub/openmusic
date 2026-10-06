@@ -204,6 +204,29 @@ pm2 restart openmusic
 
 保存后：`nginx -t && nginx -s reload`
 
+### 音域回响提示 Origin null / CORS 错误
+
+沉浸模式的音域回响在 `sandbox="allow-scripts"` iframe 中运行，资源请求的 Origin 为 `null`。
+Node 和部署向导推荐配置已提供所需响应头；Nginx 静态直出不会经过 Node，因此旧站点也需要在实际使用的 `server` 块中补上以下规则（已有同名 location 时更新它，不要重复添加）：
+
+```nginx
+location ^~ /vendor/sonic-workshop/ {
+    expires 30d;
+    add_header Cache-Control "public, max-age=2592000" always;
+    add_header Access-Control-Allow-Origin "null" always;
+    access_log off;
+    try_files $uri =404;
+}
+```
+
+该规则复用站点指向 `client/dist` 的 `root`，比 `/vendor/` 更长的前缀会优先匹配。
+仅对这个公开资源目录设置响应头，不要扩展到 API，也不要添加 `Access-Control-Allow-Credentials` 或移除 iframe 沙箱。
+
+上线：备份当前站点配置，执行 `nginx -t && nginx -s reload`，无需重启 Node、迁移数据或重新构建前端。
+若启用了 CDN，刷新 `/vendor/sonic-workshop/` 目录缓存并确认 CDN 保留此响应头；浏览器禁用缓存后刷新页面。
+验收时对控制台实际报错的 JS 和 CSS URL 分别执行 `curl -I -H 'Origin: null' 'https://你的域名/实际资源路径'`，确认状态为 200 且包含 `Access-Control-Allow-Origin: null`，再进入音域回响确认场景显示且无 CORS 报错。
+若重载后静态资源出现异常，恢复备份配置，重新检查并重载 Nginx；恢复后本 CORS 问题可能再次出现。
+
 ---
 
 ## 常见问题
