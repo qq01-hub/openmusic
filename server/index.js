@@ -1447,8 +1447,10 @@ app.post('/api/music-account-contribution/qr/verify/complete', async (req, res) 
 });
 
 app.get('/api/music-account-contribution/qr/verify/:asset', async (req, res) => {
-  const identity = requireSessionIdentity(req, res);
-  if (!identity) return;
+  // 二次验证页由 iframe 直接导航加载，页面内的 react.js / sdk-glue.js 等子资源请求
+  // 不保证携带会话 Cookie（尤其在第三方 iframe 或受限上下文中），一旦 401 就会让
+  // _SdkGlueInit 未定义、整段校验脚本中断。这里只暴露白名单静态资源，不涉及任何
+  // 用户数据，因此与会话身份解耦；扫码/验证/绑定接口仍然强制校验身份。
   const asset = String(req.params.asset || '');
   if (!['security_host.html', 'react.js', 'react-dom.js', 'sdk-glue.js', 'bdms.js'].includes(asset)) return res.status(404).end();
   const result = await fetchManagedQishuiVerificationAsset(asset);

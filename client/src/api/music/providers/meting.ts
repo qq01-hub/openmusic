@@ -83,9 +83,9 @@ function throwIfSourceUnavailable(message: string): void {
   }
 }
 
-async function metingFetch<T>(server: MusicSource, params: Record<string, string>): Promise<T> {
+async function metingFetch<T>(server: MusicSource, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
   const query = new URLSearchParams({ server, ...params });
-  const res = await fetchWithTimeout(`${API_BASE}?${query}`);
+  const res = await fetchWithTimeout(`${API_BASE}?${query}`, { signal });
   if (!res.ok) throw new Error('API 请求失败');
   return res.json();
 }
@@ -151,14 +151,32 @@ function createMetingProvider(
   return {
     id: source,
     ...meta,
-    async search(keyword) {
+    async search(keyword, options = {}) {
       if (!meta.supportsSearch || !keyword.trim()) return [];
-      const data = await metingFetch<Record<string, unknown>[]>(source, {
-        type: 'search',
-        id: keyword.trim(),
-      });
-      if (!Array.isArray(data)) return [];
-      return data.map((item) => normalizeSong(item, source)).filter((s) => s.id);
+      const allPages = source === 'netease' && options.allPages === true;
+      const results: SearchResult[] = [];
+      const seen = new Set<string>();
+      let offset = 0;
+      while (true) {
+        options.signal?.throwIfAborted();
+        const data = await metingFetch<Record<string, unknown>[]>(source, {
+          type: 'search',
+          id: keyword.trim(),
+          ...(allPages ? { limit: '100', offset: String(offset) } : {}),
+        }, options.signal);
+        options.signal?.throwIfAborted();
+        if (!Array.isArray(data)) return results;
+        const songs = data.map((item) => normalizeSong(item, source)).filter((song) => song.id);
+        if (!allPages) return songs;
+        const previousCount = results.length;
+        for (const song of songs) {
+          if (seen.has(song.id)) continue;
+          seen.add(song.id);
+          results.push(song);
+        }
+        if (data.length < 100 || results.length === previousCount) return results;
+        offset += data.length;
+      }
     },
     async getSongById(id) {
       if (!id.trim()) return null;

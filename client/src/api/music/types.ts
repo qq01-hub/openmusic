@@ -10,8 +10,13 @@ export interface MusicProviderMeta {
   description?: string;
 }
 
+export interface MusicSearchOptions {
+  allPages?: boolean;
+  signal?: AbortSignal;
+}
+
 export interface MusicProvider extends MusicProviderMeta {
-  search(keyword: string): Promise<SearchResult[]>;
+  search(keyword: string, options?: MusicSearchOptions): Promise<SearchResult[]>;
   getSongById(id: string): Promise<SearchResult | null>;
   getSongUrl(song: Pick<Song, 'id' | 'source' | 'url' | 'duration'>, quality?: string): Promise<SongUrlResult>;
   getLyrics(song: Pick<Song, 'id' | 'source' | 'lrc'>): Promise<string>;

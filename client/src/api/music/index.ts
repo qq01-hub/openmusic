@@ -1,6 +1,6 @@
 import type { MusicSource, RoomCheckResult, RoomSummary, SearchResult, Song } from '../../types';
 import { getSourceShortLabel } from '../../lib/sourceLabels';
-import type { MusicProviderMeta } from './types';
+import type { MusicProviderMeta, MusicSearchOptions } from './types';
 import { providers, getAllSources } from './sources';
 import { interleaveSearchResults } from './merge';
 import { hasValidLrc } from './lrcFallback';
@@ -43,8 +43,8 @@ export function unwrapQishuiAudioUrl(source: MusicSource, url: string): string {
   }
 }
 
-export async function searchSongs(source: MusicSource, keyword: string): Promise<SearchResult[]> {
-  return getProvider(source).search(keyword);
+export async function searchSongs(source: MusicSource, keyword: string, options?: MusicSearchOptions): Promise<SearchResult[]> {
+  return getProvider(source).search(keyword, options);
 }
 
 export type SearchFilterMode = 'smart' | MusicSource;
@@ -52,6 +52,7 @@ export type SearchFilterMode = 'smart' | MusicSource;
 export interface SearchAllSongsOptions {
   filterMode?: SearchFilterMode;
   suggestion?: Pick<SearchResult, 'name' | 'artist'>;
+  signal?: AbortSignal;
 }
 
 /** 并行搜索，多平台交替合并 */
@@ -69,7 +70,7 @@ export async function searchAllSongs(
     const meta = allSources.find((s) => s.id === filterMode);
     if (!meta) return [];
     try {
-      const songs = await searchSongs(filterMode, keyword);
+      const songs = await searchSongs(filterMode, keyword, { allPages: filterMode === 'netease', signal: options.signal });
       return interleaveSearchResults(
         { [filterMode]: songs },
         { sourceOnly: filterMode, keyword, suggestion: options.suggestion },
@@ -80,7 +81,7 @@ export async function searchAllSongs(
   }
 
   const batches = await Promise.allSettled(
-    allSources.map((meta) => searchSongs(meta.id, keyword)),
+    allSources.map((meta) => searchSongs(meta.id, keyword, { signal: options.signal })),
   );
 
   const groups: Partial<Record<MusicSource, SearchResult[]>> = {};

@@ -376,6 +376,11 @@ export default function Room() {
   const [overlayQuery, setOverlayQuery] = useState('');
   const prevOverlayOpenRef = useRef(false);
   const songSearchRequestRef = useRef(0);
+  const songSearchAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    songSearchRequestRef.current += 1;
+    songSearchAbortRef.current?.abort();
+  }, []);
   const [searchFilterMode, setSearchFilterMode] = useState<SearchFilterMode>('smart');
   const [playlistImportOpen, setPlaylistImportOpen] = useState(false);
   const [recommendDrawerOpen, setRecommendDrawerOpen] = useState(false);
@@ -1122,6 +1127,9 @@ export default function Room() {
     suggestion?: SelectedMusicSuggestion,
   ) => {
     const requestId = ++songSearchRequestRef.current;
+    songSearchAbortRef.current?.abort();
+    const controller = new AbortController();
+    songSearchAbortRef.current = controller;
 
     if (!keyword.trim()) {
 
@@ -1139,7 +1147,7 @@ export default function Room() {
     try {
 
       // 音源配置还在加载时不能传空数组，否则 searchAllSongs 会直接返回空结果。
-      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, { filterMode, suggestion });
+      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, { filterMode, suggestion, signal: controller.signal });
 
       if (requestId === songSearchRequestRef.current) setResults(songs);
 
@@ -1169,6 +1177,9 @@ export default function Room() {
     channel = playlistChannelFilter,
     limit = playlistSearchPageSize,
   ) => {
+    songSearchRequestRef.current += 1;
+    songSearchAbortRef.current?.abort();
+    setSearching(false);
     const trimmed = keyword.trim();
     if (!trimmed) {
       setPlaylistSearchResults([]);
@@ -1212,6 +1223,9 @@ export default function Room() {
     input: string,
     options?: { deferOverlay?: boolean },
   ) => {
+    songSearchRequestRef.current += 1;
+    songSearchAbortRef.current?.abort();
+    setSearching(false);
     setPlaylistImportOpen(false);
     if (activeSearchMode === 'playlist' && searchedKeyword.trim() && playlistSearchResults.length > 0) {
       setPlaylistSearchBackup({
@@ -1289,6 +1303,9 @@ export default function Room() {
   }, [handlePlaylistImport]);
 
   const handleDjRadioSelect = useCallback(async (radio: DjRadioItem) => {
+    songSearchRequestRef.current += 1;
+    songSearchAbortRef.current?.abort();
+    setSearching(false);
     if (activeSearchMode === 'playlist' && searchedKeyword.trim() && playlistSearchResults.length > 0) {
       setPlaylistSearchBackup({
         keyword: searchedKeyword,
@@ -1471,6 +1488,7 @@ export default function Room() {
 
   const clearSearchResults = useCallback(() => {
     songSearchRequestRef.current += 1;
+    songSearchAbortRef.current?.abort();
     setQuery('');
     setOverlayQuery('');
     setResults([]);

@@ -3,10 +3,11 @@ import { useAudioStore } from '../stores/audioStore';
 import { getAudioController } from './audioController';
 import { clearAudioQueueBinding } from './audioTrackBinding';
 import { resetGalaxyAudioWireIfLoaded } from './galaxyAudioBridge';
+import { debugLog } from './debugTools';
 
 let sharedAudio: HTMLAudioElement | null = null;
 let loudnessMultiplier = 1;
-let output: { audio: HTMLAudioElement; context: AudioContext; source: MediaElementAudioSourceNode; gain: GainNode } | null = null;
+let output: { audio: HTMLAudioElement; context: AudioContext; source: MediaElementAudioSourceNode; gain: GainNode; cleanup: () => void } | null = null;
 
 /** 通知 useAudioPlayer：共享 audio 已替换，需重新绑定事件 */
 export let sharedAudioGeneration = 0;
@@ -23,9 +24,59 @@ export function hasSharedAudioOutput(): boolean {
 }
 
 export function resumeSharedAudioOutput(): void {
-  if (output?.audio === sharedAudio && output.context.state !== 'running') {
-    void output.context.resume();
+  const current = output;
+  if (!current || current.audio !== sharedAudio) return;
+  if (current.context.state === 'running' || current.context.state === 'closed') return;
+  void current.context.resume().then(() => {
+    if (output === current && current.context.state === 'running') {
+      debugLog('audio_output_resumed');
+    }
+  }).catch(() => {
+    if (output === current) {
+      debugLog('audio_output_resume_failed', `state=${current.context.state}`);
+    }
+  });
+}
+
+function attachOutputRecovery(audio: HTMLAudioElement, context: AudioContext): () => void {
+  let lastAttemptAt = -Infinity;
+  const recover = (event?: Event) => {
+    if (output?.audio !== audio || audio !== sharedAudio || audio.paused || audio.ended) return;
+    if (context.state === 'running' || context.state === 'closed') return;
+    const userGesture = event?.type === 'pointerdown'
+      || event?.type === 'pointerup'
+      || event?.type === 'touchend'
+      || event?.type === 'keydown';
+    const now = Date.now();
+    if (!userGesture && now - lastAttemptAt < 1000) return;
+    lastAttemptAt = now;
+    resumeSharedAudioOutput();
+  };
+  const onForeground = (event: Event) => {
+    if (!document.hidden) recover(event);
+  };
+  const bindings: [EventTarget, string, EventListener][] = [
+    [audio, 'play', recover],
+    [audio, 'playing', recover],
+    [audio, 'timeupdate', recover],
+    [context, 'statechange', recover],
+    [document, 'visibilitychange', onForeground],
+    [window, 'pageshow', onForeground],
+    [window, 'focus', onForeground],
+    [document, 'pointerdown', recover],
+    [document, 'pointerup', recover],
+    [document, 'touchend', recover],
+    [document, 'keydown', recover],
+  ];
+  for (const [target, type, listener] of bindings) {
+    target.addEventListener(type, listener, { capture: true, passive: true });
   }
+  recover();
+  return () => {
+    for (const [target, type, listener] of bindings) {
+      target.removeEventListener(type, listener, true);
+    }
+  };
 }
 
 export function getSharedAudioOutputSource(): { context: AudioContext; source: MediaElementAudioSourceNode } | null {
@@ -50,11 +101,10 @@ export function getSharedAudioOutputSource(): { context: AudioContext; source: M
     limiter.connect(context.destination);
     const source = context.createMediaElementSource(audio);
     source.connect(gain);
-    output = { audio, context, source, gain };
+    output = { audio, context, source, gain, cleanup: () => {} };
     gain.gain.value = loudnessMultiplier;
     applyAudioVolume(useAudioStore.getState().volume);
-    audio.addEventListener('play', resumeSharedAudioOutput);
-    audio.addEventListener('playing', resumeSharedAudioOutput);
+    output.cleanup = attachOutputRecovery(audio, context);
     return output;
   } catch {
     void context.close();
@@ -75,6 +125,7 @@ export function applyTrackLoudness(
 
 function closeSharedAudioOutput(): void {
   if (!output) return;
+  output.cleanup();
   void output.context.close();
   output = null;
 }

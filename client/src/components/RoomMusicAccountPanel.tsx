@@ -687,7 +687,7 @@ export default function RoomMusicAccountPanel({
               ref={secondVerifyFrameRef}
               title="汽水安全验证"
               src={secondVerifyUrl}
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
               className="min-h-0 flex-1 border-0"
             />
           </div>
