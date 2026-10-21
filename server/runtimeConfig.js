@@ -448,7 +448,7 @@ function normalizeAiModelField(value, fallback) {
   const model = String(value || '').trim();
   if (!model) return fallback;
   if (model.length > 64) return fallback;
-  if (!/^[A-Za-z0-9._+\-/]+$/.test(model)) return fallback;
+  if (!/^[A-Za-z0-9._+:\-/]+$/.test(model)) return fallback;
   return model;
 }
 
@@ -629,7 +629,7 @@ export function setRuntimeConfig(raw = {}) {
   if (Array.isArray(raw.aiModelPools)) {
     const invalidIndex = raw.aiModelPools.findIndex((pool) => {
       const model = String(pool?.model || '').trim();
-      return !model || /\s/.test(model) || model.length > 64 || !/^[A-Za-z0-9._+\-/]+$/.test(model);
+      return !model || /\s/.test(model) || model.length > 64 || !/^[A-Za-z0-9._+:\-/]+$/.test(model);
     });
     if (invalidIndex >= 0) {
       const model = String(raw.aiModelPools[invalidIndex]?.model || '').trim();

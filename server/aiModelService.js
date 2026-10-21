@@ -310,7 +310,7 @@ export function normalizeAiModel(value, fallback = DEFAULT_AI_TEXT_MODEL) {
   const model = String(value || '').trim();
   if (!model) return fallback;
   if (model.length > 64) return fallback;
-  if (!/^[A-Za-z0-9._+\-/]+$/.test(model)) return fallback;
+  if (!/^[A-Za-z0-9._+:\-/]+$/.test(model)) return fallback;
   return model;
 }
 

@@ -2361,6 +2361,31 @@ export default function Room() {
     setJoinPasswordOverride(pwd);
   }, [passwordDraft]);
 
+  const radioProgramTotalPages = Math.max(1, Math.ceil(radioProgramTotal / radioProgramPageSize));
+  const radioProgramPagination = useMemo(() => (
+    isRadioResults
+      ? {
+          page: radioProgramPage,
+          pageSize: radioProgramPageSize,
+          totalPages: radioProgramTotalPages,
+          total: radioProgramTotal > 0 ? radioProgramTotal : results.length,
+          loading: radioProgramLoading,
+          onPageChange: handleRadioProgramPageChange,
+          onPageSizeChange: handleRadioProgramPageSizeChange,
+        }
+      : undefined
+  ), [
+    isRadioResults,
+    radioProgramPage,
+    radioProgramPageSize,
+    radioProgramTotalPages,
+    radioProgramTotal,
+    radioProgramLoading,
+    results.length,
+    handleRadioProgramPageChange,
+    handleRadioProgramPageSizeChange,
+  ]);
+
 
   if (needsPasswordPrompt && !room) {
 
@@ -2485,30 +2510,6 @@ export default function Room() {
   const showPlaylistEmpty = showPlaylistSearch && !playlistSearchLoading && playlistSearchResults.length === 0;
   const showPlaylistSkeleton = showPlaylistSearch && playlistSearchLoading && playlistSearchResults.length === 0;
   const playlistSearchTotalPages = Math.max(1, Math.ceil(playlistSearchTotal / playlistSearchPageSize));
-  const radioProgramTotalPages = Math.max(1, Math.ceil(radioProgramTotal / radioProgramPageSize));
-  const radioProgramPagination = useMemo(() => (
-    isRadioResults
-      ? {
-          page: radioProgramPage,
-          pageSize: radioProgramPageSize,
-          totalPages: radioProgramTotalPages,
-          total: radioProgramTotal > 0 ? radioProgramTotal : results.length,
-          loading: radioProgramLoading,
-          onPageChange: handleRadioProgramPageChange,
-          onPageSizeChange: handleRadioProgramPageSizeChange,
-        }
-      : undefined
-  ), [
-    isRadioResults,
-    radioProgramPage,
-    radioProgramPageSize,
-    radioProgramTotalPages,
-    radioProgramTotal,
-    radioProgramLoading,
-    results.length,
-    handleRadioProgramPageChange,
-    handleRadioProgramPageSizeChange,
-  ]);
   const externalSearchButtonLoading = showDesktopSearchOverlay
     ? false
     : searchMode === 'song'
