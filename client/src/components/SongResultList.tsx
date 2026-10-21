@@ -16,6 +16,16 @@ import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
 import { useFavorites } from '../hooks/useFavorites';
 import { stopSongPreview } from '../lib/songPreviewPlayer';
 
+export interface SongResultRemotePagination {
+  page: number;
+  pageSize: SongResultPageSize;
+  totalPages: number;
+  total: number;
+  loading?: boolean;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (size: SongResultPageSize) => void;
+}
+
 interface Props {
   results: SearchResult[];
   addingId: string | null;
@@ -28,6 +38,8 @@ interface Props {
   onPageResultsChange?: (songs: SearchResult[]) => void;
   fillHeight?: boolean;
   immersiveGlass?: boolean;
+  /** 传入后由外部负责分页与取数，results 视为当前页 */
+  pagination?: SongResultRemotePagination;
 }
 
 function SongResultList({
@@ -41,6 +53,7 @@ function SongResultList({
   onPageResultsChange,
   fillHeight = false,
   immersiveGlass = false,
+  pagination,
 }: Props) {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
@@ -50,18 +63,31 @@ function SongResultList({
   const scrollBodyRef = useRef<HTMLDivElement>(null);
   onAddRef.current = onAdd;
 
-  const totalPages = Math.max(1, Math.ceil(results.length / pageSize));
+  const currentPage = pagination ? pagination.page : page;
+  const effectivePageSize = pagination ? pagination.pageSize : pageSize;
+  const totalPages = pagination
+    ? Math.max(1, pagination.totalPages)
+    : Math.max(1, Math.ceil(results.length / effectivePageSize));
+  const totalCount = pagination
+    ? (pagination.total > 0 ? pagination.total : results.length)
+    : results.length;
   const pageResults = useMemo(
-    () => results.slice((page - 1) * pageSize, page * pageSize),
-    [results, page, pageSize],
+    () => (pagination
+      ? results
+      : results.slice((page - 1) * pageSize, page * pageSize)),
+    [results, page, pageSize, pagination],
   );
 
   const handleRowAdd = useCallback((song: SearchResult) => {
     onAddRef.current(song);
   }, []);
 
-  useEffect(() => setPage(1), [keyword, pageSize]);
-  useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
+  useEffect(() => {
+    if (!pagination) setPage(1);
+  }, [keyword, pageSize, pagination]);
+  useEffect(() => {
+    if (!pagination && page > totalPages) setPage(totalPages);
+  }, [page, totalPages, pagination]);
   useEffect(() => {
     onPageResultsChange?.(pageResults);
   }, [pageResults, onPageResultsChange]);
@@ -69,7 +95,7 @@ function SongResultList({
   // 翻页 / 换关键词 / 卸载时停掉试听，避免后台继续播
   useEffect(() => {
     stopSongPreview({ resumeRoom: true });
-  }, [page, keyword]);
+  }, [currentPage, keyword]);
 
   useEffect(() => () => {
     stopSongPreview({ resumeRoom: true });
@@ -78,8 +104,20 @@ function SongResultList({
   const handlePageSizeChange = useCallback((next: SongResultPageSize) => {
     setPageSize(next);
     setStoredSongResultPageSize(next);
-    setPage(1);
-  }, []);
+    if (pagination) {
+      pagination.onPageSizeChange(next);
+    } else {
+      setPage(1);
+    }
+  }, [pagination]);
+
+  const handlePageChange = useCallback((next: number) => {
+    if (pagination) {
+      pagination.onPageChange(next);
+    } else {
+      setPage(next);
+    }
+  }, [pagination]);
 
   if (results.length === 0) return null;
 
@@ -120,20 +158,22 @@ function SongResultList({
       >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <PageSizeSelect
-            value={pageSize}
+            value={effectivePageSize}
             options={SONG_RESULT_PAGE_SIZE_OPTIONS}
             onChange={handlePageSizeChange}
           />
-          <span className="text-xs text-netease-muted">
-            {page} / {totalPages}
-            <span className="ml-1 text-netease-muted/50">共 {results.length} 首</span>
+          <span className="flex items-center gap-1 text-xs text-netease-muted">
+            {currentPage} / {totalPages}
+            <span className="text-netease-muted/50">共 {totalCount} 首</span>
+            {pagination?.loading && <span className="text-netease-muted/70">加载中…</span>}
           </span>
         </div>
 
         <PageNumberPagination
-          page={page}
+          page={currentPage}
           totalPages={totalPages}
-          onPageChange={setPage}
+          onPageChange={handlePageChange}
+          disabled={pagination?.loading}
           scrollRef={scrollBodyRef}
         />
       </div>
@@ -151,4 +191,11 @@ export default memo(SongResultList, (prev, next) => (
   && prev.onPageResultsChange === next.onPageResultsChange
   && prev.onShare === next.onShare
   && prev.onArtistClick === next.onArtistClick
+  && prev.pagination?.page === next.pagination?.page
+  && prev.pagination?.pageSize === next.pagination?.pageSize
+  && prev.pagination?.totalPages === next.pagination?.totalPages
+  && prev.pagination?.total === next.pagination?.total
+  && prev.pagination?.loading === next.pagination?.loading
+  && prev.pagination?.onPageChange === next.pagination?.onPageChange
+  && prev.pagination?.onPageSizeChange === next.pagination?.onPageSizeChange
 ));

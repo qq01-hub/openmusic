@@ -46,13 +46,19 @@ function normalizeProgram(raw: Record<string, unknown>): SearchResult | null {
   };
 }
 
-async function metingJson(type: string, id: string): Promise<Record<string, unknown>[]> {
+async function metingJson(
+  type: string,
+  id: string,
+  extra?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<Record<string, unknown>[]> {
   const params = new URLSearchParams({
     server: 'netease',
     type,
     id,
+    ...extra,
   });
-  const res = await fetchWithTimeout(`/api/meting?${params}`, {}, 30000);
+  const res = await fetchWithTimeout(`/api/meting?${params}`, { signal }, 30000);
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const err = (data && typeof data === 'object' && 'error' in data)
@@ -84,17 +90,30 @@ export async function searchDjRadios(keyword: string): Promise<DjRadioItem[]> {
   return list.map(normalizeRadio).filter((item): item is DjRadioItem => Boolean(item));
 }
 
-/** 拉取电台节目并转为可点歌结果 */
-export async function fetchDjPrograms(radioId: string): Promise<{
+/**
+ * 分页拉取电台节目并转为可点歌结果。
+ * 必须带 page/limit，避免后端一次性读取全部节目触发网易云频繁请求限制。
+ */
+export async function fetchDjPrograms(
+  radioId: string,
+  page = 1,
+  limit = 100,
+  signal?: AbortSignal,
+): Promise<{
   name: string;
   songs: SearchResult[];
+  total: number;
 }> {
   const id = String(radioId || '').trim();
   if (!id) throw new Error('缺少电台 ID');
+  const safePage = Math.max(1, Math.floor(page) || 1);
+  const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 100));
 
   const [programs, detail] = await Promise.all([
-    metingJson('dj', id),
-    metingJson('dj_detail', id).catch(() => []),
+    metingJson('dj', id, { page: String(safePage), limit: String(safeLimit) }, signal),
+    safePage === 1
+      ? metingJson('dj_detail', id, undefined, signal).catch(() => [])
+      : Promise.resolve<Record<string, unknown>[]>([]),
   ]);
 
   const songs = programs
@@ -104,9 +123,13 @@ export async function fetchDjPrograms(radioId: string): Promise<{
   const radioName = detail[0]
     ? String(detail[0].title || detail[0].name || '')
     : '';
+  const total = detail[0]
+    ? Number(detail[0].trackCount || detail[0].programCount || 0)
+    : 0;
 
   return {
-    name: radioName || `电台 ${id}`,
+    name: radioName,
     songs,
+    total: Number.isFinite(total) && total > 0 ? total : 0,
   };
 }

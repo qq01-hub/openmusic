@@ -398,6 +398,27 @@ export default function Room() {
   const [playlistSearchPage, setPlaylistSearchPage] = useState(1);
   const [playlistSearchPageSize, setPlaylistSearchPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
   const [playlistSearchTotal, setPlaylistSearchTotal] = useState(0);
+  const [radioProgramRadio, setRadioProgramRadio] = useState<DjRadioItem | null>(null);
+  const [radioProgramPage, setRadioProgramPage] = useState(1);
+  const [radioProgramPageSize, setRadioProgramPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
+  const [radioProgramTotal, setRadioProgramTotal] = useState(0);
+  const [radioProgramLoading, setRadioProgramLoading] = useState(false);
+  const radioProgramRequestRef = useRef(0);
+  const radioProgramAbortRef = useRef<AbortController | null>(null);
+  const radioProgramTotalRef = useRef(0);
+  const resetRadioProgramState = useCallback(() => {
+    radioProgramRequestRef.current += 1;
+    radioProgramAbortRef.current?.abort();
+    radioProgramTotalRef.current = 0;
+    setRadioProgramRadio(null);
+    setRadioProgramPage(1);
+    setRadioProgramTotal(0);
+    setRadioProgramLoading(false);
+  }, []);
+  useEffect(() => () => {
+    radioProgramRequestRef.current += 1;
+    radioProgramAbortRef.current?.abort();
+  }, []);
   const [playlistChannelFilter, setPlaylistChannelFilter] = useState<PlaylistChannelFilterMode>('all');
   const [playlistSearchBackup, setPlaylistSearchBackup] = useState<PlaylistSearchBackup | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -1131,6 +1152,12 @@ export default function Room() {
     const controller = new AbortController();
     songSearchAbortRef.current = controller;
 
+    resetRadioProgramState();
+    if (isRadioResults) {
+      setIsRadioResults(false);
+      setSearchDetailOrigin(null);
+    }
+
     if (!keyword.trim()) {
 
       if (requestId === songSearchRequestRef.current) {
@@ -1161,7 +1188,7 @@ export default function Room() {
 
     }
 
-  }, [sources, searchFilterMode]);
+  }, [sources, searchFilterMode, isRadioResults, resetRadioProgramState]);
 
   const handleSearchFilterChange = useCallback((next: SearchFilterMode) => {
     if (isPlaylistResults || isRadioResults) return;
@@ -1179,6 +1206,7 @@ export default function Room() {
   ) => {
     songSearchRequestRef.current += 1;
     songSearchAbortRef.current?.abort();
+    resetRadioProgramState();
     setSearching(false);
     const trimmed = keyword.trim();
     if (!trimmed) {
@@ -1201,7 +1229,7 @@ export default function Room() {
     } finally {
       setPlaylistSearchLoading(false);
     }
-  }, [playlistChannelFilter, playlistSearchPageSize, showToast]);
+  }, [playlistChannelFilter, playlistSearchPageSize, showToast, resetRadioProgramState]);
 
   const handlePlaylistPageSizeChange = useCallback((next: SongResultPageSize) => {
     setPlaylistSearchPageSize(next);
@@ -1225,6 +1253,7 @@ export default function Room() {
   ) => {
     songSearchRequestRef.current += 1;
     songSearchAbortRef.current?.abort();
+    resetRadioProgramState();
     setSearching(false);
     setPlaylistImportOpen(false);
     if (activeSearchMode === 'playlist' && searchedKeyword.trim() && playlistSearchResults.length > 0) {
@@ -1295,12 +1324,78 @@ export default function Room() {
         setSearching(false);
       }
     }
-  }, [showToast, activeSearchMode, searchedKeyword, playlistSearchResults, playlistSearchPage, playlistSearchTotal, playlistChannelFilter, playlistSearchPageSize, isLgUp]);
+  }, [showToast, activeSearchMode, searchedKeyword, playlistSearchResults, playlistSearchPage, playlistSearchTotal, playlistChannelFilter, playlistSearchPageSize, isLgUp, resetRadioProgramState]);
 
   const handleRecommendPlaylistSelect = useCallback(async (playlist: PlaylistSearchItem) => {
     setSearchDetailOrigin('recommend-playlist');
     await handlePlaylistImport(playlist.platform, playlist.id, { deferOverlay: true });
   }, [handlePlaylistImport]);
+
+  const applyRadioProgramPage = useCallback(async (
+    radio: DjRadioItem,
+    page: number,
+    pageSize: SongResultPageSize,
+    initial = false,
+  ) => {
+    const requestId = ++radioProgramRequestRef.current;
+    radioProgramAbortRef.current?.abort();
+    const controller = new AbortController();
+    radioProgramAbortRef.current = controller;
+    setRadioProgramLoading(true);
+
+    try {
+      const result = await fetchDjPrograms(radio.id, page, pageSize, controller.signal);
+      if (radioProgramRequestRef.current !== requestId) return;
+
+      const knownTotal = result.total > 0
+        ? result.total
+        : radio.trackCount > 0
+          ? radio.trackCount
+          : radioProgramTotalRef.current;
+      const fallbackTotal = result.songs.length === pageSize
+        ? page * pageSize + 1
+        : (page - 1) * pageSize + result.songs.length;
+      const total = knownTotal > 0 ? knownTotal : fallbackTotal;
+
+      setRadioProgramRadio(radio);
+      setRadioProgramPage(page);
+      radioProgramTotalRef.current = total;
+      setRadioProgramTotal(total);
+      setIsRadioResults(true);
+      setIsPlaylistResults(false);
+      setSearchDetailOrigin('radio');
+      setActiveSearchMode('song');
+      setOverlaySearchMode('song');
+      setPlaylistSearchResults([]);
+      setPlaylistSearchTotal(0);
+      setResults(result.songs);
+      setSearchedKeyword(`电台：${result.name || radio.name}`);
+
+      if (initial) {
+        if (result.songs.length === 0) {
+          showToast('电台暂无可用节目', 'error');
+        } else {
+          showToast('电台节目已分页加载，请翻页自选点歌', 'success');
+        }
+      }
+    } catch (err) {
+      if (controller.signal.aborted || radioProgramRequestRef.current !== requestId) return;
+      if (initial) {
+        setResults([]);
+        setSearchedKeyword('');
+        setIsRadioResults(false);
+        setSearchDetailOrigin(null);
+        setRadioProgramRadio(null);
+        radioProgramTotalRef.current = 0;
+        setRadioProgramTotal(0);
+      }
+      showToast(err instanceof Error ? err.message : '电台加载失败', 'error');
+    } finally {
+      if (radioProgramRequestRef.current === requestId) {
+        setRadioProgramLoading(false);
+      }
+    }
+  }, [showToast]);
 
   const handleDjRadioSelect = useCallback(async (radio: DjRadioItem) => {
     songSearchRequestRef.current += 1;
@@ -1317,35 +1412,14 @@ export default function Room() {
       });
     }
 
-    try {
-      const result = await fetchDjPrograms(radio.id);
-      if (!isLgUp) {
-        setSearchMode('song');
-      }
-      setIsRadioResults(true);
-      setIsPlaylistResults(false);
-      setSearchDetailOrigin('radio');
-      setActiveSearchMode('song');
-      setOverlaySearchMode('song');
-      setPlaylistSearchResults([]);
-      setPlaylistSearchTotal(0);
-      setResults(result.songs);
-      setSearchedKeyword(`电台：${result.name || radio.name}`);
-
-      if (result.songs.length === 0) {
-        showToast('电台暂无可用节目', 'error');
-      } else {
-        showToast(`已加载 ${result.songs.length} 期节目，请在结果中自选点歌`, 'success');
-      }
-    } catch (err) {
-      setResults([]);
-      setSearchedKeyword('');
-      setIsRadioResults(false);
-      setSearchDetailOrigin(null);
-      showToast(err instanceof Error ? err.message : '电台加载失败', 'error');
+    const pageSize = getStoredSongResultPageSize();
+    resetRadioProgramState();
+    setRadioProgramPageSize(pageSize);
+    if (!isLgUp) {
+      setSearchMode('song');
     }
+    await applyRadioProgramPage(radio, 1, pageSize, true);
   }, [
-    showToast,
     activeSearchMode,
     searchedKeyword,
     playlistSearchResults,
@@ -1354,7 +1428,20 @@ export default function Room() {
     playlistChannelFilter,
     playlistSearchPageSize,
     isLgUp,
+    resetRadioProgramState,
+    applyRadioProgramPage,
   ]);
+
+  const handleRadioProgramPageChange = useCallback((page: number) => {
+    if (!radioProgramRadio || radioProgramLoading || page === radioProgramPage) return;
+    void applyRadioProgramPage(radioProgramRadio, page, radioProgramPageSize);
+  }, [radioProgramRadio, radioProgramLoading, radioProgramPage, radioProgramPageSize, applyRadioProgramPage]);
+
+  const handleRadioProgramPageSizeChange = useCallback((size: SongResultPageSize) => {
+    setRadioProgramPageSize(size);
+    if (!radioProgramRadio) return;
+    void applyRadioProgramPage(radioProgramRadio, 1, size);
+  }, [radioProgramRadio, applyRadioProgramPage]);
 
   const handleArtistClick = useCallback((artist: string) => {
     const keyword = artist.trim();
@@ -1489,6 +1576,7 @@ export default function Room() {
   const clearSearchResults = useCallback(() => {
     songSearchRequestRef.current += 1;
     songSearchAbortRef.current?.abort();
+    resetRadioProgramState();
     setQuery('');
     setOverlayQuery('');
     setResults([]);
@@ -1504,7 +1592,7 @@ export default function Room() {
     setPlaylistSearchBackup(null);
     setActiveSearchMode('song');
     setOverlaySearchMode('song');
-  }, []);
+  }, [resetRadioProgramState]);
 
   const handleBackToPlaylistSearch = useCallback(() => {
     if (!playlistSearchBackup) {
@@ -1533,6 +1621,7 @@ export default function Room() {
 
   const handleBackFromDetail = useCallback(() => {
     if (searchDetailOrigin === 'radio') {
+      resetRadioProgramState();
       setIsRadioResults(false);
       setResults([]);
       setSearchedKeyword('');
@@ -1561,7 +1650,7 @@ export default function Room() {
     } else {
       clearSearchResults();
     }
-  }, [searchDetailOrigin, isPlaylistResults, playlistSearchBackup, handleBackToPlaylistSearch, clearSearchResults]);
+  }, [searchDetailOrigin, isPlaylistResults, playlistSearchBackup, handleBackToPlaylistSearch, clearSearchResults, resetRadioProgramState]);
 
   const handleAdd = useCallback(async (song: SearchResult) => {
     if (songRequestBlockReason) {
@@ -2396,6 +2485,30 @@ export default function Room() {
   const showPlaylistEmpty = showPlaylistSearch && !playlistSearchLoading && playlistSearchResults.length === 0;
   const showPlaylistSkeleton = showPlaylistSearch && playlistSearchLoading && playlistSearchResults.length === 0;
   const playlistSearchTotalPages = Math.max(1, Math.ceil(playlistSearchTotal / playlistSearchPageSize));
+  const radioProgramTotalPages = Math.max(1, Math.ceil(radioProgramTotal / radioProgramPageSize));
+  const radioProgramPagination = useMemo(() => (
+    isRadioResults
+      ? {
+          page: radioProgramPage,
+          pageSize: radioProgramPageSize,
+          totalPages: radioProgramTotalPages,
+          total: radioProgramTotal > 0 ? radioProgramTotal : results.length,
+          loading: radioProgramLoading,
+          onPageChange: handleRadioProgramPageChange,
+          onPageSizeChange: handleRadioProgramPageSizeChange,
+        }
+      : undefined
+  ), [
+    isRadioResults,
+    radioProgramPage,
+    radioProgramPageSize,
+    radioProgramTotalPages,
+    radioProgramTotal,
+    radioProgramLoading,
+    results.length,
+    handleRadioProgramPageChange,
+    handleRadioProgramPageSizeChange,
+  ]);
   const externalSearchButtonLoading = showDesktopSearchOverlay
     ? false
     : searchMode === 'song'
@@ -2422,7 +2535,8 @@ export default function Room() {
     }
     if (isRadioResults) {
       const name = searchedKeyword.replace(/^电台：/, '');
-      return `「${name}」共 ${results.length} 首，请自选点歌`;
+      const count = radioProgramTotal > 0 ? radioProgramTotal : results.length;
+      return `「${name}」共 ${count} 首，请翻页自选点歌`;
     }
     if (isPlaylistResults) {
       const name = searchedKeyword.replace(/^歌单：/, '');
@@ -2818,6 +2932,7 @@ export default function Room() {
             fillHeight
             immersiveGlass={immersiveGlass}
             onPageResultsChange={handleListPageResultsChange}
+            pagination={radioProgramPagination}
           />
         )}
       </div>
@@ -3692,6 +3807,7 @@ export default function Room() {
                   alwaysShowActions
                   fillHeight
                   onPageResultsChange={handleListPageResultsChange}
+                  pagination={radioProgramPagination}
                 />
                 )
               )}
