@@ -51,6 +51,7 @@ async function metingJson(
   id: string,
   extra?: Record<string, string>,
   signal?: AbortSignal,
+  onResponse?: (response: Response) => void,
 ): Promise<Record<string, unknown>[]> {
   const params = new URLSearchParams({
     server: 'netease',
@@ -73,6 +74,7 @@ async function metingJson(
     }
     throw new Error(err || msg || '电台请求失败');
   }
+  onResponse?.(res);
   return Array.isArray(data) ? data as Record<string, unknown>[] : [];
 }
 
@@ -103,14 +105,21 @@ export async function fetchDjPrograms(
   name: string;
   songs: SearchResult[];
   total: number;
+  upstreamCount: number;
 }> {
   const id = String(radioId || '').trim();
   if (!id) throw new Error('缺少电台 ID');
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 100));
+  let upstreamCount: number | undefined;
 
   const [programs, detail] = await Promise.all([
-    metingJson('dj', id, { page: String(safePage), limit: String(safeLimit) }, signal),
+    metingJson('dj', id, { page: String(safePage), limit: String(safeLimit) }, signal, (response) => {
+      const count = response.headers.get('X-OpenMusic-Upstream-Count');
+      if (count !== null && /^\d+$/.test(count) && Number.isSafeInteger(Number(count))) {
+        upstreamCount = Number(count);
+      }
+    }),
     safePage === 1
       ? metingJson('dj_detail', id, undefined, signal).catch(() => [])
       : Promise.resolve<Record<string, unknown>[]>([]),
@@ -131,5 +140,6 @@ export async function fetchDjPrograms(
     name: radioName,
     songs,
     total: Number.isFinite(total) && total > 0 ? total : 0,
+    upstreamCount: Math.max(programs.length, upstreamCount ?? programs.length),
   };
 }

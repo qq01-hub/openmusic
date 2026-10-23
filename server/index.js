@@ -19,6 +19,7 @@ import {
 } from './metingUpstream.js';
 import { fetchCustomMusicApi, hasCustomMusicApi, getCustomMusicApiStatus } from './customMusicApi.js';
 import { createMetingResponseCache } from './metingCache.js';
+import { filterSongPayloadByArtist } from './songArtistFilter.js';
 import {
   contributeMusicAccount,
   revokeMusicContribution,
@@ -1272,6 +1273,10 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
   }
 
   const response = await fetchMetingApi(metingQuery, { redirect: 'manual' });
+  for (const name of ['X-OpenMusic-Upstream-Count', 'X-OpenMusic-Upstream-Page']) {
+    const value = response.headers.get(name);
+    if (value) res.set(name, value);
+  }
 
   if (response.status >= 300 && response.status < 400) {
     let location = response.headers.get('location');
@@ -1532,7 +1537,7 @@ app.get('/api/music/hot', async (req, res) => {
   const limit = parseInt(String(req.query.limit || ''), 10);
   try {
     const songs = await getHotSongs(Number.isFinite(limit) ? limit : 30);
-    res.json(songs);
+    res.json(filterSongPayloadByArtist(songs, getRuntimeConfig().blockedArtistKeywords));
   } catch (err) {
     console.error('Hot songs error:', err.message);
     res.status(500).json({ error: '获取热榜失败' });
@@ -1555,7 +1560,7 @@ app.get('/api/music/suggestions', async (req, res) => {
       { musicSuggestions: true },
       () => fetchMusicSuggestions(keyword, getRuntimeConfig().musicSourcesEnabled),
     );
-    res.json({ suggestions });
+    res.json({ suggestions: filterSongPayloadByArtist(suggestions, getRuntimeConfig().blockedArtistKeywords) });
   } catch (err) {
     console.error('Music suggestions error:', err.message);
     res.status(500).json({ error: '获取搜索建议失败', suggestions: [] });
@@ -1573,7 +1578,7 @@ app.get('/api/music/toplist/netease', async (req, res) => {
   const limit = parseInt(String(req.query.limit || ''), 10);
   try {
     const data = await fetchNeteaseHotToplist(Number.isFinite(limit) ? limit : 200);
-    res.json(data);
+    res.json(filterSongPayloadByArtist(data, getRuntimeConfig().blockedArtistKeywords));
   } catch (err) {
     console.error('Netease toplist error:', err.message);
     res.status(502).json({ error: err.message || '获取热榜失败' });
@@ -5520,7 +5525,7 @@ io.on('connection', (socket) => {
       nickname: user?.nickname || '匿名',
     });
     if (result.error) {
-      callback?.({ success: false, error: result.error });
+      callback?.({ success: false, error: result.error, ...(result.code ? { code: result.code } : {}) });
       return;
     }
 

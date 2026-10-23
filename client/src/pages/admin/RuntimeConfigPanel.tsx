@@ -55,6 +55,7 @@ type RuntimeTextField = Exclude<
   | 'metingSources'
   | 'musicApis'
   | 'musicSourcesEnabled'
+  | 'blockedArtistKeywords'
   | 'seoTitle'
   | 'seoDescription'
   | 'seoKeywords'
@@ -344,6 +345,7 @@ export default function RuntimeConfigPanel({
       sharedMembershipEnabled: config.sharedMembershipEnabled !== false,
       favoriteShareTtlMs: Number(config.favoriteShareTtlMs) || 30 * 24 * 60 * 60 * 1000,
       musicSourcesEnabled: Object.assign({ netease: true, tencent: true, kugou: true, qishui: true }, config.musicSourcesEnabled || {}),
+      blockedArtistKeywords: Array.isArray(config.blockedArtistKeywords) ? config.blockedArtistKeywords : [],
       aiEnabled: Boolean(config.aiEnabled),
       aiApiBaseUrl: config.aiApiBaseUrl || 'https://api.siliconflow.cn/v1',
       aiApiProtocol: config.aiApiProtocol || 'chat_completions',
@@ -793,6 +795,31 @@ export default function RuntimeConfigPanel({
           </Col>
         ))}
       </Row>
+    </SettingsSection>
+  );
+
+  const artistFilterSection = (
+    <SettingsSection
+      title="歌手过滤"
+      description="歌手字段包含任一关键词时过滤该歌曲，不区分大小写，适用于所有平台的搜索、歌单、电台和点歌"
+    >
+      <Space orientation="vertical" style={{ width: '100%' }} size={8}>
+        <label htmlFor="blocked-artist-keywords">歌手关键词，每行一个</label>
+        <Input.TextArea
+          id="blocked-artist-keywords"
+          value={draft.blockedArtistKeywords.join('\n')}
+          onChange={(event) => setDraft({ ...draft, blockedArtistKeywords: event.target.value.split(/\r?\n/) })}
+          autoSize={{ minRows: 4, maxRows: 10 }}
+          maxLength={8099}
+          placeholder={'例如：\n歌手甲\n歌手乙'}
+          aria-describedby="blocked-artist-keywords-help"
+        />
+        <Typography.Text id="blocked-artist-keywords-help" type="secondary" style={{ fontSize: 12 }}>
+          最多 100 个关键词，每个最多 80 个字符，合唱中包含匹配歌手也会过滤
+          <br />
+          点击下方保存后生效，留空并保存可取消过滤，不会中断正在播放的歌曲
+        </Typography.Text>
+      </Space>
     </SettingsSection>
   );
 
@@ -1666,6 +1693,8 @@ export default function RuntimeConfigPanel({
       children: (
         <>
           {musicSourcesSection}
+          <Divider style={{ margin: 0 }} />
+          {artistFilterSection}
           <Divider style={{ margin: 0 }} />
           {metingSection}
           <Divider style={{ margin: 0 }} />

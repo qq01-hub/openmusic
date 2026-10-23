@@ -122,6 +122,7 @@ export interface RuntimeConfig {
   }[];
   musicApis: CustomMusicApi[];
   musicSourcesEnabled: Record<MusicApiPlatform, boolean>;
+  blockedArtistKeywords: string[];
   qiniuAccessKey: string;
   qiniuSecretKey: string;
   qiniuBucket: string;

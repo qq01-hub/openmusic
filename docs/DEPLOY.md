@@ -86,7 +86,6 @@ npm start   # http://0.0.0.0:4000
 | 七牛 OSS | 可选 | 聊天发图。管理后台填写 |
 
 ---
-
 ## 环境变量
 
 向导会自动写入 `server/.env`。**业务配置优先用管理后台「运行时配置」**（Meting、注册邮箱 SMTP、OAuth、七牛、歌词、空房 TTL 等），不必改文件。SMTP 密码会以加密形式保存在 `runtimeConfig.json`，生产环境须保留稳定的 `CLIENT_ID_SECRET`，否则保存的密码无法解密。

@@ -48,6 +48,8 @@ import {
 } from "./permanentApplication.js";
 import { buildUserRoundRobinOrder, selectNextUserRoundRobinSong } from "./playbackOrder.js";
 import { sanitizeChatSongCards } from "./chatSongCard.js";
+import { isSongArtistBlocked, filterSongPayloadByArtist } from "./songArtistFilter.js";
+import { incrementMetric } from "./logger.js";
 import { resolveAdminOwnerLastJoinedAt } from "./adminRoomUtils.js";
 
 const generateRoomId = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 6);
@@ -4378,6 +4380,11 @@ export async function addToQueue(roomId, song, requestedByUser) {
     return { error: "该歌曲已被禁播" };
   }
 
+  if (isSongArtistBlocked(song, getRuntimeConfig().blockedArtistKeywords)) {
+    incrementMetric('music_artist_filter_total', { stage: 'queue_rejected' });
+    return { error: "该歌曲的歌手已被站点过滤", code: 'ARTIST_FILTERED' };
+  }
+
   if (isSongInPlaylist(room, song)) {
     return { error: "这首歌已经在歌单里啦" };
   }
@@ -4572,7 +4579,8 @@ export function selectRandomFavoriteSong(favorites, currentSong = null, playedKe
   const currentKey = currentSong?.source && currentSong?.id
     ? songIdentity(currentSong.source, currentSong.id)
     : '';
-  const usable = (Array.isArray(favorites) ? favorites : []).filter((song) => song?.id && song?.source);
+  const usable = filterSongPayloadByArtist(Array.isArray(favorites) ? favorites : [], getRuntimeConfig().blockedArtistKeywords)
+    .filter((song) => song?.id && song?.source);
   const unplayed = usable.filter((song) => {
     const key = songIdentity(song.source, song.id);
     return key !== currentKey && !playedKeys.has(key);
@@ -4611,7 +4619,8 @@ function dedupePlaylistSongsByName(songs) {
 
 /** 从指定歌单循环选歌；所有歌曲播放过后才重置本轮，绝不回退到私人漫游。 */
 export function selectPlaylistRoamingSong(songs, currentSong = null, playedKeys = new Set(), random = Math.random, options = {}) {
-  const usable = (Array.isArray(songs) ? songs : []).filter((song) => song?.id && song?.source);
+  const usable = filterSongPayloadByArtist(Array.isArray(songs) ? songs : [], getRuntimeConfig().blockedArtistKeywords)
+    .filter((song) => song?.id && song?.source);
   if (!options?.dedupeByName) return selectRandomFavoriteSong(usable, currentSong, playedKeys, random);
 
   const deduped = dedupePlaylistSongsByName(usable);
@@ -4652,7 +4661,8 @@ async function fetchRandomForRoom(room) {
       requestedById: "",
     };
   }
-  if (Array.isArray(room.randomBatch) && room.randomBatch.length > 0) {
+  room.randomBatch = filterSongPayloadByArtist(room.randomBatch || [], getRuntimeConfig().blockedArtistKeywords);
+  if (room.randomBatch.length > 0) {
     return room.randomBatch.shift();
   }
 
@@ -4668,9 +4678,10 @@ async function fetchRandomForRoom(room) {
     source,
     excludeIds,
   });
-  if (!Array.isArray(songs) || songs.length === 0) return null;
-  room.randomBatch = songs.slice(1);
-  return songs[0];
+  const allowedSongs = filterSongPayloadByArtist(Array.isArray(songs) ? songs : [], getRuntimeConfig().blockedArtistKeywords);
+  if (allowedSongs.length === 0) return null;
+  room.randomBatch = allowedSongs.slice(1);
+  return allowedSongs[0];
 }
 
 async function ensureNextRandom(room) {
@@ -4862,6 +4873,9 @@ function recycleFinishedSongToQueue(room, finishedSong) {
 
 async function playNextUnlocked(room, options = {}) {
   const { allowFetchRandom = false, finishedSong = null, forceAdvance = false } = options;
+  const keywords = getRuntimeConfig().blockedArtistKeywords;
+  room.queue = filterSongPayloadByArtist(room.queue, keywords);
+  if (isSongArtistBlocked(room.nextRandom, keywords)) room.nextRandom = null;
 
   // 平台热榜：仅统计用户主动点播且真正播放完成的歌曲，随机/漫游（requestedById 为空）不计入
   if (finishedSong && finishedSong.requestedById) {
@@ -4870,11 +4884,14 @@ async function playNextUnlocked(room, options = {}) {
   room.skipRequests = [];
 
   // 单曲循环：自然播完时重播当前曲；手动切歌 forceAdvance 仍前进
-  if (!forceAdvance && normalizePlayMode(room.playMode) === "loop-one" && (finishedSong || room.current)) {
+  if (!forceAdvance && !isSongArtistBlocked(finishedSong || room.current, keywords)
+    && normalizePlayMode(room.playMode) === "loop-one" && (finishedSong || room.current)) {
     if (restartCurrentSong(room)) return;
   }
 
-  recycleFinishedSongToQueue(room, finishedSong || room.current);
+  if (!isSongArtistBlocked(finishedSong || room.current, keywords)) {
+    recycleFinishedSongToQueue(room, finishedSong || room.current);
+  }
 
   // 收藏随机明确以收藏列表作为下一首来源；已有点歌队列保留，退出该模式后继续消费。
   if (room.playMode === "favorite-shuffle" && !room.users.has(room.favoriteShuffleUserId)) {
@@ -4896,7 +4913,7 @@ async function playNextUnlocked(room, options = {}) {
         favorite = null;
       }
     }
-    if (favorite) {
+    if (favorite && !isSongArtistBlocked(favorite, getRuntimeConfig().blockedArtistKeywords)) {
       setCurrentSong(room, buildPendingRandomItem(favorite, "收藏随机") || favorite);
       void ensureNextRandom(room);
       return;
@@ -4918,6 +4935,7 @@ async function playNextUnlocked(room, options = {}) {
 
   let random = room.nextRandom;
   room.nextRandom = null;
+  if (isSongArtistBlocked(random, getRuntimeConfig().blockedArtistKeywords)) random = null;
 
   const shouldFetchRandom = !favoriteShuffle && !random && (allowFetchRandom || room.queue.length === 0);
   if (shouldFetchRandom) {

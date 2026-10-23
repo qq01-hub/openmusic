@@ -1352,9 +1352,9 @@ export default function Room() {
         : radio.trackCount > 0
           ? radio.trackCount
           : radioProgramTotalRef.current;
-      const fallbackTotal = result.songs.length === pageSize
+      const fallbackTotal = result.upstreamCount >= pageSize
         ? page * pageSize + 1
-        : (page - 1) * pageSize + result.songs.length;
+        : (page - 1) * pageSize + result.upstreamCount;
       const total = knownTotal > 0 ? knownTotal : fallbackTotal;
 
       setRadioProgramRadio(radio);
@@ -1373,7 +1373,7 @@ export default function Room() {
 
       if (initial) {
         if (result.songs.length === 0) {
-          showToast('电台暂无可用节目', 'error');
+          showToast(result.upstreamCount > 0 ? '本页节目已被站点过滤' : '电台暂无可用节目', 'error');
         } else {
           showToast('电台节目已分页加载，请翻页自选点歌', 'success');
         }
@@ -2531,7 +2531,7 @@ export default function Room() {
     if (hasPlaylistSearchResults) return `找到 ${playlistSearchTotal || playlistSearchResults.length} 个相关歌单`; 
     if (results.length === 0) {
       if (showPlaylistSearch) return '没有找到相关歌单';
-      if (isRadioResults) return '电台暂无可用节目';
+      if (isRadioResults) return '本页暂无可显示的节目';
       return isPlaylistResults ? '歌单为空或链接无效' : `「${searchedKeyword}」无相关结果`;
     }
     if (isRadioResults) {
@@ -2915,9 +2915,9 @@ export default function Room() {
         {showPlaylistSkeleton && (
           <SearchSkeleton fillHeight count={playlistSearchPageSize} showPaginationFooter={false} />
         )}
-        {!searching && !playlistSearchLoading && searchedKeyword && !hasPlaylistSearchResults && results.length === 0 && (
+        {!searching && !playlistSearchLoading && searchedKeyword && !isRadioResults && !hasPlaylistSearchResults && results.length === 0 && (
           <p className="animate-fade-in py-10 text-center text-white/45">
-            {showPlaylistEmpty ? '没有找到相关歌单' : isRadioResults ? '电台暂无可用节目' : isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
+            {showPlaylistEmpty ? '没有找到相关歌单' : isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
           </p>
         )}
         {hasPlaylistSearchResults && renderPlaylistSearchList(true, immersiveGlass)}
@@ -3790,9 +3790,9 @@ export default function Room() {
               {showPlaylistSkeleton && (
                 <SearchSkeleton fillHeight count={playlistSearchPageSize} showPaginationFooter={false} />
               )}
-              {!searching && !playlistSearchLoading && searchedKeyword && !hasPlaylistSearchResults && results.length === 0 && (
+              {!searching && !playlistSearchLoading && searchedKeyword && !isRadioResults && !hasPlaylistSearchResults && results.length === 0 && (
                 <p className="text-center text-netease-muted py-10 animate-fade-in">
-                  {showPlaylistEmpty ? '没有找到相关歌单' : isRadioResults ? '电台暂无可用节目' : isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
+                  {showPlaylistEmpty ? '没有找到相关歌单' : isPlaylistResults ? '歌单为空或链接无效' : '换个关键词试试'}
                 </p>
               )}
               {hasPlaylistSearchResults && renderPlaylistSearchList(true)}

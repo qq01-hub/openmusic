@@ -6,6 +6,7 @@ import { isBlockedMediaHostname } from './mediaProxy.js';
 import { normalizeMusicApis } from './customMusicApi.js';
 import { buildPublicSiteSeo } from './seoFiles.js';
 import { normalizeMusicSourcesEnabled } from './musicSources.js';
+import { normalizeArtistFilterKeywords } from './songArtistFilter.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, 'runtimeConfig.json');
@@ -117,6 +118,7 @@ function envDefaults() {
     metingApiAuth: envText('METING_API_AUTH'),
     musicApis: [],
     musicSourcesEnabled: { netease: true, tencent: true, kugou: true, qishui: true },
+    blockedArtistKeywords: [],
     qiniuAccessKey: envText('QINIU_ACCESS_KEY'),
     qiniuSecretKey: envText('QINIU_SECRET_KEY'),
     qiniuBucket: envText('QINIU_BUCKET'),
@@ -314,6 +316,12 @@ function normalize(config) {
   }
   const aiModelPools = normalizeAiModelPools(config.aiModelPools);
   const musicSourcesEnabled = normalizeMusicSourcesEnabled(config.musicSourcesEnabled);
+  let blockedArtistKeywords = [];
+  try {
+    blockedArtistKeywords = normalizeArtistFilterKeywords(config.blockedArtistKeywords ?? []);
+  } catch {
+    blockedArtistKeywords = [];
+  }
   return {
     roomEmptyTtlMs: Number.isFinite(roomEmptyTtlMs)
       ? Math.max(0, Math.min(Math.round(roomEmptyTtlMs), 24 * 60 * 60 * 1000))
@@ -379,6 +387,7 @@ function normalize(config) {
     metingApiAuth: String(config.metingApiAuth || '').trim(),
     musicApis,
     musicSourcesEnabled,
+    blockedArtistKeywords,
     qiniuAccessKey: String(config.qiniuAccessKey || '').trim(),
     qiniuSecretKey: String(config.qiniuSecretKey || '').trim(),
     qiniuBucket: String(config.qiniuBucket || '').trim(),
@@ -592,6 +601,13 @@ export function getRuntimeConfigForAdmin() {
 }
 
 export function setRuntimeConfig(raw = {}) {
+  if (Object.hasOwn(raw, 'blockedArtistKeywords')) {
+    try {
+      normalizeArtistFilterKeywords(raw.blockedArtistKeywords);
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
   if (Object.hasOwn(raw, 'qqGroupUrl') && String(raw.qqGroupUrl || '').trim() && !normalizeQqGroupUrl(raw.qqGroupUrl)) {
     return { success: false, error: 'QQ群链接必须是 qq.com 域名下的 HTTPS 地址（最多 1000 字符）' };
   }

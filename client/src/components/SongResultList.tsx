@@ -119,7 +119,7 @@ function SongResultList({
     }
   }, [pagination]);
 
-  if (results.length === 0) return null;
+  if (results.length === 0 && !pagination) return null;
 
   return (
     <div
@@ -128,6 +128,11 @@ function SongResultList({
     >
       <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5">
         <div className="space-y-2">
+          {pageResults.length === 0 && (
+            <p role="status" className="py-8 text-center text-sm text-netease-muted">
+              {pagination?.loading ? '正在加载歌曲' : '本页暂无可显示的歌曲，可尝试翻页'}
+            </p>
+          )}
           {pageResults.map((song) => {
             const key = songKey(song);
             return (

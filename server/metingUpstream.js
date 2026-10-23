@@ -1,8 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import { fetchMeting, formatMetingFetchError } from './metingFetch.js';
 import { fetchCustomMusicApi } from './customMusicApi.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { createMetingResponseCache } from './metingCache.js';
+import { filterSongPayloadByArtist } from './songArtistFilter.js';
+import { incrementMetric } from './logger.js';
 
 // METING_API_URL 支持英文逗号分隔多个上游；METING_API_AUTH 同样支持逗号分隔：
 // 与 URL 一一对应；只填一个则应用到所有上游。
@@ -334,6 +337,8 @@ function createCachedMetingResponse(snapshot) {
   const headers = {
     'content-type': snapshot.contentType || '',
     location: snapshot.location || '',
+    'x-openmusic-upstream-count': snapshot.upstreamCount === undefined ? '' : String(snapshot.upstreamCount),
+    'x-openmusic-upstream-page': snapshot.upstreamPage || '',
   };
   return {
     ok: snapshot.status >= 200 && snapshot.status < 300,
@@ -570,6 +575,27 @@ export async function fetchMetingApi(query, options = {}, timeoutMs = 10000) {
     async () => snapshotMetingResponse(await fetchMetingApiUncached(query, options, timeoutMs)),
     ttlMs,
   );
+  const keywords = getRuntimeConfig().blockedArtistKeywords;
+  if (keywords?.length && snapshot.status >= 200 && snapshot.status < 300
+    && ['search', 'song', 'playlist', 'dj', 'djprogram', 'fm'].includes(type)) {
+    let payload;
+    try {
+      payload = JSON.parse(snapshot.body);
+    } catch {
+      return createCachedMetingResponse(snapshot);
+    }
+    const filtered = filterSongPayloadByArtist(payload, keywords, () => {
+      incrementMetric('music_artist_filter_total', { stage: 'results', type });
+    });
+    return createCachedMetingResponse({
+      ...snapshot,
+      body: JSON.stringify(filtered),
+      ...(Array.isArray(payload) ? {
+        upstreamCount: payload.length,
+        upstreamPage: createHash('sha256').update(snapshot.body).digest('hex'),
+      } : {}),
+    });
+  }
   return createCachedMetingResponse(snapshot);
 }
 

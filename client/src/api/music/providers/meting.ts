@@ -83,10 +83,11 @@ function throwIfSourceUnavailable(message: string): void {
   }
 }
 
-async function metingFetch<T>(server: MusicSource, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
+async function metingFetch<T>(server: MusicSource, params: Record<string, string>, signal?: AbortSignal, onResponse?: (response: Response) => void): Promise<T> {
   const query = new URLSearchParams({ server, ...params });
   const res = await fetchWithTimeout(`${API_BASE}?${query}`, { signal });
   if (!res.ok) throw new Error('API 请求失败');
+  onResponse?.(res);
   return res.json();
 }
 
@@ -156,26 +157,38 @@ function createMetingProvider(
       const allPages = source === 'netease' && options.allPages === true;
       const results: SearchResult[] = [];
       const seen = new Set<string>();
+      const seenPages = new Set<string>();
       let offset = 0;
       while (true) {
         options.signal?.throwIfAborted();
+        let upstreamCount: number | undefined;
+        let upstreamPage = '';
         const data = await metingFetch<Record<string, unknown>[]>(source, {
           type: 'search',
           id: keyword.trim(),
           ...(allPages ? { limit: '100', offset: String(offset) } : {}),
-        }, options.signal);
+        }, options.signal, (response) => {
+          const count = response.headers.get('X-OpenMusic-Upstream-Count');
+          if (count !== null && /^\d+$/.test(count) && Number.isSafeInteger(Number(count))) {
+            upstreamCount = Number(count);
+          }
+          upstreamPage = response.headers.get('X-OpenMusic-Upstream-Page') || '';
+        });
         options.signal?.throwIfAborted();
         if (!Array.isArray(data)) return results;
         const songs = data.map((item) => normalizeSong(item, source)).filter((song) => song.id);
         if (!allPages) return songs;
+        if (upstreamPage && seenPages.has(upstreamPage)) return results;
+        if (upstreamPage) seenPages.add(upstreamPage);
         const previousCount = results.length;
         for (const song of songs) {
           if (seen.has(song.id)) continue;
           seen.add(song.id);
           results.push(song);
         }
-        if (data.length < 100 || results.length === previousCount) return results;
-        offset += data.length;
+        const consumed = Math.max(data.length, upstreamCount ?? data.length);
+        if (consumed < 100 || (songs.length > 0 && results.length === previousCount)) return results;
+        offset += consumed;
       }
     },
     async getSongById(id) {
