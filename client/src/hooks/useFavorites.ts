@@ -3,22 +3,22 @@ import { songKey } from '../api/music';
 import { useSocket } from './useSocket';
 import type { FavoriteSong, Song } from '../types';
 import { fetchAccountSession } from '../lib/accountAuth';
+import { isAccountSessionRevisionEvent } from '../lib/accountSessionSignal';
+import { getAccountSessionGeneration } from '../lib/accountAccessSession';
 import {
   markFavoritesSyncAttempt,
   markFavoritesSyncFailed,
   markFavoritesSyncPending,
   markFavoritesSyncResult,
-  migrateFavoriteCache,
-  migrateFavoriteCategories,
   readFavoritesSyncState,
   syncAccountFavorites,
   type FavoritesSyncState,
 } from '../lib/favoritesSync';
 
-let sharedFavoriteIds = new Set<string>();
 let sharedFavoriteSongs: FavoriteSong[] = [];
 type FavoritesLoadResult = { success: boolean; error?: string };
 let loadPromise: Promise<FavoritesLoadResult> | null = null;
+let loadGeneration = 0;
 const listeners = new Set<() => void>();
 let sharedSyncState = readFavoritesSyncState();
 const syncListeners = new Set<() => void>();
@@ -71,7 +71,6 @@ function notifyListeners() {
 
 function updateSharedFavorites(songs: FavoriteSong[]) {
   sharedFavoriteSongs = songs;
-  sharedFavoriteIds = new Set(songs.map((item) => songKey(item)));
   notifyListeners();
 }
 
@@ -80,17 +79,64 @@ function updateSharedSyncState(state: FavoritesSyncState) {
   syncListeners.forEach((listener) => listener());
 }
 
+async function runFavoriteRequest<Result extends { success: boolean; error?: string }>(
+  request: () => Promise<Result>,
+  apply?: (result: Result, accountId: string) => void,
+) {
+  const generation = loadGeneration;
+  const session = getAccountSessionGeneration();
+  const assertCurrent = () => {
+    if (generation !== loadGeneration || session !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新读取收藏');
+  };
+  try {
+    const account = await fetchAccountSession();
+    assertCurrent();
+    if (!account) throw new Error('请先登录账户');
+    const result = await request();
+    assertCurrent();
+    if (result.success) apply?.(result, account.id);
+    return result;
+  } catch (error) {
+    return { success: false as const, error: error instanceof Error ? error.message : '收藏操作失败，请重试' };
+  }
+}
+
+if (typeof window !== 'undefined') {
+  const invalidate = () => {
+    loadGeneration += 1;
+    loadPromise = null;
+    updateSharedFavorites([]);
+  };
+  window.addEventListener('openmusic:account-session-changed', invalidate);
+  window.addEventListener('openmusic:account-auth-required', invalidate);
+  window.addEventListener('storage', (event) => {
+    if (isAccountSessionRevisionEvent(event)) invalidate();
+  });
+}
+
 export function useFavorites() {
   const { listFavorites, listFavoriteCategories, createFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set(sharedFavoriteIds));
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set());
+  const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>([]);
   const [syncState, setSyncState] = useState<FavoritesSyncState>(() => sharedSyncState);
-  const [categories, setCategories] = useState<string[]>(() => readCategories(GUEST_CATEGORIES_KEY));
+  const [categories, setCategories] = useState<string[]>([]);
   const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
-    const listener = () => setFavoriteIds(new Set(sharedFavoriteIds));
+    const listener = () => {
+      setFavoriteIds(new Set(sharedFavoriteSongs.map(songKey)));
+      setFavoriteSongs(sharedFavoriteSongs);
+    };
     listeners.add(listener);
-    return () => { listeners.delete(listener); };
+    listener();
+    return () => {
+      listeners.delete(listener);
+      if (!listeners.size) {
+        loadGeneration += 1;
+        loadPromise = null;
+        sharedFavoriteSongs = [];
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -101,50 +147,42 @@ export function useFavorites() {
 
   const ensureLoaded = useCallback(async () => {
     if (loadPromise) return loadPromise;
+    const generation = loadGeneration;
+    const session = getAccountSessionGeneration();
+    const assertCurrent = () => {
+      if (generation !== loadGeneration || session !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新读取收藏');
+    };
     const pending = (async (): Promise<FavoritesLoadResult> => {
       const guestCached = readCache(GUEST_CACHE_KEY);
-      if (guestCached.length) updateSharedFavorites(guestCached);
-
       const account = await fetchAccountSession();
-
-      const legacyGuestCategories = readCategories(GUEST_CATEGORIES_KEY);
-      const categoryMigration = await migrateFavoriteCategories(
-        legacyGuestCategories,
-        listFavoriteCategories,
-        (name) => createFavoriteCategory(name),
-      );
-      if (categoryMigration.migrated) {
-        if (legacyGuestCategories.length) removeCache(GUEST_CATEGORIES_KEY);
-        if (account) removeCache(categoriesCacheKey(account.id));
-        setCategories(categoryMigration.categories);
-      }
-
+      assertCurrent();
       if (!account) {
-        const result = await listFavorites();
-        if (!result.success) throw new Error(result.error || '收藏列表加载失败');
-        const migrated = await migrateFavoriteCache(
-          result.favorites || [],
-          guestCached,
-          (batch) => importFavoritesOnServer(batch),
-        );
-        if (migrated.migrated && guestCached.length) removeCache(GUEST_CACHE_KEY);
-        updateSharedFavorites(migrated.favorites);
-        return { success: true };
+        updateSharedFavorites([]);
+        throw new Error('请先登录账户，原游客收藏会在登录后迁移');
       }
 
+      const cachedGuestCategories = readCategories(GUEST_CATEGORIES_KEY);
+      const legacyGuestCategories = [...new Set([
+        ...cachedGuestCategories,
+        ...guestCached.map(song => String(song.category || '').trim()).filter(Boolean),
+      ])];
       const cacheKey = accountCacheKey(account.id);
       const accountCached = readCache(cacheKey);
-      if (accountCached.length) updateSharedFavorites(accountCached);
 
-      if (guestCached.length) {
+      if (guestCached.length || legacyGuestCategories.length) {
         updateSharedSyncState(markFavoritesSyncPending());
         const attempt = markFavoritesSyncAttempt();
         updateSharedSyncState(attempt);
         try {
-          const imported = await syncAccountFavorites(guestCached, readCategories(GUEST_CATEGORIES_KEY));
+          const imported = await syncAccountFavorites(guestCached, legacyGuestCategories, account.id);
+          assertCurrent();
           if (!imported.success) throw new Error(imported.error || '收藏同步失败');
           const next = imported.favorites || [];
           if (imported.complete) {
+            if (JSON.stringify(readCache(GUEST_CACHE_KEY)) !== JSON.stringify(guestCached)
+              || JSON.stringify(readCategories(GUEST_CATEGORIES_KEY)) !== JSON.stringify(cachedGuestCategories)) {
+              throw new Error('本机游客缓存已更新，已保存的数据不会丢失，请重试迁移');
+            }
             removeCache(GUEST_CACHE_KEY);
             try { localStorage.removeItem(GUEST_CATEGORIES_KEY); } catch { /* storage unavailable */ }
             if (imported.categories) {
@@ -161,15 +199,19 @@ export function useFavorites() {
           }
           updateSharedFavorites(next);
         } catch (error) {
-          updateSharedSyncState(markFavoritesSyncFailed(error, attempt));
+          if (generation === loadGeneration) updateSharedSyncState(markFavoritesSyncFailed(error, attempt));
           throw error;
         }
         return { success: true };
       }
 
-      const result = await listFavorites();
+      const [result, categoryResult] = await Promise.all([listFavorites(), listFavoriteCategories()]);
+      assertCurrent();
       if (!result.success) throw new Error(result.error || '收藏列表加载失败');
+      if (!categoryResult.success) throw new Error(categoryResult.error || '收藏分类加载失败');
       if (accountCached.length) removeCache(cacheKey);
+      removeCache(categoriesCacheKey(account.id));
+      setCategories(categoryResult.categories || []);
       updateSharedFavorites(result.favorites || []);
       return { success: true };
     })().catch((error): FavoritesLoadResult => ({
@@ -177,23 +219,31 @@ export function useFavorites() {
       error: error instanceof Error ? error.message : '收藏列表加载失败，请重试',
     }));
     loadPromise = pending;
-    void pending.then((result) => {
-      if (!result.success && loadPromise === pending) loadPromise = null;
+    void pending.then(() => {
+      if (loadPromise === pending) loadPromise = null;
     });
     return pending;
-  }, [createFavoriteCategory, importFavoritesOnServer, listFavoriteCategories, listFavorites]);
+  }, [listFavoriteCategories, listFavorites]);
 
   useEffect(() => { void ensureLoaded(); }, [ensureLoaded]);
 
   useEffect(() => {
     const onAccountSessionChanged = () => {
-      loadPromise = null;
-      updateSharedFavorites(readCache(GUEST_CACHE_KEY));
-      if (readCache(GUEST_CACHE_KEY).length) updateSharedSyncState(markFavoritesSyncPending());
+      setCategories([]);
+      if (readCache(GUEST_CACHE_KEY).length || readCategories(GUEST_CATEGORIES_KEY).length) updateSharedSyncState(markFavoritesSyncPending());
       void ensureLoaded();
     };
+    const onStorage = (event: StorageEvent) => {
+      if (isAccountSessionRevisionEvent(event)) onAccountSessionChanged();
+    };
     window.addEventListener('openmusic:account-session-changed', onAccountSessionChanged);
-    return () => window.removeEventListener('openmusic:account-session-changed', onAccountSessionChanged);
+    window.addEventListener('openmusic:account-auth-required', onAccountSessionChanged);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('openmusic:account-session-changed', onAccountSessionChanged);
+      window.removeEventListener('openmusic:account-auth-required', onAccountSessionChanged);
+      window.removeEventListener('storage', onStorage);
+    };
   }, [ensureLoaded]);
 
   useEffect(() => {
@@ -231,14 +281,10 @@ export function useFavorites() {
     const key = songKey(song);
     const favorite = !favoriteIds.has(key);
     try {
-      try {
-        await fetchAccountSession();
-      } catch {
-        throw new Error('账户状态暂时无法确认，请稍后重试');
-      }
-      const result = await setFavorite(song, favorite);
+      const result = await runFavoriteRequest(() => setFavorite(song, favorite), (next) => {
+        if (next.favorites) updateSharedFavorites(next.favorites);
+      });
       if (!result.success) throw new Error(result.error || '收藏失败');
-      if (result.favorites) updateSharedFavorites(result.favorites);
       window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
         detail: { message: favorite ? '已收藏' : '已取消收藏', type: 'success' },
       }));
@@ -270,40 +316,32 @@ export function useFavorites() {
 
   const listCachedFavorites = useCallback(async () => {
     const result = await ensureLoaded();
-    return { ...result, favorites: sharedFavoriteSongs };
+    return { ...result, favorites: result.success ? sharedFavoriteSongs : [] };
   }, [ensureLoaded]);
 
   const listCachedCategories = useCallback(async () => {
-    const account = await fetchAccountSession().catch(() => null);
-    const legacyCategories = readCategories(GUEST_CATEGORIES_KEY);
-    const migrated = await migrateFavoriteCategories(
-      legacyCategories,
-      listFavoriteCategories,
-      (name) => createFavoriteCategory(name),
-    );
-    if (migrated.migrated) {
-      if (legacyCategories.length) removeCache(GUEST_CATEGORIES_KEY);
-      if (account) removeCache(categoriesCacheKey(account.id));
-      setCategories(migrated.categories);
-      return { success: true, categories: migrated.categories };
-    }
-    return { success: false, categories: migrated.categories, error: '收藏分类读取失败' };
-  }, [createFavoriteCategory, listFavoriteCategories]);
+    const loaded = await ensureLoaded();
+    if (!loaded.success) return { success: false, categories: [], error: loaded.error };
+    const generation = loadGeneration;
+    const result = await listFavoriteCategories();
+    if (generation !== loadGeneration) return { success: false, categories: [], error: '账户已变化，请重新读取收藏' };
+    if (result.success) setCategories(result.categories || []);
+    return result;
+  }, [ensureLoaded, listFavoriteCategories]);
 
   const addFavoriteCategory = useCallback(async (name: string) => {
-    const account = await fetchAccountSession().catch(() => null);
-    const result = await createFavoriteCategory(name);
-    if (result.success && result.categories) {
-      if (account) removeCache(categoriesCacheKey(account.id));
-      setCategories(result.categories);
-    }
-    return result;
+    return runFavoriteRequest(() => createFavoriteCategory(name), (result, accountId) => {
+      if (result.categories) {
+        removeCache(categoriesCacheKey(accountId));
+        setCategories(result.categories);
+      }
+    });
   }, [createFavoriteCategory]);
 
   const setCachedFavoriteCategory = useCallback(async (song: FavoriteSong, category: string) => {
-    const result = await setFavoriteCategory(song, category);
-    if (result.success && result.favorites) updateSharedFavorites(result.favorites);
-    return result;
+    return runFavoriteRequest(() => setFavoriteCategory(song, category), (result) => {
+      if (result.favorites) updateSharedFavorites(result.favorites);
+    });
   }, [setFavoriteCategory]);
 
   const setCachedFavorite = useCallback(async (song: Song, favorite: boolean) => {
@@ -312,25 +350,14 @@ export function useFavorites() {
   }, [favoriteIds, toggleFavorite]);
 
   const importCachedFavorites = useCallback(async (songs: Song[]) => {
-    let account: Awaited<ReturnType<typeof fetchAccountSession>> = null;
-    try {
-      account = await fetchAccountSession();
-    } catch {
-      return { success: false as const, error: '账户状态暂时无法确认，请稍后重试' };
-    }
-    if (!account) {
-      const result = await importFavoritesOnServer(songs);
-      if (result.success && result.favorites) updateSharedFavorites(result.favorites);
-      return result;
-    }
-    const result = await importFavoritesOnServer(songs);
-    if (result.success && result.favorites) updateSharedFavorites(result.favorites);
-    return result;
+    return runFavoriteRequest(() => importFavoritesOnServer(songs), (result) => {
+      if (result.favorites) updateSharedFavorites(result.favorites);
+    });
   }, [importFavoritesOnServer]);
 
   return {
     favoriteIds,
-    favorites: sharedFavoriteSongs,
+    favorites: favoriteSongs,
     isFavorite,
     toggleFavorite,
     listFavorites: listCachedFavorites,

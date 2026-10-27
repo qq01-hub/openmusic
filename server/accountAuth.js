@@ -3,15 +3,13 @@ import { promisify } from 'node:util';
 import nodemailer from 'nodemailer';
 import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
+import { ACCOUNT_ACCESS_TTL_SEC, createAccountTokenService } from './accountTokens.js';
+import { riskControl } from './riskControl.js';
 
 const scrypt = promisify(scryptCallback);
 
 export const ACCOUNT_SESSION_COOKIE = 'openmusic_account_session';
-export const ACCOUNT_SESSION_TTL_SEC = Math.max(
-  60 * 60,
-  Number.parseInt(process.env.ACCOUNT_SESSION_TTL_SEC || String(60 * 60 * 24 * 90), 10)
-    || 60 * 60 * 24 * 90,
-);
+export const ACCOUNT_SESSION_TTL_SEC = ACCOUNT_ACCESS_TTL_SEC;
 export const EMAIL_CODE_TTL_SEC = Math.max(
   60,
   Number.parseInt(process.env.EMAIL_CODE_TTL_SEC || String(10 * 60), 10) || 10 * 60,
@@ -28,7 +26,6 @@ const IDENTITY_INDEX_PREFIX = `${ACCOUNT_KEY_PREFIX}identity:`;
 const EMAIL_CODE_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code:`;
 const EMAIL_CODE_ATTEMPTS_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-attempts:`;
 const EMAIL_CODE_COOLDOWN_PREFIX = `${ACCOUNT_KEY_PREFIX}email-code-cooldown:`;
-const SESSION_PREFIX = `${ACCOUNT_KEY_PREFIX}session:`;
 const ROOM_IDENTITY_PREFIX = `${ACCOUNT_KEY_PREFIX}room-identity:`;
 const ROOM_IDENTITY_ACCOUNT_PREFIX = `${ACCOUNT_KEY_PREFIX}room-identity-account:`;
 const PASSWORD_KEY_LENGTH = 64;
@@ -41,6 +38,13 @@ const PASSWORD_SCRYPT_OPTIONS = {
 const CODE_HASH_SECRET = String(process.env.CLIENT_ID_SECRET || randomBytes(32).toString('hex'));
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+const REGISTRATION_EMAIL_DOMAINS = new Set([
+  'qq.com', 'foxmail.com', '163.com', '126.com', 'yeah.net',
+  'sina.com', 'sina.cn', 'sohu.com', '139.com', '189.cn', 'wo.cn',
+  'gmail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com', 'yahoo.com', 'aol.com',
+  'proton.me', 'protonmail.com',
+]);
 const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat']);
 
 export class AccountAuthError extends Error {
@@ -55,6 +59,19 @@ export class AccountAuthError extends Error {
 export function normalizeEmail(value) {
   const email = String(value ?? '').trim().toLowerCase();
   return email.length <= 254 && EMAIL_PATTERN.test(email) ? email : '';
+}
+
+function validateRegistrationEmail(value) {
+  const email = normalizeEmail(value);
+  if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
+  if (!REGISTRATION_EMAIL_DOMAINS.has(email.split('@')[1])) {
+    throw new AccountAuthError(
+      'EMAIL_DOMAIN_NOT_ALLOWED',
+      '注册仅支持 QQ、163、Gmail、Outlook 等常见公共邮箱，不支持自定义域名或企业邮箱',
+      400,
+    );
+  }
+  return email;
 }
 
 export function validatePassword(value) {
@@ -121,10 +138,6 @@ function emailCodeAttemptsKey(email) {
 
 function emailCodeCooldownKey(email) {
   return `${EMAIL_CODE_COOLDOWN_PREFIX}${emailHash(email)}`;
-}
-
-function sessionKey(token) {
-  return `${SESSION_PREFIX}${createHash('sha256').update(String(token || '')).digest('hex')}`;
 }
 
 function createAccountId(randomId = () => randomBytes(24).toString('base64url')) {
@@ -337,8 +350,7 @@ export function createAccountAuthService({
   }
 
   async function requestEmailRegistrationCode({ email: rawEmail } = {}) {
-    const email = normalizeEmail(rawEmail);
-    if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
+    const email = validateRegistrationEmail(rawEmail);
     const store = ensureStore(getStore, isStoreReady);
 
     const existing = await store.get(emailIndexKey(email));
@@ -395,8 +407,7 @@ export function createAccountAuthService({
   }
 
   async function registerWithEmail({ email: rawEmail, password, code } = {}) {
-    const email = normalizeEmail(rawEmail);
-    if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
+    const email = validateRegistrationEmail(rawEmail);
     if (!validatePassword(password)) {
       throw new AccountAuthError('INVALID_PASSWORD', '密码长度需为 8–128 位', 400);
     }
@@ -675,49 +686,12 @@ export function createAccountAuthService({
     throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
   }
 
-  async function createSession(userId) {
-    const account = await getAccountById(userId);
-    if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
-    const store = ensureStore(getStore, isStoreReady);
-    const token = randomBytes(32).toString('base64url');
-    await store.set(
-      sessionKey(token),
-      JSON.stringify({ userId: account.id, createdAt: now() }),
-      { EX: ACCOUNT_SESSION_TTL_SEC },
-    );
-    return token;
-  }
-
-  async function resolveSession(token) {
-    const rawToken = String(token || '').trim();
-    if (!/^[a-zA-Z0-9_-]{32,128}$/u.test(rawToken)) return null;
-    const store = ensureStore(getStore, isStoreReady);
-    const record = parseStoredJson(await store.get(sessionKey(rawToken)));
-    if (!record?.userId) return null;
-    const account = await getAccountById(record.userId);
-    if (!account) {
-      await store.del(sessionKey(rawToken));
-      return null;
-    }
-    // 滑动续期只在剩余时间较短时执行，避免每次读取都写 Redis。
-    const createdAt = Number(record.createdAt) || 0;
-    if (createdAt && now() - createdAt > (ACCOUNT_SESSION_TTL_SEC * 1000) / 2) {
-      await store.set(
-        sessionKey(rawToken),
-        JSON.stringify({ userId: account.id, createdAt: now() }),
-        { EX: ACCOUNT_SESSION_TTL_SEC },
-      );
-    }
-    return account;
-  }
-
-  async function revokeSession(token) {
-    const rawToken = String(token || '').trim();
-    if (!/^[a-zA-Z0-9_-]{32,128}$/u.test(rawToken)) return false;
-    const store = ensureStore(getStore, isStoreReady);
-    await store.del(sessionKey(rawToken));
-    return true;
-  }
+  const tokens = createAccountTokenService({
+    getStore: () => ensureStore(getStore, isStoreReady),
+    getAccount: getAccountById,
+    now,
+    authorizeRefresh: (account) => riskControl.sessionStatus(account.id),
+  });
 
   return {
     getAccountById,
@@ -729,9 +703,11 @@ export function createAccountAuthService({
     bindExternalIdentity,
     ensureRoomUserId,
     unbindExternalIdentity,
-    createSession,
-    resolveSession,
-    revokeSession,
+    createSession: tokens.issue,
+    resolveSession: tokens.resolve,
+    inspectSession: tokens.inspect,
+    refreshSession: tokens.refresh,
+    revokeSession: tokens.revoke,
     publicAccount,
   };
 }
@@ -748,5 +724,7 @@ export const getRoomIdentityOwnerAccountId = defaultService.getRoomIdentityOwner
 export const unbindExternalIdentity = defaultService.unbindExternalIdentity;
 export const createAccountSession = defaultService.createSession;
 export const resolveAccountSession = defaultService.resolveSession;
+export const inspectAccountSession = defaultService.inspectSession;
+export const refreshAccountSession = defaultService.refreshSession;
 export const revokeAccountSession = defaultService.revokeSession;
 export { publicAccount };

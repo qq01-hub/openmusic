@@ -135,6 +135,7 @@ server {
 
     # 必须写在 /api 前面
     location ^~ /api/media-proxy {
+        proxy_cache off;
         proxy_pass http://127.0.0.1:4000;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
@@ -154,6 +155,7 @@ server {
     }
 
     location ^~ /api/ {
+        proxy_cache off;
         proxy_pass http://127.0.0.1:4000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
@@ -273,6 +275,20 @@ server {
         expires 30d;
         add_header Cache-Control "public, max-age=2592000" always;
         add_header Access-Control-Allow-Origin "null" always;
+        access_log off;
+        try_files $uri =404;
+    }
+
+    location ^~ /vendor/folia/assets/ {
+        expires 1y;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        access_log off;
+        try_files $uri =404;
+    }
+
+    location ^~ /vendor/folia/ {
+        expires -1;
+        add_header Cache-Control "no-cache, must-revalidate" always;
         access_log off;
         try_files $uri =404;
     }

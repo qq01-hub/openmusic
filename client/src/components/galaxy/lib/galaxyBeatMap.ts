@@ -46,7 +46,8 @@ export function isBeatMapAnalysisPending(): boolean {
   return beatMapBusy || analysisTimer != null;
 }
 
-export function getCurrentBeatMap(): BeatMap | null {
+export function getCurrentBeatMap(song?: Pick<QueueItem, 'queueId' | 'id' | 'source'>): BeatMap | null {
+  if (song && beatMapSongKey(song) !== currentBeatMapKey) return beatMapCache.get(beatMapSongKey(song)) ?? null;
   return currentBeatMap;
 }
 

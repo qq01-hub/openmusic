@@ -36,7 +36,8 @@ import { mergeRoomState } from '../lib/mergeRoomState';
 import { debugLine, debugLog, resetDriftHistogram, setDebugSocketProvider } from '../lib/debugTools';
 import { bindReportTrackDurationSocket } from '../lib/reportTrackDuration';
 import { planAccountSocketRefresh } from '../lib/socketSessionRefresh';
-import { isAccountSessionRevisionEvent } from '../lib/accountSessionSignal';
+import { isAccountSessionRevisionEvent, isAccountTokenRevisionEvent } from '../lib/accountSessionSignal';
+import { fetchAccountSession } from '../lib/accountAuth';
 import {
   getClientNetworkInfo,
   type ClientNetworkInfo,
@@ -80,11 +81,19 @@ let reconnectAttempt = 0;
 let usersStabilizeUntil = 0;
 const USERS_STABILIZE_MS = 18_000;
 let accountSessionStorageListenerBound = false;
+let accountSessionRecovery: Promise<void> | null = null;
+let accountSessionNeedsRecovery = false;
 
 function bindAccountSessionStorageListener() {
   if (accountSessionStorageListenerBound || typeof window === 'undefined') return;
   accountSessionStorageListenerBound = true;
+  const onTokenRefresh = () => {
+    if (accountSessionRecovery || accountSessionNeedsRecovery) return;
+    if (socket?.connected || socket?.active || shouldMaintainRoomSession()) void refreshSocketSession();
+  };
+  window.addEventListener('openmusic:account-token-refreshed', onTokenRefresh);
   window.addEventListener('storage', (event) => {
+    if (isAccountTokenRevisionEvent(event)) { onTokenRefresh(); return; }
     if (!isAccountSessionRevisionEvent(event)) return;
     void refreshSocketSession().finally(() => {
       window.dispatchEvent(new Event('openmusic:account-session-changed'));
@@ -551,6 +560,16 @@ async function attemptRoomRejoin(trigger: string) {
   debugLog('room_rejoin_attempt', debugLine({ trigger, roomId: session.roomId, attempt: reconnectAttempt }));
 
   try {
+    if (accountSessionNeedsRecovery) {
+      const account = await fetchAccountSession();
+      accountSessionNeedsRecovery = false;
+      if (!account) {
+        useRoomStore.getState().resetSession();
+        clearReconnectSchedule();
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+        return;
+      }
+    }
     resetSessionBootstrap();
     await requireSessionBootstrap(true);
 
@@ -630,6 +649,7 @@ function handleSocketDisconnect(reason: string) {
   // 普通断线不等于会话失效；40+ 人同时 bootstrap + join 会打爆服务端
   usersStabilizeUntil = Date.now() + USERS_STABILIZE_MS;
   useRoomStore.getState().setReconnecting(true);
+  if (accountSessionRecovery) return;
 
   if (reason === 'io server disconnect') {
     const s = getSocket();
@@ -899,10 +919,37 @@ export function useSocket() {
 
     s.on('kicked', onKicked);
 
-    const onAccountSessionInvalidated = () => {
+    const onAccountSessionInvalidated = ({ reason = '', stopReconnect = false }: { reason?: string; stopReconnect?: boolean } = {}) => {
+      if (reason === 'session_expired' && !stopReconnect) {
+        if (accountSessionRecovery) return;
+        accountSessionNeedsRecovery = true;
+        accountSessionRecovery = Promise.resolve().then(async () => {
+          try {
+            const account = await fetchAccountSession();
+            accountSessionNeedsRecovery = false;
+            if (account) {
+              await refreshSocketSession();
+              return;
+            }
+          } catch {
+            scheduleRoomRejoin('session_refresh_failed');
+            return;
+          }
+          resetSession();
+          resetSessionBootstrap();
+          window.dispatchEvent(new Event('openmusic:account-auth-required'));
+        }).finally(() => { accountSessionRecovery = null; });
+        return;
+      }
+      accountSessionNeedsRecovery = false;
       // HTTP 响应会更新或清除 Cookie；稍后重连以新的会话握手，不能复用旧连接身份。
       resetSession();
       resetSessionBootstrap();
+      window.dispatchEvent(new Event('openmusic:account-auth-required'));
+      if (stopReconnect) {
+        s.disconnect();
+        return;
+      }
       window.setTimeout(() => {
         connected.current = false;
         socketConnectRequested = false;
@@ -931,6 +978,11 @@ export function useSocket() {
     });
     s.on('disconnect', handleSocketDisconnect);
     s.on('connect_error', (err) => {
+      const code = (err as Error & { data?: { code?: string } }).data?.code;
+      if (['ACCOUNT_AUTH_REQUIRED', 'ACCOUNT_IDENTITY_MISMATCH', 'ACCOUNT_RISK_BLOCKED'].includes(code || '')) {
+        s.disconnect();
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+      }
       debugLog('socket_connect_error', debugLine({ message: err?.message }));
       const { mySocketId } = useRoomStore.getState();
       useRoomStore.getState().setConnectionInfo(mySocketId, null);

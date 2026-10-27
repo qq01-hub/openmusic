@@ -8,6 +8,7 @@ export type RoomVisualPresetId = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 /** 房间背景模式 */
 export type RoomVisualMode =
+  | 'folia'
   | 'emily'
   | 'tunnel'
   | 'vinyl'
@@ -20,6 +21,7 @@ export type RoomVisualMode =
   | 'off';
 
 export const ROOM_VISUAL_DISPLAY_ORDER: RoomVisualMode[] = [
+  'folia',
   'cover-bg',
   'emily',
   'topography',
@@ -41,6 +43,7 @@ export const ROOM_VISUAL_MODE_META: Record<
     shaderPreset?: RoomVisualPresetId;
   }
 > = {
+  folia: { name: 'Folia · 辞曲新境', hasSettings: true },
   emily: { name: 'emily专辑封面', hasSettings: true, shaderPreset: 0 },
   tunnel: { name: '滚筒', hasSettings: true, shaderPreset: 1 },
   vinyl: { name: '唱片', hasSettings: true, shaderPreset: 4 },
@@ -437,7 +440,7 @@ export function visualModeUsesProxiedCover(mode: RoomVisualMode): boolean {
 export function shouldProxySongPlaybackUrl(mode?: RoomVisualMode): boolean {
   const effective = mode ?? readEffectiveRoomVisualMode();
   if (effective === 'off' || effective === 'cover-bg') return false;
-  if (effective === 'topography-we') return true;
+  if (effective === 'topography-we' || effective === 'folia') return true;
   return ROOM_VISUAL_MODE_META[effective].shaderPreset !== undefined;
 }
 
@@ -649,6 +652,7 @@ export const ROOM_AMBIENT_GLASS_CLASS =
 export const ROOM_AMBIENT_GLASS_TRANSPARENT_CLASS = 'room-chrome-bar room-chrome-bar--ambient';
 
 const SHADER_VISUAL_MODES = new Set<RoomVisualMode>([
+  'folia',
   'emily',
   'tunnel',
   'vinyl',

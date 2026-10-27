@@ -1,0 +1,136 @@
+# Folia 沉浸舞台
+
+## 使用
+
+进入房间沉浸模式，在视觉控制台选择「Folia · 辞曲新境」，点击「打开 Folia 歌词、背景与动画调节」
+
+- 歌词页提供 sonnet、tempera、lumiere、hanabi、classic、cadenza、partita、fume、tilt、claddagh、monet、pendolo、cappella、diorama、still 共 15 种主题及各自的原版参数面板
+- 背景页提供 common、monet、nomand、latent、url、sora 共 6 类背景及各自的参数面板，网页背景保留 `sandbox="allow-scripts"` 隔离
+- 外观页可调字号、翻译、歌词偏移、配色、字体类别、字重、透明度、动画强度、帧率、减少动态效果、切歌随机主题及节拍分析策略，字体、字重和动画强度独立于配色保存，关闭自定义配色后仍继续生效
+- 节拍效果的开关与强度位于对应主题和背景的参数页，开启节拍联动后使用 OpenMusic 的离线节拍和频段分析，关闭后停止本舞台启动的分析任务
+- 接入处将 OpenMusic 的 0–1 频段和能量换算为原版主题使用的 0–255 数值，保留原始字节频谱，确保粒子、呼吸与动态背景按原版范围响应
+- 时计等鼓点效果使用 OpenMusic 节拍的低、中、高频成分驱动，不加载 Folia 桌面端 Beat This! 或 htdemucs 模型，效果输入与原版模型分析存在差异
+- 参数保存在当前浏览器，恢复字号与歌词偏移时会校验有限数值并限制在控件允许范围内，自定义背景、群唱表情与头像、莫奈头像等素材通过 Folia 原版 IndexedDB 存储恢复，浏览器清理站点数据后这些视觉偏好会被清除
+- 按 Esc 先关闭下拉菜单或弹窗，再收起 Folia 控制台，再次按 Esc 触发原有退出沉浸模式流程
+- Folia 控制台打开时保持沉浸工具栏可见，再次点击右下角视觉控制台可切回宿主设置，舞台尚在加载时打开的设置会在加载完成后显示
+- 高分屏按视口限制高开销画布的渲染像素，Fume 使用固定档位的文字光栅化，Lumiere 的烟雾与柔光按独立像素预算渲染，保留歌词层、主题动画和原有参数
+- Paper Shader 的布局样式在舞台 Shadow DOM 内加载，内部画布分辨率降低后仍铺满背景，不依赖主文档注入的样式
+- 当前歌词行切换复用已有主题对象，避免 Lumiere 等主题将每行更新误判为配色变化而重建场景，实际调整配色和字体仍会更新
+- 舞台报错后停止宿主的时钟传递与节拍分析，点击重新加载后恢复同步
+- 首次加载并行获取舞台脚本与样式，加载超时、重试或退出时取消清单请求并清理样式等待，迟到的脚本不再挂载旧舞台
+- 运行时失败会立即卸载舞台并清空隔离容器，迟到的就绪消息不会恢复失败实例，重复就绪消息不重复同步歌曲与歌词
+
+音乐账号、房间、队列、聊天、权限、收藏和移动端媒体控制沿用 OpenMusic，点击歌词跳转仍调用原有播放控制，并由服务端最终判断权限
+
+## 歌词链路
+
+客户端通过现有受保护的 `/api/meting` 请求显式增加 `format=json`，认证、签名、音源开关、房间账号选择、上游 Token 和缓存继续走原链路
+
+```text
+/api/meting?server=netease&type=lrc&id=歌曲ID&format=json
+```
+
+升级后的 Meting 返回以下白名单字段，不返回 Cookie、Token 或原始上游响应
+
+```json
+{
+  "version": 1,
+  "lyric": "逐行 LRC",
+  "translation": "翻译 LRC 或 QQ QRC",
+  "romanization": "音译 LRC 或 QQ QRC",
+  "wordLyric": "逐字时间轴",
+  "wordFormat": "yrc",
+  "source": "platform"
+}
+```
+
+`wordFormat` 支持 `yrc`、`qrc`、`krc`、`ttml`、`enhanced-lrc`，没有逐字数据时为空字符串
+
+| 音源 | 逐字来源 | 处理 |
+| --- | --- | --- |
+| 网易云 | `https://music.163.com/api/song/lyric/v1` | 复用现有 EAPI 请求，读取 YRC 和翻译、音译 |
+| QQ | `https://u.y.qq.com/cgi-bin/musicu.fcg` 的 `music.musichallSong.PlayLyricInfo.GetPlayLyricInfo` | 由 songmid 查询数字 songID，使用 Folia 解密器解析 QRC |
+| 酷狗 | `https://lyrics.kugou.com/search`、`https://lyrics.kugou.com/download` | 根据歌曲 hash 查询 KRC，执行异或和 deflate 解压 |
+| AMLL | `https://api.amll.dev/v1/lyrics/get` | 网易云和 QQ 的平台逐字缺失时，按 `ncmMusicId` 或 `qqMusicId` 查询 TTML |
+
+当前补充链路按平台 ID 精确匹配，不做跨音源模糊搜索，不把逐行歌词估算成逐字时间轴，未收录、超时、限流、解密失败或格式无效时保留逐行歌词
+
+普通 LRC 兼容无小数、一至三位小数、单数位分钟和同一句的多个时间戳，歌词、翻译与音译分别应用各自的 `[offset:毫秒]`，正值按现有 OpenMusic 规则提前显示，手动歌词偏移仍可叠加
+
+普通歌词在舞台内保持整行时间范围，不使用 Folia 原版按字数估算的逐字高亮，只有实际逐字数据才显示逐字状态
+
+QQ 逐字歌词的翻译与音译可同时使用 QRC 或普通 LRC 辅轨，QRC 时间标记会交给原版解析器处理
+
+网易云、QQ、酷狗的普通歌词请求失败时，Meting 的显式结构化请求仍会继续尝试逐字补充，网易云 v1 返回的 LRC 也可用于恢复逐行歌词，原文本接口的错误行为保持不变
+
+旧 Meting 的纯文本 LRC 和常见嵌套 JSON 歌词会在 OpenMusic 服务端转成兼容结构，结构化请求失败或返回空歌词时客户端再尝试现有歌词接口，包括歌曲自带的歌词与音源专属歌词链路，切歌会取消旧请求并忽略迟到结果
+
+结构化上游响应限制为 4 MiB，单个歌词字段、QRC/KRC 解压输出限制为 1 MiB，新增外部请求固定域名、禁止重定向并设置超时，OpenMusic 的 Meting 请求同时限制空闲时间和总耗时，持续慢速响应也会按时终止
+
+## 构建与来源
+
+原版源码固定在 `chthollyphile/folia-major` 的 `77640a4c9861df04ce1197944ce57e0ad7f56d66`，提取清单位于 `vendor/folia/upstream/SOURCE.json`
+
+舞台使用独立的 React 19、Tailwind 4 依赖，通过 Shadow DOM 嵌入主站，不新增可访问顶层原生桥接令牌的 iframe，不引入普通页面的 Ant Design 依赖
+
+控制台状态通过同窗口、同源的 `openmusic:folia-panel` 消息同步，`open` 为布尔值，宿主据此协调面板互斥、按钮状态和工具栏自动隐藏，舞台卸载时同步关闭状态
+
+`npm run dev --prefix client` 和 `npm run build --prefix client` 会先构建舞台，首次缺少独立依赖时自动执行 `npm ci --ignore-scripts`，独立验证命令如下
+
+```powershell
+npm ci --prefix 'vendor/folia' --ignore-scripts
+npm run typecheck --prefix 'vendor/folia'
+npm run build:check
+npm test --prefix 'server'
+```
+
+舞台产物生成到 `client/public/vendor/folia` 并随主站构建复制到 dist，不提交生成文件，Docker 客户端构建阶段包含该独立包
+
+舞台入口按需加载，包含原版 Canvas、Pixi、Three 等渲染器，首次加载体积明显大于普通背景，低性能设备可选 still、降低画质或开启减少动态效果
+
+实验帧率限制通过舞台内部绘制队列、Pixi ticker 与镜台 Canvas 时钟实现，不替换整个页面的 `requestAnimationFrame`，不会给房间页面安装全局限帧，退出舞台时清理绘制队列，第三方独立动画仍遵循各自调度
+
+上游源码使用 AGPL-3.0，保留上游 LICENSE、源码清单与修改说明，构建同时提供许可证和当前舞台源码包，分发或提供网络服务时需遵守对应许可条款，不能把这些文件当作 MIT 代码重新标记
+
+本地适配包括独立入口、Shadow DOM、弹层容器与焦点、房间消息桥、主题控制台、素材恢复、OpenMusic 节拍输入、源码归档和 TypeScript 文件系统句柄兼容
+
+`scripts/vendor-folia.mjs` 用于从已核对的 Folia 源码提取依赖闭包，不属于日常构建步骤，重新提取会覆盖 `upstream`，升级时须审查并重放上述适配后重新验证
+
+## 发布与回滚
+
+先发布兼容的 Meting，再发布 OpenMusic 服务端和客户端，无新增环境变量、Redis 键、数据迁移或账号配置，现有 Meting 地址和凭据仍在管理后台维护
+
+`stage.json`、独立预览入口、源码包和许可证使用重新验证缓存策略，带 hash 的舞台资源保持长期缓存，外部静态托管也应对这些固定名称文件禁用不可变缓存
+
+两份 Nginx 示例已增加 Folia 缓存规则，使用 Nginx 静态托管时同步应用这些规则，执行 `nginx -t` 通过后重载配置，无端口、卷或持久化目录变更
+
+验收应覆盖真实房间切歌、暂停、跳转权限、重连、旧版 Meting、歌词缺失、窄屏和目标设备 GPU，`structured_lyrics_total` 记录成功格式、重定向、上游错误及无效响应，既有 Meting 上游统计继续记录请求错误与延迟，这些指标不等于完整告警系统
+
+发现舞台加载错误、目标设备渲染异常或歌词接口错误率升高时，先切回其他视觉模式，再回退 OpenMusic 构建，必要时回退 Meting，原 LRC 文本契约保持兼容
+
+发布记录应补充实际版本、部署时间、验收结果和负责人，本次仅修改和本地验证，未部署
+
+## 本地验证记录
+
+2026-10-23，Windows 11、Node 22、Chrome 无头浏览器
+
+- 主站 `npm run build:check` 通过，包含主站与独立舞台的 TypeScript 检查、Ant Design 边界和生产构建
+- 客户端原有 13 项测试、LRC offset 和房间视觉检查通过
+- 服务端原有 52 项测试通过，2 项 Linux 部署脚本测试在 Windows 跳过
+- Meting 原有 147 项测试通过，另运行并清理了 8 项结构化歌词临时测试，覆盖兼容、平台降级、解压限制和输入校验
+- 真实 YRC、QRC、KRC 和 AMLL TTML 均完成接口获取及浏览器逐字解析，非法逐字内容回退逐行歌词
+- 15 种主题、6 类背景完成浏览器切换，桌面和 390 px 窄屏检查无脚本错误或控制台横向溢出
+- 宿主模拟场景覆盖加载失败重试、空态、迟到歌词取消、相同曲目重复渲染、跳转权限和非法跳转参数
+- 参数保存、自定义背景上传和 IndexedDB 恢复通过，自动配色切换不会覆盖保存的自定义颜色
+- Shadow DOM 内的图片编辑弹窗、素材上传、备份菜单、Tab 焦点、分层 Esc 关闭和歌词偏移后的点击跳转通过
+- Meting Node 入口打包通过，原有 Workers/Deno 全平台构建被 `node:fs/promises` 依赖阻断，用未修改的原始入口也能复现
+
+未覆盖真实 Redis 房间多人重连、移动端原生 WebView 与不同 GPU 的实机渲染，不把模拟宿主权限测试描述为生产环境验收
+
+2026-10-25 补充回归：普通 LRC 时间精度、重复时间戳、offset、翻译与音译对齐、整行显隐边界、真实 YRC 时间保留、无效逐字数据降级、暂停时切换主题、Meting 普通歌词失败后的补充链路，以及舞台限帧隔离和卸载清理
+
+2026-10-25 异常修复回归：QQ QRC 双辅轨与普通 LRC 辅轨、持续慢速响应的总超时和取消清理、结构化歌词空响应降级、加载中打开设置、控制台互斥、面板打开时的工具栏状态、Shadow DOM 输入框和分层 Esc、舞台卸载关闭状态，以及亮色背景下的桌面和 390 px 窄屏玻璃效果，宿主联调使用真实组件与模拟房间依赖，不代表真实 Redis 房间或原生 WebView 验收
+
+2026-10-26 加载与音频回归：清单和样式超时后不再迟到挂载，退出取消清单请求，脚本与样式并行加载，运行时失败及加载超时后均可重试，旧舞台 ready 不会清除超时失败态；构建产物确认 0–1 频段转换为 0–255，覆盖越界值、无效值、原始频谱保留与旧曲目消息忽略；1440 px 桌面 Fume 和 390 px 窄屏 Lumiere 的歌词、玻璃控制台及无横向溢出检查通过，未新增真机帧率测量
+
+2026-10-26 运行时失败补充回归：真实宿主组件配合模拟舞台，确认重复就绪只同步一次歌曲，运行时失败立即卸载舞台、清空隔离容器并停止宿主时钟，迟到就绪保持失败态，重试后恢复且每个舞台只卸载一次；不同来源消息被忽略，桌面和 390 px 窄屏失败提示及重试入口通过视觉检查，不代表真实 GPU 故障验收

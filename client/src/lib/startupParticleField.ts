@@ -2,7 +2,7 @@ import { isWeakPlaybackDevice } from './weakPlaybackDevice';
 
 type Pointer = { x: number; y: number; active: boolean };
 type Field = { form: number; exit: number; impulse: number; quiet: boolean };
-type Particle = { x: number; y: number; z: number; phase: number; size: number; color: number; dx: number; dy: number; vx: number; vy: number; note: boolean };
+type Particle = { x: number; y: number; z: number; phase: number; sinPhase: number; cosPhase: number; burst: number; sinWave: number; cosWave: number; size: number; color: number; dx: number; dy: number; vx: number; vy: number; note: boolean };
 const TAU = Math.PI * 2;
 const COLORS = ['#ff4d55', '#ff858d', '#f6b6c7', '#f472b6', '#c084fc', '#fff1ec'];
 
@@ -21,6 +21,8 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
   let raf = 0, previousTime = 0, time = 0, frameCount = 0, slowFrames = 0;
   let stride = 1;
   let yaw = 0, pitch = 0;
+  const circle = Array.from({ length: 97 }, (_, index) => ({ x: Math.cos(index / 96 * TAU), y: Math.sin(index / 96 * TAU) }));
+  const projection = { x: 0, y: 0, depth: 0, perspective: 1 };
 
   // Soft light is rasterized once. No blur, shadow or new gradient per particle/frame.
   const sprites = COLORS.map((color) => {
@@ -38,19 +40,25 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
     if (!ctx || field.quiet || document.hidden) return;
     const elapsed = now - previousTime;
     // Mobile/weak devices run at 30fps; desktop adapts if the frame budget is exceeded.
-    if (!reduced.matches && (weak || width < 700 || stride > 1) && elapsed < 30) {
+    const paced = weak || width < 700 || stride > 1;
+    if (!reduced.matches && paced && elapsed < 30) {
       raf = requestAnimationFrame(render);
       return;
     }
     const step = Math.min(elapsed / 16.667 || 1, 2.5);
     previousTime = now;
     if (!reduced.matches) time += Math.min(elapsed / 1000, .04);
-    if (++frameCount < 90 && elapsed > 26) slowFrames++;
+    if (++frameCount < 90 && elapsed > (paced ? 48 : 26)) slowFrames++;
     if (frameCount === 90 && slowFrames > 35) stride = 2;
     const t = time;
     const form = reduced.matches ? 1 : field.form;
     const exit = field.exit;
     const active = pointer.active && !reduced.matches && exit === 0;
+    const pulseSin = Math.sin(t * 1.3), pulseCos = Math.cos(t * 1.3);
+    const twinkleSin = Math.sin(t * 1.6), twinkleCos = Math.cos(t * 1.6);
+    const driftSin = Math.sin(t * .12), driftCos = Math.cos(t * .12);
+    const waveSin = Math.sin(t), waveCos = Math.cos(t);
+    const gather = (1 - form) * radius;
     yaw += (((active ? (pointer.x / width - .5) * .45 : Math.sin(t * .5) * .12)) - yaw) * .06 * step;
     pitch += (((active ? (pointer.y / height - .4) * .25 : 0)) - pitch) * .06 * step;
     const angle = -.32 + yaw;
@@ -67,7 +75,11 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
       const ry = y * cosX - rz * sinX;
       const depth = y * sinX + rz * cosX;
       const perspective = 3.6 / (3.6 + depth);
-      return { x: cx + (rx * cosR - ry * sinR) * radius * perspective, y: cy + (rx * sinR + ry * cosR) * radius * perspective, depth, perspective };
+      projection.x = cx + (rx * cosR - ry * sinR) * radius * perspective;
+      projection.y = cy + (rx * sinR + ry * cosR) * radius * perspective;
+      projection.depth = depth;
+      projection.perspective = perspective;
+      return projection;
     };
 
     // Engraved grooves and an outer light rim make the form read as a record, not a globe.
@@ -76,8 +88,7 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
       const r = .54 + ring * .037;
       ctx.beginPath();
       for (let j = 0; j <= 96; j++) {
-        const a = j / 96 * TAU;
-        const p = project(Math.cos(a) * r, Math.sin(a) * r, -.035);
+        const p = project(circle[j].x * r, circle[j].y * r, -.035);
         if (!j) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
       }
       ctx.strokeStyle = ring === 12 ? '#ff7a85a0' : ring % 3 === 0 ? '#ffc0cd38' : '#ec759b1a';
@@ -121,15 +132,19 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
     for (let i = 0; i < particles.length; i++) {
       const p = particles[i];
       if (!shouldRenderStartupParticle(i, p.note, stride)) continue;
-      const pulse = 1 + Math.sin(t * 1.3 + p.phase) * .013;
+      const pulse = 1 + (pulseSin * p.cosPhase + pulseCos * p.sinPhase) * .013;
       const projected = project(p.x * pulse, p.y * pulse, p.z);
-      const gather = (1 - form) * radius;
-      const driftX = Math.cos(p.phase + t * .12) * gather * 1.5;
-      const driftY = Math.sin(p.phase + t * .12) * gather;
-      const waveX = (i / particles.length) * width * 1.3 - width * .15;
-      const waveY = height * .31 + Math.sin(i * .028 + t) * radius * .09 + Math.sin(p.phase) * 4;
-      const x = (projected.x + driftX) * (1 - exit) + waveX * exit;
-      const y = (projected.y + driftY) * (1 - exit) + waveY * exit;
+      let x = projected.x, y = projected.y;
+      if (gather > 0) {
+        x += (p.cosPhase * driftCos - p.sinPhase * driftSin) * gather * 1.5;
+        y += (p.sinPhase * driftCos + p.cosPhase * driftSin) * gather;
+      }
+      if (exit > 0) {
+        const waveX = (i / particles.length) * width * 1.3 - width * .15;
+        const waveY = height * .31 + (p.sinWave * waveCos + p.cosWave * waveSin) * radius * .09 + p.sinPhase * 4;
+        x += (waveX - x) * exit;
+        y += (waveY - y) * exit;
+      }
       if (!reduced.matches) {
         if (active) {
           const dx = x + p.dx - pointer.x, dy = y + p.dy - pointer.y;
@@ -144,10 +159,10 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
         p.vy = (p.vy - p.dy * .025 * step) * Math.pow(.86, step);
         p.dx += p.vx * step; p.dy += p.vy * step;
       }
-      const burst = field.impulse * Math.sin(p.phase * 3) * radius * .15;
-      const px = x + p.dx + Math.cos(p.phase) * burst;
-      const py = y + p.dy + Math.sin(p.phase) * burst;
-      const twinkle = .75 + Math.sin(t * 1.6 + p.phase) * .25;
+      const burst = field.impulse * p.burst * radius * .15;
+      const px = x + p.dx + p.cosPhase * burst;
+      const py = y + p.dy + p.sinPhase * burst;
+      const twinkle = .75 + (twinkleSin * p.cosPhase + twinkleCos * p.sinPhase) * .25;
       const size = p.size * projected.perspective * (p.note ? 1.2 : 1);
       ctx.globalAlpha = Math.max(0, (.55 + form * .45) * (1 - exit) * twinkle * (1 - projected.depth * .22));
       if (i % 5 === 0 || p.note && i % 3 === 0) {
@@ -174,12 +189,12 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
     width = canvas.clientWidth; height = canvas.clientHeight;
     if (!width || !height) return;
     const narrow = width < 700;
-    const dpr = Math.min(window.devicePixelRatio || 1, narrow || weak ? 1.25 : 1.75);
+    const dpr = Math.min(window.devicePixelRatio || 1, narrow || weak ? 1.25 : 1.5, Math.sqrt(2_500_000 / (width * height)));
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
     ctx!.setTransform(dpr, 0, 0, dpr, 0, 0);
     cx = width * .5; cy = height * (narrow ? .34 : .39);
     radius = Math.min(width * (narrow ? .43 : .28), height * (narrow ? .205 : .265));
-    const count = weak ? 1200 : narrow ? 2000 : 4200;
+    const count = weak ? 1000 : narrow ? 1500 : Math.min(3200, Math.round(width * height / 300));
     particles = Array.from({ length: count }, (_, i) => {
       const phase = i * 2.399963;
       const ratio = i / count;
@@ -210,7 +225,7 @@ export function startParticleField(canvas: HTMLCanvasElement, pointer: Pointer, 
         }
         z = -.18 + Math.cos(phase) * .035;
       }
-      return { x, y, z, phase, note, size: .8 + ((i * .713) % 1) * (note ? 1.1 : 1.7),
+      return { x, y, z, phase, sinPhase: Math.sin(phase), cosPhase: Math.cos(phase), burst: Math.sin(phase * 3), sinWave: Math.sin(i * .028), cosWave: Math.cos(i * .028), note, size: .8 + ((i * .713) % 1) * (note ? 1.1 : 1.7),
         color: note ? (i % 5 === 0 ? 5 : 2) : x < -.15 ? i % 3 : 1 + i % 4,
         dx: 0, dy: 0, vx: 0, vy: 0 };
     });

@@ -143,8 +143,11 @@ export function createDistributedSocketRateLimiter({
             keys: [key],
             arguments: [String(windowMs)],
           });
-          const count = Number(result?.[0] || 0);
-          const ttl = Number(result?.[1] || windowMs);
+          const count = Number(result?.[0]);
+          const ttl = Number(result?.[1]);
+          if (!Array.isArray(result) || result.length !== 2 || !Number.isSafeInteger(count) || count < 1 || !Number.isSafeInteger(ttl) || ttl < 0) {
+            throw new Error('Invalid rate limit reply');
+          }
           return {
             allowed: count <= max,
             retryAfterMs: count <= max ? 0 : Math.max(1, ttl),

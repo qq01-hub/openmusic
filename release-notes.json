@@ -1,6 +1,9 @@
 {
   "notes": [
-    "紧急更新歌手过滤"
+    "删除匿名用户访问，必须登录",
+    "优化用户风控逻辑",
+    "沉浸模式支持Folia组件",
+    "紧急更新，有bug麻烦及时反馈，感谢~"
   ],
-  "forcePrompt": false
+  "forcePrompt": true
 }

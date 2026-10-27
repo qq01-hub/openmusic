@@ -88,6 +88,7 @@ export default function RoomImmersiveShell({
     chat: false,
   });
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [foliaPanelOpen, setFoliaPanelOpen] = useState(false);
   const [fxFabAutoHide, setFxFabAutoHide] = useState(false);
   const [fxFabPeek, setFxFabPeek] = useState(true);
   const [bottomBarVisible, setBottomBarVisible] = useState(false);
@@ -105,6 +106,7 @@ export default function RoomImmersiveShell({
   const searchPanelRef = useRef<HTMLDivElement>(null);
   const queuePanelRef = useRef<HTMLDivElement>(null);
   const chatPanelRef = useRef<HTMLDivElement>(null);
+  const visualSettingsOpen = settingsOpen || foliaPanelOpen;
 
   useEffect(() => {
     openPanelRef.current = openPanel;
@@ -160,12 +162,12 @@ export default function RoomImmersiveShell({
 
   const scheduleFxFabHide = useCallback(() => {
     cancelFxFabPeek();
-    if (!fxFabAutoHide || settingsOpen) return;
+    if (!fxFabAutoHide || visualSettingsOpen) return;
     fxFabPeekTimerRef.current = window.setTimeout(() => {
       setFxFabPeek(false);
       fxFabPeekTimerRef.current = null;
     }, FX_FAB_PEEK_DELAY_MS);
-  }, [cancelFxFabPeek, fxFabAutoHide, settingsOpen]);
+  }, [cancelFxFabPeek, fxFabAutoHide, visualSettingsOpen]);
 
   const showBottomBar = useCallback(() => {
     cancelBottomBarClose();
@@ -307,9 +309,9 @@ export default function RoomImmersiveShell({
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const target = e.composedPath()[0];
+      if (target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)) return;
       if (settingsOpen) {
         setSettingsOpen(false);
         return;
@@ -325,15 +327,15 @@ export default function RoomImmersiveShell({
   }, [onExit, openPanel, settingsOpen]);
 
   useEffect(() => {
-    if (settingsOpen) {
+    if (visualSettingsOpen) {
       setFxFabPeek(true);
       cancelFxFabPeek();
       return;
     }
     scheduleFxFabHide();
-  }, [cancelFxFabPeek, scheduleFxFabHide, settingsOpen]);
+  }, [cancelFxFabPeek, scheduleFxFabHide, visualSettingsOpen]);
 
-  const anyPanelOpen = openPanel !== null || settingsOpen;
+  const anyPanelOpen = openPanel !== null || visualSettingsOpen;
 
   // 鼠标静止 3 秒后整套 UI 渐隐；面板展开或指针停在某块 UI 上时不计时
   const wakeChrome = useCallback(() => {
@@ -380,6 +382,8 @@ export default function RoomImmersiveShell({
 
   const chatDocked = openPanel === 'chat' && !settingsOpen;
   const openSettingsPanel = useCallback(() => {
+    window.postMessage({ type: 'openmusic:folia-settings', open: false }, location.origin);
+    setFoliaPanelOpen(false);
     setOpenPanel(null);
     setFxFabPeek(true);
     setSettingsOpen(true);
@@ -388,6 +392,25 @@ export default function RoomImmersiveShell({
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false);
   }, []);
+
+  useEffect(() => {
+    const syncFoliaPanel = (event: MessageEvent) => {
+      if (event.source !== window || event.origin !== location.origin || event.data?.type !== 'openmusic:folia-panel') return;
+      const open = event.data.open === true;
+      setFoliaPanelOpen(open);
+      if (open) {
+        setSettingsOpen(false);
+        setOpenPanel(null);
+        setFxFabPeek(true);
+      }
+    };
+    window.addEventListener('message', syncFoliaPanel);
+    window.addEventListener('openmusic:folia-open-settings', closeSettingsPanel);
+    return () => {
+      window.removeEventListener('message', syncFoliaPanel);
+      window.removeEventListener('openmusic:folia-open-settings', closeSettingsPanel);
+    };
+  }, [closeSettingsPanel]);
 
   return (
     <div className={`room-immersive-mode fixed inset-0 z-40 pointer-events-none${className ? ` ${className}` : ''}`}>
@@ -465,10 +488,10 @@ export default function RoomImmersiveShell({
           scheduleFxFabHide();
         }}
         onClick={openSettingsPanel}
-        className={`immersive-fx-fab ${settingsOpen ? 'active' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !settingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
+        className={`immersive-fx-fab ${visualSettingsOpen ? 'active' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !visualSettingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
         style={{ pointerEvents: 'auto' }}
         aria-label="视觉控制台"
-        aria-expanded={settingsOpen}
+        aria-expanded={visualSettingsOpen}
       >
         <SlidersHorizontal className="h-[21px] w-[21px]" />
       </button>
@@ -491,7 +514,7 @@ export default function RoomImmersiveShell({
             return next;
           });
         }}
-        className={`immersive-fx-fab-hide ${fxFabAutoHide ? 'on' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !settingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
+        className={`immersive-fx-fab-hide ${fxFabAutoHide ? 'on' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !visualSettingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
         style={{ pointerEvents: 'auto' }}
         title={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'}
         aria-label={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'}

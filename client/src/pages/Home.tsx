@@ -29,6 +29,7 @@ import UserGuideTour from '../components/UserGuideTour';
 import Toast from '../components/Toast';
 import BrandMark from '../components/BrandMark';
 import HomeAuroraBackdrop from '../components/react-bits/HomeAuroraBackdrop';
+import { isWeakPlaybackDevice } from '../lib/weakPlaybackDevice';
 import GradientText from '../components/react-bits/GradientText';
 import ShinyText from '../components/react-bits/ShinyText';
 import SpotlightCard from '../components/react-bits/SpotlightCard';
@@ -43,6 +44,8 @@ import type { MusicAccountPlatform } from '../lib/musicAccountQr';
 import { fetchDonations, type DonationEntry } from '../lib/donations';
 import { headerIconCls, headerPillCls } from '../lib/homeHeaderActions';
 import AccountAccess from '../components/AccountAccess';
+import { fetchAccountSession } from '../lib/accountAuth';
+import { ensureFreshAccountAccess } from '../lib/accountAccessSession';
 import MyRoomsAccess from '../components/MyRoomsAccess';
 import MusicLoading from '../components/MusicLoading';
 
@@ -435,6 +438,25 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   const [siteAnnouncementOpen, setSiteAnnouncementOpen] = useState(false);
   const [accountPanelOpen, setAccountPanelOpen] = useState(false);
 
+  const requireHomeAccount = useCallback(async () => {
+    try {
+      if (await fetchAccountSession()) return true;
+      window.dispatchEvent(new Event('openmusic:account-auth-required'));
+    } catch (reason) {
+      setToast({ message: reason instanceof Error ? reason.message : '账户状态暂不可用，请重试', type: 'error' });
+    }
+    return false;
+  }, []);
+
+  const openRoomDialog = async (kind: 'create' | 'join') => {
+    if (!await requireHomeAccount()) return;
+    setError('');
+    setModalError('');
+    if (kind === 'create') setShowCreate(true);
+    else setShowJoin(true);
+    markGuideFeatureUsed(kind === 'create' ? 'home-create' : 'home-join');
+  };
+
   const roomsFetchSeq = useRef(0);
   const roomsRef = useRef(rooms);
   roomsRef.current = rooms;
@@ -530,8 +552,8 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
     let cancelled = false;
     const warm = () => {
       if (cancelled) return;
-      void import('../api/music/toplist')
-        .then((m) => m.getNeteaseHotToplist(200))
+      void ensureFreshAccountAccess()
+        .then((authenticated) => authenticated && !cancelled ? import('../api/music/toplist').then((m) => m.getNeteaseHotToplist(200)) : undefined)
         .catch(() => {});
       void import('../pages/Room');
     };
@@ -578,6 +600,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   };
 
   const handleCreate = async () => {
+    if (!await requireHomeAccount()) return;
     setActionLoading(true);
     setError('');
     setMatchError('');
@@ -611,6 +634,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
 
   const handleRandomMatch = async () => {
     if (matchLoading) return;
+    if (!await requireHomeAccount()) return;
     setMatchLoading(true);
     setError('');
     setMatchError('');
@@ -628,6 +652,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   };
 
   const handleJoinByCode = async () => {
+    if (!await requireHomeAccount()) return;
     const code = joinCode.trim().toUpperCase();
     if (!code) {
       setModalError('请输入房间号');
@@ -654,7 +679,8 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
     }
   };
 
-  const handleRoomCardClick = useCallback((room: RoomSummary) => {
+  const handleRoomCardClick = useCallback(async (room: RoomSummary) => {
+    if (!await requireHomeAccount()) return;
     setError('');
     setMatchError('');
     const storedPassword = getStoredRoomPassword(room.id);
@@ -663,7 +689,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
       return;
     }
     goToRoom(room.id, storedPassword);
-  }, [navigate]);
+  }, [navigate, requireHomeAccount]);
 
   const { recent: recentRooms, others: otherRooms } = useMemo(() => {
     const { recent, others } = partitionRoomsByRecent(rooms);
@@ -677,7 +703,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
     'home-modal-input w-full rounded-2xl px-5 py-3.5 text-white text-[15px] caret-white placeholder:text-white/30 outline-none border border-white/10 bg-[#1a1a1a] focus:border-netease-red/60 transition-[border-color] duration-200';
 
   return (
-    <div className={`h-full flex flex-col relative overflow-hidden bg-[#050505] text-white font-sans selection:bg-netease-red/30${titleHandoff ? ' home-hero-handoff' : ''}`}>
+    <div data-home-startup={entranceActive || undefined} data-home-quiet={isWeakPlaybackDevice() || undefined} className={`home-page h-full flex flex-col relative overflow-hidden bg-[#050505] text-white font-sans selection:bg-netease-red/30${titleHandoff ? ' home-hero-handoff' : ''}`}>
       {/* React Bits Aurora 背景（弱设备 / 移动端自动降级） */}
       <HomeAuroraBackdrop paused={entranceActive} />
 
@@ -703,7 +729,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
             </span>
             <div data-home-primary-actions className="flex items-center gap-1.5 sm:gap-2">
               <AccountAccess
-                allowAutoPrompt={entryReady && !siteAnnouncementOpen}
+                allowAutoPrompt={false}
                 onOpenChange={setAccountPanelOpen}
               />
               <MyRoomsAccess />
@@ -919,12 +945,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
                         <div data-guide="home-create" className="flex w-full">
                           <button
                             type="button"
-                            onClick={() => {
-                              setError('');
-                              setModalError('');
-                              setShowCreate(true);
-                              markGuideFeatureUsed('home-create');
-                            }}
+                            onClick={() => void openRoomDialog('create')}
                             onMouseMove={handleBtnTilt}
                             onMouseLeave={resetBtnTilt}
                             className="btn-shine btn-tilt group/create h-12 sm:h-14 w-full px-6 sm:px-8 rounded-full bg-netease-red hover:bg-netease-red/90 text-white font-semibold shadow-lg shadow-netease-red/25 hover:shadow-xl hover:shadow-netease-red/45 whitespace-nowrap"
@@ -940,12 +961,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
                         <div data-guide="home-join" className="flex w-full">
                           <button
                             type="button"
-                            onClick={() => {
-                              setError('');
-                              setModalError('');
-                              setShowJoin(true);
-                              markGuideFeatureUsed('home-join');
-                            }}
+                            onClick={() => void openRoomDialog('join')}
                             onMouseMove={handleBtnTilt}
                             onMouseLeave={resetBtnTilt}
                             className="btn-shine btn-tilt group/join h-12 sm:h-14 w-full px-6 sm:px-8 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 hover:border-white/25 text-white font-medium whitespace-nowrap"
@@ -1053,7 +1069,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
               <p className="text-white/40 mb-8 max-w-sm">一切都很安静。不如由你来开启第一首歌，邀请朋友们一起来听吧。</p>
               <button
                 type="button"
-                onClick={() => { setError(''); setShowCreate(true); }}
+                onClick={() => void openRoomDialog('create')}
                 className="flex items-center gap-2 px-8 py-4 rounded-full bg-white text-black font-bold hover:bg-white/90 hover:scale-105 transition-all"
               >
                 <Plus className="w-5 h-5" />

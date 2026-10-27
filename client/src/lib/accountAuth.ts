@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from '../api/http';
+import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, refreshAccountAccess, updateAccountAccess, type AccountSessionMetadata } from './accountAccessSession';
 
 export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat';
 
@@ -38,12 +39,39 @@ async function readAccountResponse(response: Response): Promise<AccountProfile> 
 }
 
 export async function fetchAccountSession(): Promise<AccountProfile | null> {
-  const response = await fetchWithTimeout('/api/auth/session', { cache: 'no-store' }, 8000);
-  if (!response.ok) throw new Error('账户状态读取失败');
-  const data = await response.json().catch(() => ({})) as {
+  const generation = getAccountSessionGeneration();
+  const assertCurrent = () => {
+    if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新验证');
+  };
+  const read = () => fetchWithTimeout('/api/auth/session', { cache: 'no-store' }, 8000);
+  let response = await read();
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error || '账户状态读取失败，请稍后重试');
+  }
+  type SessionResponse = {
     authenticated?: boolean;
     account?: AccountProfile | null;
+    refreshAvailable?: boolean;
+    session?: AccountSessionMetadata;
   };
+  let data = await response.json().catch(() => ({})) as SessionResponse;
+  assertCurrent();
+  updateAccountAccess(data.session, Boolean(data.refreshAvailable));
+  if ((data.authenticated ? !await ensureFreshAccountAccess() : data.refreshAvailable && !await refreshAccountAccess())) {
+    return null;
+  }
+  if (data.refreshAvailable || (data.session && data.session.expiresAt - data.session.serverTime <= 15 * 60_000)) {
+    response = await read();
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(error.error || '账户状态读取失败，请稍后重试');
+    }
+    data = await response.json().catch(() => ({})) as SessionResponse;
+    assertCurrent();
+    updateAccountAccess(data.session);
+  }
+  assertCurrent();
   return data.authenticated && data.account ? data.account : null;
 }
 
@@ -92,7 +120,13 @@ export async function registerAccountWithEmail(
 }
 
 export async function logoutAccount(): Promise<void> {
-  await fetchWithTimeout('/api/auth/logout', { method: 'POST' }, 8000);
+  forgetAccountAccess();
+  const response = await fetchWithTimeout('/api/auth/logout', { method: 'POST' }, 8000);
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({})) as { error?: string };
+    throw new Error(data.error || '退出未完成，请稍后重试');
+  }
+  forgetAccountAccess();
 }
 
 export async function unbindAccountIdentity(provider: Exclude<AccountIdentityProvider, 'email'>): Promise<AccountProfile> {
@@ -104,14 +138,29 @@ export async function unbindAccountIdentity(provider: Exclude<AccountIdentityPro
 
 export async function completeWechatAccount(
   action: 'login' | 'bind',
-  uin: string,
+  signal?: AbortSignal,
 ): Promise<AccountProfile> {
   const response = await fetchWithTimeout('/api/auth/wechat/account', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, uin }),
+    body: JSON.stringify({ action }),
+    signal,
   }, 12000);
   return readAccountResponse(response);
+}
+
+export async function startWechatAccountLogin(signal?: AbortSignal): Promise<{ qrUrl: string; expiresAt: number }> {
+  const response = await fetchWithTimeout('/api/auth/wechat/start', { method: 'POST', signal }, 15000);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '微信二维码获取失败');
+  return data;
+}
+
+export async function pollWechatAccountLogin(signal?: AbortSignal): Promise<{ status: 'waiting' | 'scanned' | 'expired' | 'confirmed' }> {
+  const response = await fetchWithTimeout('/api/auth/wechat/poll', { method: 'POST', signal }, 90000);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || '微信身份验证失败');
+  return data;
 }
 
 export function startAccountOAuth(

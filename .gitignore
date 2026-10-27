@@ -1,4 +1,5 @@
 node_modules/
+client/public/vendor/folia/
 dist/
 .env
 *.log
@@ -19,6 +20,7 @@ server/downloads/*.exe
 .playwright-mcp
 .codex/
 .dsh-meow/
+/.tmp-*
 
 # Docker 部署持久化目录（deploy/deploy.sh docker 生成）
 /data/

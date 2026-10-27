@@ -10,6 +10,7 @@ import { lazyWithRetry } from '../lib/lazyWithRetry';
 import { LOCAL_BACKGROUND_MEDIA_REF, readLocalBackgroundMedia } from '../lib/localBackgroundMedia';
 
 const GalaxyBackground = lazyWithRetry(() => import('./galaxy/GalaxyBackground3D'), 'GalaxyBackground3D');
+const FoliaBackground = lazyWithRetry(() => import('./immersive/FoliaBackground'), 'FoliaBackground');
 const TopographyBackground = lazyWithRetry(() => import('./topography/TopographyBackground3D'), 'TopographyBackground3D');
 const SonicWorkshopBackground = lazyWithRetry(() => import('./topography/SonicWorkshopBackground'), 'SonicWorkshopBackground');
 
@@ -136,7 +137,8 @@ export default function RoomAmbientBackground({
   }, [showGalaxyShader]);
 
   return (
-    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden>
+    <div className="pointer-events-none absolute inset-0 z-0 overflow-hidden" aria-hidden={effectiveVisualMode !== 'folia' || undefined}>
+      {effectiveVisualMode === 'folia' ? <Suspense fallback={null}><FoliaBackground song={song} isPlaying={isPlaying} /></Suspense> : null}
       {localMedia?.type.startsWith('video/') ? (
         <video
           ref={localVideoRef}

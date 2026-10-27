@@ -93,12 +93,12 @@ export async function linkDeviceToUser(deviceId, userId) {
   return true;
 }
 
-export async function getUserIdForDevice(deviceId) {
+export async function getUserIdForDevice(deviceId, { authoritative = false } = {}) {
   const did = sanitizeDeviceId(deviceId);
   if (!did) return null;
 
   const cached = deviceToUser.get(did);
-  if (cached) return cached;
+  if (cached && !authoritative) return cached;
 
   const client = getRedisClient();
   if (!isRedisEnabled() || !client) throw new Error('设备身份存储暂不可用');

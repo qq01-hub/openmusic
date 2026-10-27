@@ -1,4 +1,5 @@
-.om-startup { position: fixed; inset: 0; z-index: 10000; isolation: isolate; overflow: hidden; background: #050505; color: #f4f4f5; outline: none; touch-action: none; }
+.om-startup { position: fixed; inset: 0; z-index: 10000; isolation: isolate; overflow: hidden; color: #f4f4f5; outline: none; touch-action: none; }
+.om-startup__backdrop { position: absolute; inset: 0; background: #050505; }
 .om-startup__atmosphere, .om-startup__canvas, .om-startup__grain { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .om-startup__atmosphere { background: radial-gradient(ellipse at 49% 37%, #34131966, transparent 57%), radial-gradient(ellipse at 72% 30%, #5c32631a, transparent 43%); }
 .om-startup__halo { position: absolute; left: 50%; top: 43%; width: min(76vw, 950px); height: 65%; transform: translate(-50%, -50%); background: radial-gradient(ellipse, #ff4d5512, #e17ce808 48%, transparent 70%); }

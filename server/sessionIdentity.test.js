@@ -58,6 +58,7 @@ function guestBootstrapFixture() {
     resolveDeviceIdFromCookieHeader: (cookie) => cookie ? deviceId : '',
     resolveBodyDeviceId: (req) => req.body?.deviceId || '',
     resolveIdentityFromRequest: (req) => req.identity || null,
+    resolveAccountFromRequest: async () => null,
     SESSION_RENEW_WITHIN_SEC: 3600,
     createServerClientId: () => { created += 1; return 'guest_new_123'; },
     signClientId: () => 'fixture-signature',

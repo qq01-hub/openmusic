@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { fileURLToPath } from 'url';
+import { createDeploymentArchive } from './deployment-archive.mjs';
+import { assertBuildMemory, getBuildEnvironment } from './build-resources.mjs';
 import {
   mergeReleaseNotes,
   parseForcePrompt,
@@ -141,10 +143,11 @@ async function collectReleaseNotes() {
   return saved;
 }
 
+assertBuildMemory();
 await collectReleaseNotes();
 
 console.log('>>> 构建前端...');
-execSync('npm run build', { cwd: root, stdio: 'inherit' });
+execSync('npm run build', { cwd: root, stdio: 'inherit', env: getBuildEnvironment() });
 
 console.log('>>> 组装部署目录...');
 rm(outDir);
@@ -194,15 +197,7 @@ fs.writeFileSync(
 );
 
 console.log('>>> 打包 zip...');
-rm(archivePath);
-fs.mkdirSync(path.dirname(archivePath), { recursive: true });
-
-if (process.platform === 'win32') {
-  const ps = `Compress-Archive -Path '${outDir.replace(/'/g, "''")}\\*' -DestinationPath '${archivePath.replace(/'/g, "''")}' -Force`;
-  execSync(`powershell -NoProfile -Command "${ps}"`, { stdio: 'inherit' });
-} else {
-  execSync(`cd "${outDir}" && zip -r "${archivePath}" .`, { stdio: 'inherit' });
-}
+createDeploymentArchive(outDir, archivePath);
 
 const versionPath = path.join(outDir, 'client', 'dist', 'version.json');
 if (fs.existsSync(versionPath)) {

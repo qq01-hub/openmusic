@@ -5,9 +5,8 @@ const FILEHELPER_ORIGIN = 'https://szfilehelper.weixin.qq.com';
 export const WX_PROXY_MOUNT = '/wx-proxy';
 export const WX_ROOT_CGI_MOUNT = '/cgi-bin';
 
-const SKIP_REQ_HEADERS = new Set([
-  'host', 'connection', 'content-length', 'transfer-encoding',
-  'accept-encoding', 'origin', 'referer',
+const FORWARDED_REQ_HEADERS = new Set([
+  'content-type', 'range', 'if-range', 'x-requested-with',
 ]);
 
 const SKIP_RES_HEADERS = new Set([
@@ -324,10 +323,11 @@ function readWechatXmlField(bodyText, field) {
   }
 }
 
-function rememberLoginCookies(pathname, bodyText, upstream) {
-  if (!String(pathname || '').includes('webwxnewloginpage')) return null;
+function rememberLoginCookies(target, bodyText, upstream) {
+  const hosts = new Set(['szfilehelper.weixin.qq.com', 'filehelper.weixin.qq.com', 'wx.qq.com', 'wx2.qq.com', 'wx8.qq.com']);
+  if (target.protocol !== 'https:' || target.port || target.username || target.password || !hosts.has(target.hostname) || target.pathname !== '/cgi-bin/mmwebwx-bin/webwxnewloginpage' || upstream.status !== 200) return null;
   const ret = readWechatXmlField(bodyText, 'ret');
-  if (ret && ret !== '0') return null;
+  if (ret !== '0') return null;
   const wxsid = readWechatXmlField(bodyText, 'wxsid');
   const wxuin = readWechatXmlField(bodyText, 'wxuin');
   if (!wxsid || !/^\d{1,32}$/u.test(String(wxuin || '').trim())) return null;
@@ -427,8 +427,8 @@ function buildUpstreamHeaders(req, targetUrl, bodyBuffer) {
 
   for (const [key, value] of Object.entries(req.headers)) {
     const lower = key.toLowerCase();
-    if (SKIP_REQ_HEADERS.has(lower)) continue;
-    if (lower in headers) continue;
+    if (!FORWARDED_REQ_HEADERS.has(lower)) continue;
+    if (Object.keys(headers).some((name) => name.toLowerCase() === lower)) continue;
     if (typeof value === 'string') headers[key] = value;
   }
 
@@ -585,7 +585,7 @@ async function forwardWxUpstream(fetchWithTimeout, req, res, targetUrl, errorLab
 
   const buffer = Buffer.from(await upstream.arrayBuffer());
   const bodyText = buffer.toString('utf8');
-  const verifiedWechatUin = rememberLoginCookies(upstreamTarget.pathname, bodyText, upstream);
+  const verifiedWechatUin = rememberLoginCookies(upstreamTarget, bodyText, upstream);
   if (verifiedWechatUin) appendWechatLoginProofCookie(res, verifiedWechatUin, cookieOptions);
 
   if (process.env.DEBUG_WX === '1' && upstreamTarget.pathname.includes('webwxinit')) {

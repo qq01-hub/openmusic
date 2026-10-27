@@ -1,0 +1,12 @@
+bodian-music-api
+
+Extracted from Mintcolour/folia-major, commit 742ae4c172d471b253f53945e42b71887141988c.
+Source: https://github.com/Mintcolour/folia-major
+Original project: https://github.com/chthollyphile/folia-major
+License: GNU Affero General Public License, version 3 (see LICENSE).
+
+QR protocol investigation reference:
+https://github.com/MoeclubM/PyBodian/commit/79ed7e25234efa07f4a5445ca10fdf06acedba0d
+This reference identified authType 10 for the QR flow; it is not an official API specification.
+
+This package is an independent client and is not affiliated with Bodian or Kuwo.

@@ -8,6 +8,8 @@
  * 鉴权：Authorization: Bearer <metingApiAuth>（需与 Meting「API Token」一致）
  */
 import { fetchMeting, formatMetingFetchError } from './metingFetch.js';
+import { createMetingAssertion } from './metingAssertion.js';
+import { getMetingRequestContext } from './metingUpstream.js';
 import { getMetingUpstreamBases } from './metingUpstream.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 
@@ -83,6 +85,7 @@ async function metingAdminFetch(path, { method = 'GET', body, timeoutMs = 20000 
           Authorization: `Bearer ${auth}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
+          ...createMetingAssertion(auth, url, getMetingRequestContext(), { method, body: body === undefined ? '' : JSON.stringify(body) }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
       },

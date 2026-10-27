@@ -8,6 +8,7 @@ WORKDIR /app
 # vite.config.ts 构建期会读取 server/seoFiles.js、scripts/app-version.mjs、release-notes.json
 COPY server ./server
 COPY scripts ./scripts
+COPY vendor/folia ./vendor/folia
 COPY release-notes.json ./release-notes.json
 COPY client/package.json client/package-lock.json* ./client/
 RUN --mount=type=cache,target=/root/.npm cd client && npm ci

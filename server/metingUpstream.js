@@ -6,6 +6,7 @@ import { getRuntimeConfig } from './runtimeConfig.js';
 import { createMetingResponseCache } from './metingCache.js';
 import { filterSongPayloadByArtist } from './songArtistFilter.js';
 import { incrementMetric } from './logger.js';
+import { createMetingAssertion } from './metingAssertion.js';
 
 // METING_API_URL 支持英文逗号分隔多个上游；METING_API_AUTH 同样支持逗号分隔：
 // 与 URL 一一对应；只填一个则应用到所有上游。
@@ -29,7 +30,7 @@ const METING_CACHE_TTLS = {
 const metingRequestContext = new AsyncLocalStorage();
 
 export function runWithMetingRequestContext(context, fn) {
-  return metingRequestContext.run(context && typeof context === 'object' ? context : {}, fn);
+  return metingRequestContext.run({ ...getMetingRequestContext(), ...(context && typeof context === 'object' ? context : {}) }, fn);
 }
 
 export function getMetingRequestContext() {
@@ -260,14 +261,17 @@ export function getMetingBearerAuthForUrl(rawUrl) {
 
 export function buildMetingAuthHeaders(rawUrl) {
   const auth = getMetingBearerAuthForUrl(rawUrl);
-  return auth ? { Authorization: `Bearer ${auth}` } : {};
+  return auth ? { Authorization: `Bearer ${auth}`, ...createMetingAssertion(auth, rawUrl, getMetingRequestContext()) } : {};
 }
 
 function buildUpstreamRequest(upstream, query) {
   const params = new URLSearchParams(query);
+  params.delete('auth');
+  params.delete('roomId');
+  params.delete('room_id');
   // 公共 /api 的 auth 查询参数（兼容旧镜像）；定制接口改走 Bearer
   const ctx = getMetingRequestContext();
-  const roomId = String(ctx.roomId || query?.roomId || '').trim();
+  const roomId = String(ctx.roomId || '').trim().toUpperCase();
   const server = String(query?.server || 'netease');
   const scoped = roomNeedsScopedProxy(roomId, server, query?.type);
 
@@ -291,8 +295,6 @@ function buildUpstreamRequest(upstream, query) {
   }
 
   // 公共 API：不带 roomId，只用全站 Cookie 池
-  params.delete('roomId');
-  params.delete('room_id');
   if (!upstream.auth) {
     throw new Error('未配置 Meting API Token：请在管理后台填写与 Meting「API Token」一致的令牌');
   }
@@ -324,12 +326,17 @@ function stableJson(value) {
 function buildMetingCacheKey(query, options) {
   const context = getMetingRequestContext();
   const quality = String(query?.quality || '').trim();
+  const roomId = String(context.roomId || '').trim().toUpperCase();
+  const server = String(query?.server || 'netease');
+  const scoped = roomNeedsScopedProxy(roomId, server, query?.type);
+  const accountScope = scoped ? createHash('sha256').update(getRoomScopedAccount(roomId, server).cookie).digest('hex') : '';
   return `${upstreamSignature}\n${stableJson({
     query,
     // URL 缓存必须按音质隔离，避免低音质结果复用到高音质请求。
     quality,
     options: { method: options?.method || 'GET', redirect: options?.redirect || '' },
-    roomId: context.roomId || '',
+    roomId,
+    accountScope,
   })}`;
 }
 
@@ -387,6 +394,7 @@ async function requestUpstream(upstream, query, options, timeoutMs) {
   };
   for (let attempt = 0; attempt < UPSTREAM_ATTEMPTS; attempt += 1) {
     try {
+      Object.assign(mergedOptions.headers, createMetingAssertion(upstream.auth, built.url, getMetingRequestContext(), { method: options?.method || 'GET', body: options?.body || '' }));
       const response = await fetchMeting(built.url, mergedOptions, timeoutMs);
       // 网络抖动和 5xx 快速重试一次；4xx 多为鉴权/参数问题，直接交给切换逻辑。
       if (response.status >= 500 && attempt + 1 < UPSTREAM_ATTEMPTS) continue;
@@ -618,7 +626,7 @@ async function probeUpstream(upstream) {
   upstream.lastProbeAt = Date.now();
   try {
     const built = buildUpstreamRequest(upstream, PROBE_QUERY);
-    const response = await fetchMeting(built.url, { headers: built.headers }, PROBE_TIMEOUT_MS);
+    const response = await fetchMeting(built.url, { headers: { ...built.headers, ...createMetingAssertion(upstream.auth, built.url) } }, PROBE_TIMEOUT_MS);
     if (response.status >= 400 && response.status !== 404) {
       markFailure(upstream, `健康探测返回 ${response.status}`, PROBE_QUERY);
       upstream.lastProbeOk = false;

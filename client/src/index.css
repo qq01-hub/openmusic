@@ -296,7 +296,6 @@ body {
 .home-hero-stage {
   opacity: 0;
   transform: translate3d(0, 22px, 0);
-  filter: blur(10px);
   animation: home-hero-in 0.95s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
@@ -332,6 +331,19 @@ body {
   transform: none;
 }
 
+.home-hero-handoff .home-hero-stage {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  filter: none;
+}
+
+[data-home-startup] *,
+[data-home-startup] *::before,
+[data-home-startup] *::after {
+  animation-play-state: paused !important;
+}
+
 @keyframes home-hero-gradient-in {
   to {
     opacity: 1;
@@ -359,13 +371,24 @@ body {
   to {
     opacity: 1;
     transform: translate3d(0, 0, 0);
-    filter: blur(0);
   }
 }
 
 /* 渐变标题呼吸光晕 */
 .home-gradient-glow {
   animation: home-gradient-breathe 4.8s ease-in-out infinite;
+}
+
+.home-page .home-gradient-glow .rb-gradient-text-flow {
+  animation: none;
+  background-position: 50% 50%;
+}
+
+[data-home-quiet] .rb-gradient-text-flow,
+[data-home-quiet] .rb-shiny-text,
+[data-home-quiet] .rb-border-glow__ring,
+[data-home-quiet] .home-gradient-glow {
+  animation: none;
 }
 
 @keyframes home-gradient-breathe {
@@ -480,6 +503,10 @@ body {
 
 .rb-border-glow--edge .rb-border-glow__ring {
   opacity: calc(var(--bg-glow-strength, 0) * 0.95);
+}
+
+.home-page .rb-border-glow--edge:not(:hover) .rb-border-glow__ring {
+  animation-play-state: paused;
 }
 
 .rb-border-glow__inner {

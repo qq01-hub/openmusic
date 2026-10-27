@@ -114,6 +114,7 @@ export interface AuroraProps {
   time?: number;
   speed?: number;
   className?: string;
+  onUnavailable?: () => void;
 }
 
 /** React Bits Aurora — WebGL aurora background (via ogl). */
@@ -123,9 +124,10 @@ export default function Aurora({
   blend = 0.5,
   speed = 1.0,
   className = '',
+  onUnavailable,
 }: AuroraProps) {
-  const propsRef = useRef({ colorStops, amplitude, blend, speed });
-  propsRef.current = { colorStops, amplitude, blend, speed };
+  const propsRef = useRef({ colorStops, amplitude, blend, speed, onUnavailable });
+  propsRef.current = { colorStops, amplitude, blend, speed, onUnavailable };
 
   const ctnDom = useRef<HTMLDivElement>(null);
 
@@ -133,12 +135,24 @@ export default function Aurora({
     const ctn = ctnDom.current;
     if (!ctn) return;
 
-    const renderer = new Renderer({
-      alpha: true,
-      premultipliedAlpha: true,
-      antialias: true,
-    });
+    let renderer: Renderer;
+    try {
+      renderer = new Renderer({
+        alpha: true,
+        premultipliedAlpha: true,
+        antialias: false,
+      });
+    } catch (error) {
+      console.warn('首页动态背景初始化失败，已使用静态背景', error);
+      propsRef.current.onUnavailable?.();
+      return;
+    }
     const gl = renderer.gl;
+    if (!renderer.isWebgl2) {
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      propsRef.current.onUnavailable?.();
+      return;
+    }
     gl.clearColor(0, 0, 0, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -153,12 +167,14 @@ export default function Aurora({
       if (!ctn) return;
       const width = ctn.offsetWidth;
       const height = ctn.offsetHeight;
+      renderer.dpr = Math.min(1, Math.sqrt(900_000 / Math.max(1, width * height)));
       renderer.setSize(width, height);
       if (program) {
-        program.uniforms.uResolution.value = [width, height];
+        program.uniforms.uResolution.value = [gl.canvas.width, gl.canvas.height];
       }
     }
-    window.addEventListener('resize', resize);
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(ctn);
 
     const geometry = new Triangle(gl);
     if (geometry.attributes.uv) {
@@ -186,27 +202,59 @@ export default function Aurora({
     ctn.appendChild(gl.canvas);
 
     let animateId = 0;
+    let lastFrame = -Infinity;
+    let visible = true;
+    let heldStops = propsRef.current.colorStops;
     const update = (t: number) => {
+      animateId = 0;
+      if (document.hidden || !visible) return;
       animateId = requestAnimationFrame(update);
+      if (t - lastFrame < 1000 / 30 - .5) return;
+      lastFrame = t;
       const current = propsRef.current;
       if (program) {
         program.uniforms.uTime.value = t * 0.01 * current.speed * 0.1;
         program.uniforms.uAmplitude.value = current.amplitude;
         program.uniforms.uBlend.value = current.blend;
-        program.uniforms.uColorStops.value = current.colorStops.map((hex) => {
-          const c = new Color(hex);
-          return [c.r, c.g, c.b];
-        });
+        if (heldStops !== current.colorStops) {
+          heldStops = current.colorStops;
+          program.uniforms.uColorStops.value = heldStops.map((hex) => {
+            const color = new Color(hex);
+            return [color.r, color.g, color.b];
+          });
+        }
         renderer.render({ scene: mesh });
       }
     };
-    animateId = requestAnimationFrame(update);
+    const syncVisibility = () => {
+      cancelAnimationFrame(animateId);
+      animateId = 0;
+      if (!document.hidden && visible) {
+        lastFrame = -Infinity;
+        animateId = requestAnimationFrame(update);
+      }
+    };
+    const visibilityObserver = new IntersectionObserver(([entry]) => {
+      visible = entry.isIntersecting;
+      syncVisibility();
+    });
+    const contextLost = () => {
+      cancelAnimationFrame(animateId);
+      propsRef.current.onUnavailable?.();
+    };
+    visibilityObserver.observe(ctn);
+    document.addEventListener('visibilitychange', syncVisibility);
+    gl.canvas.addEventListener('webglcontextlost', contextLost);
+    syncVisibility();
 
     resize();
 
     return () => {
       cancelAnimationFrame(animateId);
-      window.removeEventListener('resize', resize);
+      resizeObserver.disconnect();
+      visibilityObserver.disconnect();
+      document.removeEventListener('visibilitychange', syncVisibility);
+      gl.canvas.removeEventListener('webglcontextlost', contextLost);
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas);
       }

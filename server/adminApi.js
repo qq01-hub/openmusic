@@ -21,6 +21,7 @@ import {
   ackPermanentDecisionNotice,
 } from './permanentApplication.js';
 import { getRedisClient } from './roomStorage.js';
+import { riskControl, RiskControlError } from './riskControl.js';
 import {
   getMetingUpstreamStatus,
   resetMetingUpstreamCooldown,
@@ -278,6 +279,7 @@ const AUDIT_ACTION_GROUPS = {
   auth: ['login_ok', 'login_fail', 'logout'],
   oauth: ['linuxdo_bind', 'linuxdo_unbind', 'github_bind', 'github_unbind'],
   account: ['set_credentials', 'set_credentials_fail', 'set_entry_path'],
+  risk: ['risk_account_update', 'risk_policy_update'],
   config: [
     'set_runtime_config',
     'reset_music_api_circuit',
@@ -582,6 +584,7 @@ export function mountAdminApi(app, {
   allowedOrigins = null,
   broadcastRoomUpdate = null,
   clearRoomOwnerBindings = null,
+  issueOAuthState,
 }) {
   const requireAdminOrigin = createRequireAdminOrigin(allowedOrigins);
 
@@ -669,6 +672,15 @@ export function mountAdminApi(app, {
     res.json({ ok: true });
   });
 
+  async function startAdminOAuth(req, res, provider, signState, buildAuthorizeUrl, purpose) {
+    try {
+      const state = await issueOAuthState(req, res, provider, signState, { purpose });
+      return res.redirect(buildAuthorizeUrl(state));
+    } catch {
+      return res.status(503).json({ error: '授权暂不可用，请稍后重试', code: 'OAUTH_UNAVAILABLE' });
+    }
+  }
+
   // ---------- Linux.do OAuth：后台登录的一种额外方式 ----------
   // 只有「已经用账号密码登录过的管理员」才能把自己绑定到一个 Linux.do 账号；
   // Linux.do 本身不能凭空创建新的管理员权限，绑定关系随现有唯一管理员账号存储。
@@ -683,14 +695,12 @@ export function mountAdminApi(app, {
 
   app.get('/api/admin/linuxdo/bind/start', requireAdmin, (req, res) => {
     if (!isLinuxdoConfigured()) return res.status(400).json({ error: 'Linux.do 登录未配置' });
-    const state = signLinuxdoState({ purpose: 'admin-bind' });
-    res.redirect(buildLinuxdoAuthorizeUrl(state));
+    return startAdminOAuth(req, res, 'linuxdo', signLinuxdoState, buildLinuxdoAuthorizeUrl, 'admin-bind');
   });
 
   app.get('/api/admin/linuxdo/login/start', (req, res) => {
     if (!isLinuxdoConfigured()) return res.status(400).json({ error: 'Linux.do 登录未配置' });
-    const state = signLinuxdoState({ purpose: 'admin-login' });
-    res.redirect(buildLinuxdoAuthorizeUrl(state));
+    return startAdminOAuth(req, res, 'linuxdo', signLinuxdoState, buildLinuxdoAuthorizeUrl, 'admin-login');
   });
 
   // Linux.do / GitHub 的 OAuth 应用各自只能登记一个回调地址，房主绑定流程和这里的
@@ -752,14 +762,12 @@ export function mountAdminApi(app, {
 
   app.get('/api/admin/github/bind/start', requireAdmin, (req, res) => {
     if (!isGithubConfigured()) return res.status(400).json({ error: 'GitHub 登录未配置' });
-    const state = signGithubState({ purpose: 'admin-bind' });
-    res.redirect(buildGithubAuthorizeUrl(state));
+    return startAdminOAuth(req, res, 'github', signGithubState, buildGithubAuthorizeUrl, 'admin-bind');
   });
 
   app.get('/api/admin/github/login/start', (req, res) => {
     if (!isGithubConfigured()) return res.status(400).json({ error: 'GitHub 登录未配置' });
-    const state = signGithubState({ purpose: 'admin-login' });
-    res.redirect(buildGithubAuthorizeUrl(state));
+    return startAdminOAuth(req, res, 'github', signGithubState, buildGithubAuthorizeUrl, 'admin-login');
   });
 
   // 同上：/api/admin/github/callback 永远不会被 GitHub 命中，真正处理逻辑在
@@ -848,6 +856,44 @@ export function mountAdminApi(app, {
       auditStoredIn: 'redis',
     });
   });
+
+  const riskHandler = (handler) => async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, private');
+    try { await handler(req, res); }
+    catch (error) {
+      res.status(error instanceof RiskControlError ? error.status : 503).json({
+        error: error instanceof RiskControlError ? error.message : '风控服务暂不可用',
+        code: error instanceof RiskControlError ? error.code : 'RISK_STORAGE_UNAVAILABLE',
+      });
+    }
+  };
+
+  app.get('/api/admin/risk/accounts', requireAdmin, riskHandler(async (req, res) => {
+    res.json(await riskControl.list(req.query));
+  }));
+  app.get('/api/admin/risk/accounts/:id', requireAdmin, riskHandler(async (req, res) => {
+    res.json(await riskControl.detail(req.params.id));
+  }));
+  app.put('/api/admin/risk/accounts/:id', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const decision = await riskControl.setDecision(req.params.id, req.body);
+    appendAdminAudit('risk_account_update', { accountId: req.params.id, status: decision.status, tags: decision.tags, reason: decision.reason }, getClientIp?.(req) || req.ip || '');
+    if (decision.status === 'blocked') {
+      io.to(`account:${req.params.id}`).emit('account_session_invalidated', { reason: 'risk_blocked', stopReconnect: true });
+      io.in(`account:${req.params.id}`).disconnectSockets(true);
+    }
+    res.json({ ok: true, ...decision });
+  }));
+  app.get('/api/admin/risk/policy', requireAdmin, riskHandler(async (_req, res) => {
+    res.json(await riskControl.getPolicy());
+  }));
+  app.put('/api/admin/risk/policy', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const policy = await riskControl.setPolicy(req.body);
+    appendAdminAudit('risk_policy_update', { policy }, getClientIp?.(req) || req.ip || '');
+    res.json(policy);
+  }));
+  app.get('/api/admin/risk/events', requireAdmin, riskHandler(async (_req, res) => {
+    res.json({ items: await riskControl.events() });
+  }));
 
   app.get('/api/admin/audit', requireAdmin, async (req, res) => {
     const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10) || 1);

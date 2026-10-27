@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { isWeakPlaybackDevice } from '../../lib/weakPlaybackDevice';
 import { isMobileDevice } from '../../lib/audioUnlock';
 
@@ -18,7 +18,9 @@ function canUseAurora(): boolean {
   if (isMobileDevice()) return false;
   try {
     const canvas = document.createElement('canvas');
-    return Boolean(canvas.getContext('webgl2') || canvas.getContext('webgl'));
+    const context = canvas.getContext('webgl2');
+    context?.getExtension('WEBGL_lose_context')?.loseContext();
+    return Boolean(context);
   } catch {
     return false;
   }
@@ -36,6 +38,7 @@ function StaticGlow() {
 /** 首页背景：React Bits Aurora。 */
 export default function HomeAuroraBackdrop({ paused = false }: { paused?: boolean }) {
   const [enabled, setEnabled] = useState(false);
+  const handleUnavailable = useCallback(() => setEnabled(false), []);
 
   useEffect(() => {
     if (!paused) setEnabled(canUseAurora());
@@ -46,7 +49,7 @@ export default function HomeAuroraBackdrop({ paused = false }: { paused?: boolea
       {enabled && !paused ? (
         <Suspense fallback={<StaticGlow />}>
           <div className="absolute inset-0 opacity-[0.68]">
-            <Aurora colorStops={BRAND_STOPS} amplitude={1.05} blend={0.62} speed={0.55} />
+            <Aurora colorStops={BRAND_STOPS} amplitude={1.05} blend={0.62} speed={0.55} onUnavailable={handleUnavailable} />
           </div>
           <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#050505]/35 to-[#050505]/85" />
         </Suspense>

@@ -35,7 +35,7 @@ export function formatUptime(sec: number) {
 
 export function formatAuditTime(at: number) {
   try {
-    return new Date(at).toLocaleString('zh-CN', { hour12: false });
+    return new Date(at).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' });
   } catch {
     return String(at);
   }
@@ -88,6 +88,10 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return `更新登录地址 ${entry.path || ''}`;
     case 'set_runtime_config':
       return '更新运行配置';
+    case 'risk_account_update':
+      return `更新账户风控 ${entry.accountId || ''}（${entry.status === 'blocked' ? '限制访问' : entry.status === 'watch' ? '关注' : '正常'}）`;
+    case 'risk_policy_update':
+      return '更新全局请求额度';
     case 'reset_music_api_circuit':
       return `重置音源熔断 ${entry.id || ''}`;
     case 'set_announcement':

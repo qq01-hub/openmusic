@@ -308,6 +308,9 @@ export default function ImmersiveFxSettingsPanel({
       </div>
 
       <div className="fx-tab-scroll">
+        {visualMode === 'folia' && <div className="px-4 py-3">
+          <button type="button" className="w-full rounded-xl bg-white/15 px-4 py-3 text-white" onClick={() => window.dispatchEvent(new Event('openmusic:folia-open-settings'))}>打开 Folia 歌词、背景与动画调节</button>
+        </div>}
         {tab === 'preset' ? (
           <div className="fx-tab-page active" role="tabpanel">
             <FxSectionLabel>视觉预设</FxSectionLabel>

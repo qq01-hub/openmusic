@@ -6,6 +6,7 @@ import {
 } from '../lib/roomVisualPreset';
 
 const PRESET_DESC: Record<RoomVisualMode, string> = {
+  folia: '15 种歌词主题 · 6 类背景',
   off: '关闭粒子背景',
   'cover-bg': '封面铺满背景',
   emily: '专辑封面粒子',

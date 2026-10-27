@@ -97,7 +97,7 @@ npm start   # http://0.0.0.0:4000
 | `PORT` | | 默认 `4000` |
 | `NODE_ENV` | 推荐 | 生产设为 `production` |
 | `CLIENT_URL` | 生产必填 | 前端 Origin（https） |
-| `CLIENT_ID_SECRET` | 生产必填 | 会话签名密钥（向导自动生成） |
+| `CLIENT_ID_SECRET` | 生产必填 | 设备身份与配置加密引导密钥，向导自动生成且必须稳定保存，不是向前端下发的登录私钥 |
 | `TRUST_PROXY` | 推荐 | 反代后设为 `1`；仅当 TCP 对端在 `TRUSTED_PROXY_IPS` 中时才采信转发 IP 头 |
 | `TRUSTED_PROXY_IPS` | 反代必填 | 逗号分隔的反向代理 TCP 地址；本机 Nginx 默认可用 `127.0.0.1,::1`，容器部署须填网关/代理地址 |
 | `CLIENT_IP_HEADER` | 有 CDN | Cloudflare：`CF-Connecting-IP`；EdgeOne：`iqp` |
@@ -116,6 +116,10 @@ REDIS_URL=redis://127.0.0.1:6379/0
 ```
 
 Meting / 房间凭证密钥等由向导或管理后台配置。使用汽水音乐时，Meting 须包含 `qishui` provider；网易、QQ、汽水均优先房间绑定账号，否则走全站共享池。
+
+普通用户访问令牌固定 3 天，refresh 凭证首次登录起 30 天绝对有效，均通过 HttpOnly Cookie 传递，原 `ACCOUNT_SESSION_TTL_SEC` 不再调整登录期限，旧 `API_SIGN_REQUIRED` 与 `ALLOW_INSECURE_HTTP_API` 不再控制账户业务授权，也不能开放匿名接口
+
+登录私钥由服务端生成并加密保存到 Redis，必须备份既有凭证加密主密钥、稳定的 `CLIENT_ID_SECRET`、运行时配置与 Redis，不能只备份公钥或在重启时重建已有密钥，Web 与服务端需配套升级，升级后旧账户会话需要重新登录
 
 ---
 
@@ -226,6 +230,9 @@ npm run package:build      # 交互式录入更新说明，组装 release zip
 
 - `forcePrompt: true` = 强制弹窗更新；`false` = 静默发版
 - CDN 勿长期缓存 `index.html` 与 `/api/*`
+- Windows 发版 zip 使用 .NET 文件流压缩，不再调用 `Compress-Archive`，压缩成功后才替换旧 zip，失败保留旧包，压缩包根目录结构保持不变
+- 打包构建的 Node 堆上限为 1536 MiB，已有更低上限会保留，线程池最多 2 个线程，Gzip/Brotli 预压缩逐个执行，Brotli 使用质量 5，避免多任务最高质量压缩挤占系统内存，堆限制不等于整个进程的内存限制
+- 打包前检查可用物理内存，不足 3 GiB 时直接停止，不强行启动构建，避免低内存环境持续换页或卡死
 
 ---
 

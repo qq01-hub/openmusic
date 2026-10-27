@@ -2302,7 +2302,7 @@ function scheduleLobbyCoverResolve(room) {
   });
 }
 
-export async function listRooms(userId = '') {
+export async function listRooms(userId = '', { resolveCovers = true } = {}) {
   const now = Date.now();
   if (cachedListRooms && now - cachedListRoomsAt < LIST_ROOMS_CACHE_MS) {
     return personalizeLobbyRooms(cachedListRooms, userId);
@@ -2310,8 +2310,8 @@ export async function listRooms(userId = '') {
 
   const visible = Array.from(rooms.values()).filter(isRoomVisibleInLobby);
   // 不阻塞响应：已有直链同步规范化，缺封面后台解析
-  for (const room of visible) {
-    scheduleLobbyCoverResolve(room);
+  if (resolveCovers) {
+    for (const room of visible) scheduleLobbyCoverResolve(room);
   }
 
   cachedListRooms = visible

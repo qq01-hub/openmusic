@@ -1,0 +1,448 @@
+@import "tailwindcss";
+
+/* Folium mod stylesheets (registries.styles) live in this layer. Declaring it
+   after Tailwind's layers makes mod rules win over host utilities without
+   !important, independent of when a mod's <style> is injected. */
+@layer folium-mods;
+
+/* 全局字体栈（#659）：Tailwind 默认的 --font-sans / --font-serif 里没有任何 CJK 家族，中文只能靠系统回退。
+   Arch 系默认回退到文泉驿正黑，它的竖排度量是坏的（大量字形 advanceHeight = 0），Bravais 墙面等
+   writing-mode: vertical-rl 的中文会叠在同一点。这里在通用族之前补上与 src/utils/fontStacks.ts 一致的 CJK 家族，
+   拉丁文仍走原来的系统字体。 */
+@theme {
+  --font-cjk-sans: "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans JP", "Source Han Sans JP";
+  --font-cjk-serif: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", "Noto Serif JP", "Source Han Serif JP";
+  --font-sans: ui-sans-serif, system-ui, var(--font-cjk-sans), sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, var(--font-cjk-serif), serif;
+}
+
+@font-face {
+  font-family: 'Folia Noto Serif SC';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('https://cdn.jsdmirror.cn/npm/@fontsource/noto-serif-sc@5.2.9/files/noto-serif-sc-chinese-simplified-400-normal.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Folia Noto Serif SC';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('https://cdn.jsdmirror.cn/npm/@fontsource/noto-serif-sc@5.2.9/files/noto-serif-sc-chinese-simplified-500-normal.woff2') format('woff2');
+}
+
+/* Custom Global Styles */
+body {
+  background-color: #09090b;
+  color: #e4e4e7;
+  font-family: 'Inter', var(--font-cjk-sans), sans-serif;
+  overflow: hidden;
+}
+
+/* 播放页空闲时隐藏鼠标指针。挂点在播放页的视觉层容器上，弹窗和浮动控件都在它外面，
+   不会被波及，所以不需要 !important。
+   后代选择器压得住 Tailwind 的 cursor-* 靠的不是特异性，而是这条规则**不在任何
+   @layer 里**：Tailwind v4 的工具类全在 @layer utilities 中，无层规则整体优先于有层
+   规则，与特异性无关（作用域内有 18 处 disabled:cursor-not-allowed，特异性比这条高）。
+   别把它挪进 @layer 或改写成 @utility，那会让这些元素在指针隐藏时露出光标。 */
+.cursor-auto-hidden,
+.cursor-auto-hidden * {
+  cursor: none;
+}
+
+/* The same layer, when the visualizer is put back in it after the entrance of a collection's
+   page that was opened from the wall (拼贴): it comes up in a fade and not in one frame, whatever
+   is over it by then. Opacity alone, of the layer. When the class is set is wallLayer.ts's
+   (`fadesIn`); with the wall's motion reduced it never is. */
+.visualizer-comes-up {
+  animation: visualizer-comes-up 350ms ease-in-out;
+}
+
+@keyframes visualizer-comes-up {
+  from { opacity: 0; }
+}
+
+:root {
+  --scrollbar-track: #18181b;
+  --scrollbar-thumb: #3f3f46;
+  --scrollbar-thumb-hover: #52525b;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+@media (max-width: 768px) {
+  .mobile-hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .mobile-hide-scrollbar::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
+.visualizer-overlay-scrollbar {
+  /* Remove standard scrollbar-width/color to prevent Chromium from ignoring -webkit-scrollbar styles */
+}
+
+.visualizer-overlay-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.visualizer-overlay-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.visualizer-overlay-scrollbar::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-color, rgba(255, 255, 255, 0.18));
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.visualizer-overlay-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover-color, rgba(255, 255, 255, 0.3));
+}
+
+.visualizer-overlay-scrollbar::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+/* Polaroid Card theme-adaptive styles */
+.theme-polaroid-card {
+  background-color: color-mix(in srgb, var(--bg-color) 95%, transparent) !important;
+  border-color: color-mix(in srgb, var(--text-primary) 5%, transparent) !important;
+  color: var(--text-primary) !important;
+  transition: all 0.3s ease;
+}
+
+.theme-polaroid-card:hover {
+  border-color: color-mix(in srgb, var(--text-primary) 32%, transparent) !important;
+}
+
+/* Glass panel (search box, sidebar) theme-adaptive styles */
+.theme-glass-panel {
+  background-color: color-mix(in srgb, var(--bg-color) 85%, transparent) !important;
+  border-color: color-mix(in srgb, var(--text-primary) 12%, transparent) !important;
+  color: var(--text-primary) !important;
+}
+
+/* Click-through: the window ignores real clicks but still receives forwarded mouse-move, so hover
+   styles would keep lighting up components nobody can reach. Only the unlock control stays live. */
+html[data-click-through='active'] body * {
+  pointer-events: none !important;
+}
+
+html[data-click-through='active'] body .click-through-interactive,
+html[data-click-through='active'] body .click-through-interactive * {
+  pointer-events: auto !important;
+}
+
+/* Remote control: during an audio transition the progress bar breathes a
+   soft glow, so the handoff reads at a glance without watching the timestamps.
+   The glow rides on an overlay sibling because the track itself clips overflow
+   to keep the fill's rounded ends, which would cut any shadow off the fill. */
+@keyframes remote-progress-transition-glow {
+
+  0%,
+  100% {
+    opacity: 0.5;
+    box-shadow: 0 0 4px 0 var(--transition-glow-color), 0 0 9px 0 var(--transition-glow-color);
+  }
+
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 7px 1px var(--transition-glow-color), 0 0 16px 3px var(--transition-glow-color);
+  }
+}
+
+.remote-progress-transition-glow {
+  animation: remote-progress-transition-glow 2.4s ease-in-out infinite;
+}
+
+/* 降级状态由 useMotionSettingsStore 同步到 <html data-reduce-motion>，不再直接跟随系统偏好。
+   见 stores/useMotionSettingsStore.ts。 */
+:root[data-reduce-motion~='uiMicroMotion'] .remote-progress-transition-glow {
+  animation: none;
+  opacity: 0.85;
+  box-shadow: 0 0 6px 0 var(--transition-glow-color);
+}
+
+/* Grid 顶部标题的面板开关：用户第一次进入 grid 视图时，让开关自己呼吸几下并把
+   "展开"文案短暂推出来，把"标题可以点开左侧面板"这件事主动说一次。
+   两段动画都有固定的结束时间，跑完自动还原成 hover 控制的静止态，不需要计时器。 */
+@keyframes grid-panel-toggle-hint {
+
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.85;
+  }
+
+  50% {
+    transform: scale(1.18);
+    opacity: 1;
+  }
+}
+
+.grid-panel-toggle-hint {
+  animation: grid-panel-toggle-hint 1.4s ease-in-out 3;
+}
+
+@keyframes grid-panel-toggle-hint-label {
+
+  0%,
+  100% {
+    max-width: 0;
+    opacity: 0;
+  }
+
+  12%,
+  76% {
+    max-width: 5rem;
+    opacity: 1;
+  }
+}
+
+.grid-panel-toggle-hint-label {
+  animation: grid-panel-toggle-hint-label 4.2s ease-in-out 1;
+}
+
+/* 关掉动画的用户改为静态展示文案，仍然拿得到这条提示。 */
+:root[data-reduce-motion~='uiMicroMotion'] .grid-panel-toggle-hint {
+  animation: none;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .grid-panel-toggle-hint-label {
+  animation: none;
+  max-width: 5rem;
+  opacity: 1;
+}
+
+/* 思索：自动进入下一章的读条。走 CSS 而不是 React state：它每帧都在变，
+   进 state 等于让整个教程层按帧重渲染，正是 frontend-runtime-guardrails 要挡的形状。
+   时长由内联的 animation-duration 给，因为它是 DSL 里的一个常量。 */
+@keyframes ponder-next-cue-countdown {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+}
+
+.ponder-next-cue-countdown {
+    animation-name: ponder-next-cue-countdown;
+    animation-timing-function: linear;
+    animation-fill-mode: forwards;
+    transform-origin: left center;
+}
+
+/* 思索：骨架框逐个落位。
+
+   一进场整幅骨架整齐地出现在那里，读起来像一张静态插图；让它们按声明顺序错开几十毫秒
+   落位，眼睛才会跟着「先是这一页，再是页里的这几块」走一遍，和字幕的讲述顺序对上。
+
+   幅度压得很小：它是入场，不是表演，落位之后紧接着就是真正要看的那段演示。 */
+@keyframes ponder-skeleton-in {
+    from { opacity: 0; transform: scale(0.97); }
+    to { opacity: 1; transform: scale(1); }
+}
+
+.ponder-skeleton-in {
+    animation: ponder-skeleton-in var(--pd-dur-enter) var(--pd-ease-arrive) both;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .ponder-skeleton-in {
+    animation: none;
+}
+
+/* 探索页：“换一批”时旧内容留在原地等新的，呼吸般地一明一暗表示正在读。
+   其余的移动都在 src/components/app/home/explore/exploreMotion.ts。 */
+@keyframes explore-waiting {
+    from { opacity: 1; }
+    to { opacity: 0.72; }
+}
+
+.explore-waiting > * {
+    animation: explore-waiting 900ms ease-in-out 300ms infinite alternate;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .explore-waiting > *,
+:root[data-reduce-motion~='uiMicroMotion'] [data-explore-ghost] .animate-pulse {
+    animation: none;
+}
+
+/* 探索页：指针指着一个条目时，它的图片朝指针倾斜，一道高光跟着指针走。
+   指针在图片上的位置由 exploreTilt.ts 每帧写到 [data-explore-tilt] 上：--ex-rx / --ex-ry 是角度，
+   --ex-px / --ex-py 是 -1…1（左、上为负）。这里只负责画。
+   只有正在跟指针的那一张带 transform：不动的图片不该各占一个合成层。 */
+[data-explore-tilt] {
+    /* 指针离开后慢慢回正。抬起（translate）和原来一样快。 */
+    transition: transform 500ms cubic-bezier(0.2, 0.7, 0.2, 1), translate 300ms ease-out;
+}
+
+[data-explore-tilt][data-explore-tilting] {
+    transform: perspective(900px) rotateX(var(--ex-rx, 0deg)) rotateY(var(--ex-ry, 0deg));
+    /* 跟着指针时只留很短的过渡，抹平两帧之间的跳动。 */
+    transition-duration: 140ms, 300ms;
+}
+
+.explore-sheen {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    opacity: 0;
+    background: radial-gradient(circle at calc(50% + var(--ex-px, 0) * 50%) calc(50% + var(--ex-py, 0) * 50%), rgb(255 255 255 / 0.2), transparent 60%);
+    transition: opacity 300ms ease-out;
+}
+
+[data-explore-tilting] .explore-sheen {
+    opacity: 1;
+}
+
+/* 图片上的播放钮比图片“高”一层：图片倾斜时它朝指针那边挪一点，不倾斜时回到原位。 */
+.explore-float {
+    transition: translate 140ms ease-out;
+}
+
+[data-explore-tilting] .explore-float {
+    translate: calc(var(--ex-px, 0) * 6px) calc(var(--ex-py, 0) * 6px);
+}
+
+/* 专辑封面后面的唱片：纹路、两道反光、中间的标签。滑出和转动写在元素自己的类名上。 */
+.explore-record {
+    background:
+        radial-gradient(circle, #0c0c0d 0 2.5%, color-mix(in srgb, var(--text-primary) 55%, #0c0c0d) 3% 15%, transparent 15.5%),
+        conic-gradient(from 20deg, transparent 0 18%, rgb(255 255 255 / 0.14) 25%, transparent 32% 68%, rgb(255 255 255 / 0.14) 75%, transparent 82%),
+        repeating-radial-gradient(circle, #121213 0 1px, #1c1c1e 1px 2.5px);
+    box-shadow: 0 0 0 1px rgb(255 255 255 / 0.06), 0 10px 22px -10px rgb(0 0 0 / 0.7);
+}
+
+/* 探索页：正在播放的那首歌。ExplorePlaying.tsx 把正在响的声音每帧写到它的条目上：
+   --ex-beat 是拍子，--ex-low / --ex-mid / --ex-high 是低、中、高三段的音量，都是 0…1。
+   暂停时这些变量不在，各处回到下面写的静止值。 */
+/* 两个放大量加起来，一张宽图每边多出不到 9 像素：一行图片四周只留了 8 像素。 */
+[data-explore-playing='sounding'] [data-explore-beat] {
+    scale: calc(1 + var(--ex-beat, 0) * 0.03);
+}
+
+.explore-ring {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border: 1.5px solid color-mix(in srgb, var(--text-primary) 60%, transparent);
+    opacity: var(--ex-beat, 0);
+    scale: calc(1 + var(--ex-beat, 0) * 0.03);
+}
+
+.explore-levels {
+    box-sizing: content-box;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 10px;
+}
+
+.explore-levels i {
+    display: block;
+    width: 3px;
+    height: 100%;
+    border-radius: 1px;
+    background: currentColor;
+    transform-origin: 50% 100%;
+    transition: transform 90ms linear;
+}
+
+.explore-levels i:nth-child(1) { transform: scaleY(calc(0.25 + var(--ex-low, 0.1) * 0.75)); }
+.explore-levels i:nth-child(2) { transform: scaleY(calc(0.25 + var(--ex-mid, 0.3) * 0.75)); }
+.explore-levels i:nth-child(3) { transform: scaleY(calc(0.25 + var(--ex-high, 0.05) * 0.75)); }
+
+:root[data-reduce-motion~='uiMicroMotion'] .explore-record,
+:root[data-reduce-motion~='uiMicroMotion'] .explore-float,
+:root[data-reduce-motion~='uiMicroMotion'] .explore-levels i {
+    transition: none;
+}
+
+/* 收藏星星：按下就是新状态，弹一下表示“记下了”。向平台发的请求在后台走，不让人等。 */
+@keyframes star-pop {
+    0% { transform: scale(0.55); }
+    60% { transform: scale(1.2); }
+    100% { transform: scale(1); }
+}
+
+.star-pop {
+    animation: star-pop 340ms cubic-bezier(0.3, 0.7, 0.3, 1) both;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .star-pop {
+    animation: none;
+}
+
+/* “定位正在播放的歌”按钮：按下时一圈光从按钮上散开，准星转一下落定，表示“去找了”。
+   歌单还没读完、要等后面的歌时，光圈一圈接一圈地散，直到找到或确定没有。 */
+@keyframes locate-ring {
+    from { transform: scale(1); opacity: 0.9; }
+    to { transform: scale(1.9); opacity: 0; }
+}
+
+@keyframes locate-mark {
+    from { transform: rotate(-90deg) scale(0.6); }
+    to { transform: rotate(0deg) scale(1); }
+}
+
+.locate-ring {
+    animation: locate-ring 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.locate-mark {
+    animation: locate-mark 420ms cubic-bezier(0.3, 1.3, 0.4, 1) both;
+}
+
+.locate-seeking {
+    animation: locate-ring 1100ms cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .locate-ring {
+    display: none;
+}
+
+:root[data-reduce-motion~='uiMicroMotion'] .locate-mark {
+    animation: none;
+}
+
+/* 不动的时候留一圈静止的光，仍然看得出还在找。 */
+:root[data-reduce-motion~='uiMicroMotion'] .locate-seeking {
+    animation: none;
+    opacity: 0.9;
+}

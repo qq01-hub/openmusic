@@ -1,5 +1,6 @@
 import type { FavoriteSong } from '../types';
 import { fetchWithTimeout } from '../api/http';
+import { getAccountSessionGeneration } from './accountAccessSession';
 
 export type FavoritesSyncStatus = 'idle' | 'pending' | 'syncing' | 'identity_same' | 'merged' | 'failed';
 
@@ -160,7 +161,7 @@ export async function syncFavoriteBatches(
   let dropped = 0;
   let last: FavoriteSyncBatchResponse = { success: true, favorites: [] };
 
-  for (let offset = 0; offset < songs.length; offset += FAVORITES_SYNC_BATCH_SIZE) {
+  for (let offset = 0; offset < Math.max(1, songs.length); offset += FAVORITES_SYNC_BATCH_SIZE) {
     const result = await syncBatch(songs.slice(offset, offset + FAVORITES_SYNC_BATCH_SIZE));
     if (!result.success) return { ...result, complete: false, imported, dropped };
     last = result;
@@ -171,14 +172,17 @@ export async function syncFavoriteBatches(
   return { ...last, success: true, complete: dropped === 0, imported, dropped };
 }
 
-export async function syncAccountFavorites(songs: FavoriteSong[], categories: string[] = []): Promise<FavoriteSyncResult> {
+export async function syncAccountFavorites(songs: FavoriteSong[], categories: string[] = [], accountId?: string): Promise<FavoriteSyncResult> {
+  const generation = getAccountSessionGeneration();
   return syncFavoriteBatches(songs, async (batch) => {
+    if (generation !== getAccountSessionGeneration()) return { success: false, error: '账户已变化，请重新迁移收藏' };
     const response = await fetchWithTimeout('/api/account/favorites/sync', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ songs: batch, categories }),
+      body: JSON.stringify({ songs: batch, categories, accountId }),
     }, 10000);
     const data = await response.json().catch(() => ({})) as FavoriteSyncBatchResponse;
+    if (generation !== getAccountSessionGeneration()) return { success: false, error: '账户已变化，请重新迁移收藏' };
     if (!response.ok || !data.success) return { success: false, error: data.error || '收藏同步失败' };
     return data;
   });

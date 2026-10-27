@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable", "DOM.AsyncIterable"],
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "strict": true,
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "noEmit": true,
+    "types": ["node", "vite/client"],
+    "paths": { "@/*": ["./upstream/src/*"], "bodian-music-api": ["./types/bodian/index.d.cts"], "qishui-music-api": ["./types/qishui/index.d.cts"] }
+  },
+  "include": ["stage.tsx", "useFoliaAssets.ts", "upstream/src/**/*.d.ts", "upstream/src/components/visualizer/**/tuning.ts", "upstream/src/components/visualizer/backgrounds/**/settings.ts"]
+}

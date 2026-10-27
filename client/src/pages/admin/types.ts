@@ -29,6 +29,7 @@ export interface MetingUpstreamStatus {
 
 export interface AdminAuditEntry {
   id: string;
+  accountId?: string;
   at: number;
   action: string;
   ip: string;
@@ -340,4 +341,4 @@ export interface AdminRoom {
   } | null;
 }
 
-export type AdminTabId = 'overview' | 'rooms' | 'bans' | 'reports' | 'notify' | 'donations' | 'settings' | 'audit';
+export type AdminTabId = 'overview' | 'rooms' | 'bans' | 'risk' | 'reports' | 'notify' | 'donations' | 'settings' | 'audit';

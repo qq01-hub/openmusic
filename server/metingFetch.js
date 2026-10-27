@@ -1,5 +1,6 @@
 import https from 'node:https';
 import http from 'node:http';
+import { isBlockedMediaHostname } from './mediaProxy.js';
 
 function isLoopbackHostname(hostname) {
   const value = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
@@ -9,8 +10,10 @@ function isLoopbackHostname(hostname) {
 }
 
 export function isAllowedMetingUrl(url) {
-  const parsed = new URL(url);
-  if (parsed.protocol === 'https:') return true;
+  let parsed;
+  try { parsed = new URL(url); } catch { return false; }
+  if (parsed.username || parsed.password) return false;
+  if (parsed.protocol === 'https:') return !isBlockedMediaHostname(parsed.hostname);
   if (parsed.protocol !== 'http:') return false;
   if (isLoopbackHostname(parsed.hostname)) return true;
   const dockerHostnames = ['meting-api', 'meting'];
@@ -25,6 +28,8 @@ export function isAllowedMetingUrl(url) {
 }
 
 function requestOnce(url, options = {}, timeoutMs = 10000) {
+  const configuredLimit = Number(options.maxResponseBytes);
+  const maxResponseBytes = Number.isSafeInteger(configuredLimit) && configuredLimit > 0 ? Math.min(configuredLimit, 16 * 1024 * 1024) : 16 * 1024 * 1024;
   const parsed = new URL(url);
   const isHttps = parsed.protocol === 'https:';
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('Meting 地址协议无效');
@@ -52,7 +57,18 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
       agent: undefined,
     }, (res) => {
       const chunks = [];
-      res.on('data', (chunk) => chunks.push(chunk));
+      let size = 0;
+      res.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > maxResponseBytes) {
+          reject(new Error('Meting 响应过大'));
+          res.destroy();
+          req.destroy();
+          return;
+        }
+        chunks.push(chunk);
+      });
+      res.on('error', reject);
       res.on('end', () => {
         const body = Buffer.concat(chunks);
         const text = () => body.toString('utf8');
@@ -76,6 +92,13 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
       req.destroy(error);
     };
     signal?.addEventListener('abort', abortRequest, { once: true });
+    const deadline = timeoutMs > 0 ? setTimeout(() => {
+      req.destroy(new Error('Meting 请求超时'));
+    }, timeoutMs) : null;
+    req.once('close', () => {
+      if (deadline) clearTimeout(deadline);
+      signal?.removeEventListener('abort', abortRequest);
+    });
     req.setTimeout(timeoutMs, () => {
       req.destroy(new Error('Meting 请求超时'));
     });

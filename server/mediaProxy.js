@@ -2,6 +2,9 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
+import http from 'node:http';
+import https from 'node:https';
+import { createGunzip, createInflate, createBrotliDecompress } from 'node:zlib';
 
 export const DEFAULT_MEDIA_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -60,31 +63,17 @@ function isNeteaseMusicHost(host) {
 }
 
 function isQishuiHost(host) {
-  return String(host || '').toLowerCase().includes('douyin');
+  return hostMatchesAnyDomain(host, ['douyinpic.com', 'douyinvod.com']);
 }
 
 /** 拒绝内网 / 链路本地 / 元数据主机，防止 SSRF */
 export function isBlockedMediaHostname(hostname) {
-  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '');
+  const host = String(hostname || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/u, '');
   if (!host || host === 'localhost') return true;
   if (host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) return true;
   if (host === 'metadata.google.internal' || host === 'metadata') return true;
 
-  if (
-    host === '::1'
-    || host === '127.0.0.1'
-    || host === '0.0.0.0'
-    || host.startsWith('10.')
-    || host.startsWith('192.168.')
-    || host.startsWith('169.254.')
-    || /^172\.(1[6-9]|2\d|3[0-1])\./.test(host)
-    || /^fc|^fd/i.test(host)
-    || /^fe80:/i.test(host)
-  ) {
-    return true;
-  }
-
-  return false;
+  return isIP(host) ? isBlockedIpAddress(host) : false;
 }
 
 function isBlockedIpAddress(address) {
@@ -109,26 +98,30 @@ function isBlockedIpAddress(address) {
     );
   }
 
-  if (value === '::' || value === '::1') return true;
-  if (/^f[cd][0-9a-f]{2}:/i.test(value)) return true;
-  if (/^fe[89ab][0-9a-f]:/i.test(value)) return true;
-  const mapped = value.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
-  return mapped ? isBlockedIpAddress(mapped[1]) : false;
+  const normalized = new URL(`http://[${value}]/`).hostname.slice(1, -1);
+  const mapped = normalized.match(/^::ffff:([0-9a-f]+):([0-9a-f]+)$/u);
+  if (mapped) {
+    const high = Number.parseInt(mapped[1], 16);
+    const low = Number.parseInt(mapped[2], 16);
+    return isBlockedIpAddress([high >> 8, high & 255, low >> 8, low & 255].join('.'));
+  }
+  return !/^[23][0-9a-f]{3}:/u.test(normalized) || normalized.startsWith('2001:db8:') || normalized.startsWith('2002:');
 }
 
 async function assertPublicDnsTarget(hostname) {
-  if (isIP(hostname)) {
-    if (isBlockedIpAddress(hostname)) {
+  const host = String(hostname).replace(/^\[|\]$/gu, '');
+  if (isIP(host)) {
+    if (isBlockedIpAddress(host)) {
       const err = new Error('禁止访问内网地址');
       err.statusCode = 403;
       throw err;
     }
-    return;
+    return [{ address: host, family: isIP(host) }];
   }
 
   let records;
   try {
-    records = await lookup(hostname, { all: true, verbatim: true });
+    records = await lookup(host, { all: true, verbatim: true });
   } catch {
     const err = new Error('媒体域名解析失败');
     err.statusCode = 502;
@@ -139,6 +132,7 @@ async function assertPublicDnsTarget(hostname) {
     err.statusCode = 403;
     throw err;
   }
+  return records;
 }
 
 /**
@@ -249,15 +243,63 @@ async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist 
     err.statusCode = 403;
     throw err;
   }
-  // 本地开发环境常用 DNS 代理会把已知音乐 CDN 映射到 198.18/16。
-  // 这些主机仍受域名白名单和逐跳重定向校验保护，不能因此放宽未知域名。
-  const knownMusicCdn = isAllowedMediaHostname(parsed.hostname, extraAllowedHosts);
-  try {
-    await assertPublicDnsTarget(parsed.hostname);
-  } catch (error) {
-    if (!(requireAllowlist && knownMusicCdn && error?.message === '禁止访问内网地址')) throw error;
-  }
-  return parsed;
+  const addresses = await assertPublicDnsTarget(parsed.hostname);
+  return { parsed, addresses };
+}
+
+function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const transport = parsed.protocol === 'https:' ? https : http;
+    let deadline;
+    const request = transport.request({
+      protocol: parsed.protocol,
+      hostname: parsed.hostname.replace(/^\[|\]$/gu, ''),
+      port: parsed.port || undefined,
+      path: `${parsed.pathname}${parsed.search}`,
+      method: 'GET', headers, signal,
+      lookup: (_hostname, options, callback) => options?.all
+        ? callback(null, addresses)
+        : callback(null, addresses[0].address, addresses[0].family),
+    }, (response) => {
+      clearTimeout(deadline);
+      try {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
+        }
+        const status = response.statusCode || 502;
+        let stream = response;
+        if (![204, 205, 304].includes(status) && !(status >= 300 && status < 400)) {
+          const encodings = (responseHeaders.get('content-encoding') || '').split(',').map((value) => value.trim().toLowerCase()).filter((value) => value && value !== 'identity');
+          const decoders = encodings.reverse().map((encoding) => {
+            if (encoding === 'gzip' || encoding === 'x-gzip') return createGunzip();
+            if (encoding === 'deflate') return createInflate();
+            if (encoding === 'br') return createBrotliDecompress();
+            throw new Error('Unsupported media encoding');
+          });
+          if (decoders.length) {
+            stream = decoders.at(-1);
+            pipeline(response, ...decoders).catch((error) => stream.destroy(error));
+            responseHeaders.delete('content-encoding');
+            responseHeaders.delete('content-length');
+          }
+        }
+        const body = [204, 205, 304].includes(status) ? null : Readable.toWeb(stream);
+        if (!body) response.resume();
+        resolve(new Response(body, { status, headers: responseHeaders }));
+      } catch (error) {
+        response.destroy();
+        request.destroy();
+        reject(error);
+      }
+    });
+    request.on('error', reject);
+    request.once('close', () => clearTimeout(deadline));
+    const timeout = () => request.destroy(new Error('媒体请求超时'));
+    deadline = setTimeout(timeout, timeoutMs);
+    request.setTimeout(timeoutMs, timeout);
+    request.end();
+  });
 }
 
 /**
@@ -269,30 +311,21 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
   const headers = { ...(fetchOptions.headers || {}) };
 
   let currentUrl = preferHttpsMediaUrl(rawUrl);
-  const trustedInitialUrl = String(fetchOptions.trustedInitialUrl || '').trim();
-
   for (let hop = 0; hop <= MAX_MEDIA_REDIRECTS; hop += 1) {
-    if (!(hop === 0 && trustedInitialUrl && currentUrl === trustedInitialUrl)) {
-      await assertSafeMediaUrl(currentUrl, extraAllowedHosts, { requireAllowlist });
-    }
-
-    const response = await fetchWithTimeout(
-      currentUrl,
-      { ...fetchOptions, headers, redirect: 'manual' },
-      timeoutMs,
-    );
+    const target = await assertSafeMediaUrl(currentUrl, extraAllowedHosts, { requireAllowlist });
+    const response = await requestPinnedMedia(target, headers, fetchOptions.signal, timeoutMs);
 
     if (response.status >= 300 && response.status < 400) {
       const location = String(response.headers.get('location') || '').trim();
-      if (!location) {
-        const err = new Error('上游返回空重定向');
-        err.statusCode = 502;
-        throw err;
-      }
       try {
         await response.body?.cancel?.();
       } catch {
         // 忽略 drain 失败，继续跟随 Location
+      }
+      if (!location) {
+        const err = new Error('上游返回空重定向');
+        err.statusCode = 502;
+        throw err;
       }
       try {
         currentUrl = preferHttpsMediaUrl(new URL(location, currentUrl).toString());
@@ -300,6 +333,9 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
         const err = new Error('上游重定向地址无效');
         err.statusCode = 502;
         throw err;
+      }
+      for (const name of Object.keys(headers)) {
+        if (['authorization', 'cookie', 'proxy-authorization'].includes(name.toLowerCase()) || name.toLowerCase().startsWith('x-openmusic-')) delete headers[name];
       }
       continue;
     }
@@ -310,6 +346,31 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
   const err = new Error('上游重定向次数过多');
   err.statusCode = 502;
   throw err;
+}
+
+async function readBoundedMediaResponse(response, maxBytes) {
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return Buffer.concat(chunks, total);
+      total += value.byteLength;
+      if (total > maxBytes) {
+        const error = new Error('媒体过大');
+        error.statusCode = 413;
+        throw error;
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /**
@@ -332,7 +393,6 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
 
   let response;
   try {
-    // timeout 只约束建连+响应头；fetch resolve 后会清除 abort，body 可持续流
     response = await fetchMediaWithSafeRedirects(
       fetchWithTimeout,
       fetchUrl,
@@ -383,23 +443,30 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
   }
 
   if (!response.ok && response.status !== 206) {
+    await response.body?.cancel?.().catch(() => {});
     if (!res.headersSent) res.status(response.status).json({ error: '上游媒体请求失败' });
     return false;
   }
 
   const rawType = response.headers.get('content-type') || '';
+  const mediaType = rawType.split(';')[0].trim().toLowerCase();
+  if (!/^(?:audio|video)\//u.test(mediaType) && !/^image\/(?:jpeg|png|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/u.test(mediaType) && !['application/octet-stream', 'application/ogg', 'application/vnd.apple.mpegurl', 'application/x-mpegurl'].includes(mediaType)) {
+    await response.body?.cancel?.().catch(() => {});
+    if (!res.headersSent) res.status(415).json({ error: '上游未返回支持的媒体类型' });
+    return false;
+  }
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Security-Policy', 'sandbox');
   const contentType = normalizeAudioContentType(rawType);
   const useBuffer = shouldBufferResponse(rawType, options) && !isAudioStream(rawType, range);
 
   // 流式音频禁止 CDN/Nginx 缓冲或分段缓存（酷狗等 HTTP 代理链路易因此卡顿）
-  if (useBuffer) {
-    res.set('Cache-Control', 'public, max-age=3600');
-  } else {
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
-    res.set('Pragma', 'no-cache');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
+  res.set('Pragma', 'no-cache');
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Surrogate-Control', 'no-store');
+  if (!useBuffer) {
     res.set('X-Accel-Buffering', 'no');
-    res.set('CDN-Cache-Control', 'no-store');
-    res.set('Surrogate-Control', 'no-store');
   }
   res.set('X-OpenMusic-Proxy', '1');
 
@@ -409,20 +476,17 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
       const maxBufferedBytes = isImage ? MAX_BUFFERED_IMAGE_BYTES : MAX_BUFFERED_MEDIA_BYTES;
       const declaredLen = Number(response.headers.get('content-length') || 0);
       if (Number.isFinite(declaredLen) && declaredLen > maxBufferedBytes) {
+        await response.body?.cancel?.().catch(() => {});
         if (!res.headersSent) res.status(413).json({ error: '媒体过大' });
         return false;
       }
-      const buffer = Buffer.from(await response.arrayBuffer());
-      if (buffer.length > maxBufferedBytes) {
-        if (!res.headersSent) res.status(413).json({ error: '媒体过大' });
-        return false;
-      }
+      const buffer = await readBoundedMediaResponse(response, maxBufferedBytes);
       if (res.writableEnded || res.destroyed) return false;
       if (contentType) res.set('Content-Type', contentType);
       res.status(200).send(buffer);
       return true;
-    } catch {
-      if (!res.headersSent) res.status(502).json({ error: '媒体代理失败' });
+    } catch (error) {
+      if (!res.headersSent) res.status(error?.statusCode === 413 ? 413 : 502).json({ error: error?.statusCode === 413 ? '媒体过大' : '媒体代理失败' });
       return false;
     }
   }

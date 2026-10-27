@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { compression } from 'vite-plugin-compression2';
+import { constants as zlibConstants } from 'node:zlib';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -130,7 +131,11 @@ export default defineConfig({
     ...(shouldPrecompress
       ? [compression({
           threshold: 1024,
-          algorithms: ['gzip', 'brotliCompress'],
+          algorithms: [
+            ['gzip', { level: 6 }],
+            ['brotliCompress', { params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5, [zlibConstants.BROTLI_PARAM_LGWIN]: 20 } }],
+          ],
+          scheduler: { limit: 1, isHighMemory: () => true },
           skipIfLargerOrEqual: true,
         })]
       : []),

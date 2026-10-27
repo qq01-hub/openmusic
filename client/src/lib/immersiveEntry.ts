@@ -44,6 +44,7 @@ export function preloadSonicWorkshopBackground(): Promise<unknown> {
 }
 
 export function preloadImmersiveBackground(mode: RoomVisualMode): Promise<unknown> {
+  if (mode === 'folia') return import('../components/immersive/FoliaBackground');
   if (mode === 'topography') return import('../components/topography/TopographyBackground3D');
   if (mode === 'topography-we') return preloadSonicWorkshopBackground();
   return preloadGalaxyBackground();

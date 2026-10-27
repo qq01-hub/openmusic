@@ -2,6 +2,7 @@ node_modules
 **/node_modules
 dist
 **/dist
+client/public/vendor/folia
 .env
 server/.env
 server/runtimeConfig.json

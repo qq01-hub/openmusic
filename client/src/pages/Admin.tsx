@@ -54,6 +54,7 @@ import InitialSetupGate from './admin/InitialSetupGate';
 import LoginForm from './admin/LoginForm';
 import OverviewDashboard from './admin/OverviewDashboard';
 import RuntimeConfigPanel from './admin/RuntimeConfigPanel';
+import RiskControlPanel from './admin/RiskControlPanel';
 import SettingsSection from './admin/SettingsSection';
 import type {
   AdminAuditEntry,
@@ -1403,6 +1404,8 @@ function AdminPage() {
 
   const renderTabContent = () => {
     switch (activeTab) {
+      case 'risk':
+        return <RiskControlPanel />;
       case 'overview':
         return (
           <OverviewDashboard

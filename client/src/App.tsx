@@ -2,13 +2,12 @@ import { Suspense, useCallback, useEffect, useState } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import AppUpdateGate from './components/AppUpdateGate';
 import AppErrorBoundary from './components/AppErrorBoundary';
-import ErrorReportSolutionGate from './components/ErrorReportSolutionGate';
-import PermanentDecisionGate from './components/PermanentDecisionGate';
 import NotFoundPage from './components/NotFoundPage';
 import { rememberAdminEntryPath } from './lib/adminEntryShortcut';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import StartupSplash from './components/StartupSplash';
 import MusicLoading from './components/MusicLoading';
+const AccountGate = lazyWithRetry(() => import('./components/AccountGate'), 'AccountGate');
 
 const Home = lazyWithRetry(() => import('./pages/Home'), 'Home');
 const Room = lazyWithRetry(() => import('./pages/Room'), 'Room');
@@ -131,17 +130,15 @@ export default function App() {
       {showStartup && <StartupSplash ready={homeReady} onEnter={handleStartupEnter} />}
       <div className="h-full">
         {setupRequired === false && startupSettled && <AppUpdateGate />}
-        {setupRequired === false && <ErrorReportSolutionGate />}
-        {setupRequired === false && <PermanentDecisionGate />}
         <AppErrorBoundary key={location.pathname} onError={handleStartupEnter}>
           <Suspense fallback={<RouteFallback />}>
             {setupRequired === null ? <RouteFallback /> : setupRequired ? (
               <Setup />
             ) : (
               <Routes>
-                <Route path="/" element={<Home entryReady={startupSettled} entranceActive={showStartup} onReady={handleHomeReady} />} />
-                <Route path="/room/:roomId" element={<Room />} />
-                <Route path="/tv/:roomId" element={<TvDisplay />} />
+                <Route path="/" element={<AccountGate allowPreview onReady={handleHomeReady}><Home entryReady={startupSettled} entranceActive={showStartup} onReady={handleHomeReady} /></AccountGate>} />
+                <Route path="/room/:roomId" element={<AccountGate><Room /></AccountGate>} />
+                <Route path="/tv/:roomId" element={<AccountGate><TvDisplay /></AccountGate>} />
                 <Route path="*" element={<AdminGate />} />
               </Routes>
             )}

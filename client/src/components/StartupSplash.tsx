@@ -93,7 +93,7 @@ export default function StartupSplash({ ready, onEnter }: { ready: boolean; onEn
     timeline.to(field.current, { exit: 1, duration: 1.15 }, 0)
       .to('.om-startup__chrome, .om-startup__wordmark', { opacity: 0, duration: 0.35 }, 0)
       .to('.om-startup__atmosphere', { opacity: 0, duration: 0.8 }, 0.15)
-      .to(root, { backgroundColor: 'rgba(5,5,5,0)', duration: 0.9 }, 0.15)
+      .to('.om-startup__backdrop', { opacity: 0, duration: 0.9 }, 0.15)
       .fromTo(document.querySelectorAll('[data-home-reveal]'), { opacity: 0, y: 18 }, { opacity: 1, y: 0, duration: 0.6, stagger: 0.055 }, 0.45);
     for (const { source, target, from, to } of matches) {
       gsap.set(target, { opacity: 0 });
@@ -135,6 +135,7 @@ export default function StartupSplash({ ready, onEnter }: { ready: boolean; onEn
       onPointerDown={(event) => { Object.assign(pointer.current, { x: event.clientX, y: event.clientY, active: true }); impulse(); }}
       onPointerUp={(event) => { if (event.pointerType !== 'mouse') pointer.current.active = false; }}
       onPointerCancel={() => { pointer.current.active = false; }} onPointerLeave={() => { pointer.current.active = false; }}>
+      <div className="om-startup__backdrop" aria-hidden="true" />
       <div className="om-startup__atmosphere" aria-hidden="true"><div className="om-startup__halo" /><div className="om-startup__grain" /></div>
       <div className="om-startup__wordmark" aria-hidden="true">Open<span>Music</span></div>
       <canvas ref={canvasRef} className="om-startup__canvas" aria-hidden="true" />
