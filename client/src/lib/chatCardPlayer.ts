@@ -8,7 +8,7 @@
 import type { Song } from '../types';
 import { filterDisplayLyrics, getLyrics, getSongUrlInfo, parseLrc, songKey } from '../api/music';
 import { resolveQishuiLocalPlaybackUrl, isQishuiLocalPlaybackUrl } from './qishuiLocalPlayback';
-import { configureInlineAudio } from './audioUnlock';
+import { configureInlineAudio, isIOS } from './audioUnlock';
 import { findActiveLyricIndex } from './lyricActiveIndex';
 import {
   acquireRoomAudio,
@@ -20,7 +20,7 @@ import {
 } from './roomAudioPriority';
 import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
-import { getSharedAudio } from './audioElement';
+import { applyIndependentAudioVolume, getSharedAudio } from './audioElement';
 import { getAudioController } from './audioController';
 import type { LyricLine } from '../types';
 
@@ -121,7 +121,7 @@ function startProgressLoop() {
 
 export function applyChatCardVolume(volume: number): void {
   if (!cardAudio) return;
-  cardAudio.volume = Math.min(1, Math.max(0, volume));
+  applyIndependentAudioVolume(cardAudio, volume);
 }
 
 export function getChatCardPlaybackState(): ChatCardPlaybackState {
@@ -139,6 +139,7 @@ function getOrCreateCardAudio(): HTMLAudioElement {
   if (cardAudio) return cardAudio;
   cardAudio = new Audio();
   configureInlineAudio(cardAudio);
+  if (isIOS()) cardAudio.crossOrigin = 'anonymous';
   cardAudio.preload = 'metadata';
   applyChatCardVolume(useAudioStore.getState().volume);
   cardAudio.addEventListener('ended', () => {

@@ -28,7 +28,16 @@ const MEDIA_PROXY_PATH = '/api/media-proxy';
 
 export function isProxiedMediaUrl(url: string): boolean {
   if (!url) return false;
-  return url.startsWith(`${MEDIA_PROXY_PATH}?`);
+  if (url.startsWith(`${MEDIA_PROXY_PATH}?`)) return true;
+  try {
+    const parsed = new URL(url);
+    if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) return false;
+    return /^https?:$/.test(parsed.protocol)
+      && parsed.pathname === MEDIA_PROXY_PATH
+      && Boolean(parsed.search);
+  } catch {
+    return false;
+  }
 }
 
 /** 汽水鉴权解密端点禁止套 media-proxy：解密只能在浏览器本地完成。 */

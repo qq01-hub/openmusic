@@ -5,46 +5,107 @@ import { clearAudioQueueBinding } from './audioTrackBinding';
 import { resetGalaxyAudioWireIfLoaded } from './galaxyAudioBridge';
 import { isSameOriginMediaUrl } from './mediaProxyUrl';
 
+type AudioOutputNode = {
+  context: AudioContext;
+  source: MediaElementAudioSourceNode;
+  gain: GainNode;
+};
+
 let sharedAudio: HTMLAudioElement | null = null;
 let loudnessMultiplier = 1;
 let outputContext: AudioContext | null = null;
-let output: { context: AudioContext; source: MediaElementAudioSourceNode; gain: GainNode } | null = null;
+let output: AudioOutputNode | null = null;
+const independentOutputs = new WeakMap<HTMLAudioElement, AudioOutputNode>();
+const trackedIndependentAudios = new Set<HTMLAudioElement>();
 let gestureListenersInstalled = false;
-let audioRoutingEnabled = false;
+let audioRoutingEnabled = isIOS();
 
 /** 通知 useAudioPlayer：共享 audio 已替换，需重新绑定事件 */
 export let sharedAudioGeneration = 0;
+
+function getAudioContextClass(): (typeof AudioContext) | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return window.AudioContext
+    || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+}
 
 export function applyAudioVolume(volume: number): void {
   const audio = sharedAudio;
   if (!audio) return;
   const userVolume = Math.min(1, Math.max(0, volume));
   const effectiveVolume = Math.min(1, Math.max(0, userVolume * loudnessMultiplier));
+  if (!output && isIOS() && outputContext?.state === 'running') {
+    getSharedAudioOutput();
+  }
   if (output) {
     audio.muted = false;
     audio.volume = 1;
     // iOS 静音时保持输出管线活跃，避免丢失耳机键焦点
     output.gain.gain.value = isIOS() && userVolume === 0 ? 0.00001 : effectiveVolume;
-    if (!audio.paused && !audio.ended) resumeSharedAudioOutput();
+    if (!audio.paused && !audio.ended && outputContext?.state !== 'running') resumeSharedAudioOutput();
   } else {
+    audio.muted = false;
     audio.volume = effectiveVolume;
-    if (isIOS()) audio.muted = userVolume === 0;
   }
+}
+
+function ensureIndependentAudioOutput(audio: HTMLAudioElement): AudioOutputNode | null {
+  const existing = independentOutputs.get(audio);
+  if (existing) return existing;
+  if (!isIOS() || outputContext?.state !== 'running') return null;
+  try {
+    const gain = outputContext.createGain();
+    gain.gain.value = 1;
+    gain.connect(outputContext.destination);
+    const source = outputContext.createMediaElementSource(audio);
+    source.connect(gain);
+    const node: AudioOutputNode = { context: outputContext, source, gain };
+    independentOutputs.set(audio, node);
+    return node;
+  } catch {
+    return null;
+  }
+}
+
+/** 独立试听与聊天卡片音频在 iOS 下同样通过 Web Audio GainNode 调节音量 */
+export function applyIndependentAudioVolume(audio: HTMLAudioElement, volume: number): void {
+  const userVolume = Math.min(1, Math.max(0, volume));
+  if (isIOS()) {
+    trackedIndependentAudios.add(audio);
+    installAudioOutputGestures();
+    const node = ensureIndependentAudioOutput(audio);
+    if (node) {
+      audio.muted = false;
+      audio.volume = 1;
+      node.gain.gain.value = userVolume === 0 ? 0.00001 : userVolume;
+      if (!audio.paused && !audio.ended && outputContext?.state !== 'running') resumeSharedAudioOutput();
+      return;
+    }
+  }
+  audio.muted = false;
+  audio.volume = userVolume;
 }
 
 /** 音量与频谱共用唯一媒体源，防止重复接管 audio */
 export function getSharedAudioOutput(): typeof output {
   if (output) return output;
-  if (!audioRoutingEnabled) return null;
+  if (!audioRoutingEnabled && !isIOS()) return null;
   if (isIOS() && outputContext?.state !== 'running') return null;
   const audio = getSharedAudio();
-  const src = audio.currentSrc || audio.src;
-  if (!src || !isSameOriginMediaUrl(src)) return null;
+  if (!isIOS()) {
+    const src = audio.currentSrc || audio.src;
+    if (!src || !isSameOriginMediaUrl(src)) return null;
+  }
   try {
-    outputContext ??= new AudioContext();
+    const AudioContextClass = getAudioContextClass();
+    if (!AudioContextClass) return null;
+    outputContext ??= new AudioContextClass();
     const gain = outputContext.createGain();
-    gain.gain.value = 0;
+    gain.gain.value = Math.max(0.00001, useAudioStore.getState().volume * loudnessMultiplier);
     gain.connect(outputContext.destination);
+    if (!audio.src && !audio.crossOrigin) {
+      audio.crossOrigin = 'anonymous';
+    }
     const source = outputContext.createMediaElementSource(audio);
     source.connect(gain);
     output = { context: outputContext, source, gain };
@@ -57,50 +118,76 @@ export function getSharedAudioOutput(): typeof output {
 
 /** 设置当前曲目的 Web Audio 路由，切换时重建媒体元素避免复用旧 source */
 export function setSharedAudioRouting(enabled: boolean): void {
-  const next = Boolean(enabled);
+  const next = isIOS() || Boolean(enabled);
   if (audioRoutingEnabled === next) return;
   audioRoutingEnabled = next;
   if (sharedAudio) resetSharedAudioElement();
 }
 
+let syncingOutputs = false;
+
+function syncAllIosOutputs(): void {
+  if (syncingOutputs || !isIOS() || outputContext?.state !== 'running') return;
+  syncingOutputs = true;
+  try {
+    if (sharedAudio) {
+      getSharedAudioOutput();
+      applyAudioVolume(useAudioStore.getState().volume);
+    }
+    const currentVolume = useAudioStore.getState().volume;
+    for (const audio of trackedIndependentAudios) {
+      applyIndependentAudioVolume(audio, currentVolume);
+    }
+  } finally {
+    syncingOutputs = false;
+  }
+}
+
 export function resumeSharedAudioOutput(): void {
-  if (!outputContext) return;
-  const audio = sharedAudio;
+  if (!outputContext) {
+    if (!isIOS()) return;
+    const AudioContextClass = getAudioContextClass();
+    if (!AudioContextClass) return;
+    try {
+      outputContext = new AudioContextClass();
+    } catch {
+      return;
+    }
+  }
   if (outputContext.state === 'running') {
-    if (isIOS()) getSharedAudioOutput();
+    syncAllIosOutputs();
     return;
   }
   void outputContext.resume().then(() => {
-    if (isIOS() && audio === sharedAudio) getSharedAudioOutput();
+    syncAllIosOutputs();
   }).catch(() => {});
 }
 
 function installAudioOutputGestures(): void {
-  if (!isIOS() || gestureListenersInstalled) return;
+  if (!isIOS() || gestureListenersInstalled || typeof document === 'undefined') return;
   gestureListenersInstalled = true;
   const unlockOutput = () => {
-    const audio = sharedAudio;
-    if (!audio || !audioRoutingEnabled) return;
     try {
-      const AudioContextClass = window.AudioContext
-        || (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      const AudioContextClass = getAudioContextClass();
       if (!AudioContextClass) return;
       outputContext ??= new AudioContextClass();
       if (outputContext.state === 'running') {
-        getSharedAudioOutput();
+        syncAllIosOutputs();
       } else {
         void outputContext.resume().then(() => {
-          if (audio === sharedAudio) getSharedAudioOutput();
+          syncAllIosOutputs();
         }).catch(() => {});
       }
     } catch {
       // 保留原生输出，等待下一次手势重试
     }
   };
-  for (const event of ['pointerdown', 'touchend', 'click']) {
+  for (const event of ['pointerdown', 'touchend', 'click', 'touchstart', 'keydown']) {
     document.addEventListener(event, unlockOutput, { capture: true, passive: true });
   }
 }
+
+installAudioOutputGestures();
 
 function releaseAudioOutput(): void {
   output?.source.disconnect();
@@ -124,10 +211,11 @@ export function getSharedAudio(): HTMLAudioElement {
   if (!sharedAudio) {
     sharedAudio = new Audio();
     configureInlineAudio(sharedAudio);
-    if (audioRoutingEnabled) sharedAudio.crossOrigin = 'anonymous';
-    applyAudioVolume(useAudioStore.getState().volume);
+    if (audioRoutingEnabled || isIOS()) sharedAudio.crossOrigin = 'anonymous';
     sharedAudio.addEventListener('play', resumeSharedAudioOutput);
     installAudioOutputGestures();
+    if (isIOS() && outputContext?.state === 'running') getSharedAudioOutput();
+    applyAudioVolume(useAudioStore.getState().volume);
   }
   return sharedAudio;
 }
@@ -147,10 +235,10 @@ export function resetSharedAudioElement(): HTMLAudioElement {
   sharedAudio = new Audio();
   sharedAudioGeneration += 1;
   configureInlineAudio(sharedAudio);
-  if (audioRoutingEnabled) sharedAudio.crossOrigin = 'anonymous';
-  applyAudioVolume(useAudioStore.getState().volume);
+  if (audioRoutingEnabled || isIOS()) sharedAudio.crossOrigin = 'anonymous';
   sharedAudio.addEventListener('play', resumeSharedAudioOutput);
   if (isIOS() && outputContext?.state === 'running') getSharedAudioOutput();
+  applyAudioVolume(useAudioStore.getState().volume);
   return sharedAudio;
 }
 

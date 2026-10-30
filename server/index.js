@@ -67,7 +67,7 @@ import {
 import { mountAdminApi, appendAdminAudit } from './adminApi.js';
 import { initAdminCredentials } from './adminCredentials.js';
 import { riskControl, RiskControlError } from './riskControl.js';
-import { createAccountAccessMiddleware } from './accountAccess.js';
+import { createAccountAccessMiddleware, isContinuationMediaRangeRequest, isMediaProxyCoverRequest } from './accountAccess.js';
 import { createAnonymousAccess } from './anonymousAccess.js';
 import { createAccountRequestGuard, createAccountSocketOriginGuard } from './accountRequest.js';
 import { ACCOUNT_REFRESH_COOKIE, AccountTokenError, accountTokenSessionId } from './accountTokens.js';
@@ -1868,8 +1868,11 @@ app.get('/api/qishui-source', async (req, res) => {
 app.get('/api/media-proxy', async (req, res) => {
   const identity = requireSessionIdentity(req, res);
   if (!identity) return;
-  if (!limitProxyRequest(proxyLimitKey('media', req))) {
-    return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+  if (!isContinuationMediaRangeRequest(req)) {
+    const limitKind = isMediaProxyCoverRequest(req) ? 'media-cover' : 'media';
+    if (!limitProxyRequest(proxyLimitKey(limitKind, req))) {
+      return res.status(429).json({ error: '请求过于频繁，请稍后再试' });
+    }
   }
 
   const raw = String(req.query.url || '').trim();

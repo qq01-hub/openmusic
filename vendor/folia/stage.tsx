@@ -47,6 +47,13 @@ export function preloadFoliaAssets() {
     .map(([, load]) => load()));
 }
 
+async function preloadFoliaVisualizer(mode: string): Promise<void> {
+  const loaders = Object.entries(visualizerModules)
+    .filter(([path]) => path.split('/').at(-2) === mode)
+    .map(([, load]) => load());
+  if (loaders.length) await Promise.all(loaders);
+}
+
 function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
   const storedSettings = useVisualizerSettingsStore();
   const settings = storedSettings as typeof storedSettings & Record<string, unknown>;
@@ -55,6 +62,8 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
   const [song, setSong] = useState({ key: '', name: '', artist: '', cover: '', duration: 0 });
   const [lines, setLines] = useState<Line[]>([]);
   const [status, setStatus] = useState('等待播放');
+  const [themeLoading, setThemeLoading] = useState(false);
+  const [themeProgress, setThemeProgress] = useState(0);
   const [customPalette, setCustomPalette] = useState<Theme>(() => {
     try { return normalizeFoliaTheme(JSON.parse(localStorage.getItem('openmusic:folia-theme') || '{}')); }
     catch { return initialTheme; }
@@ -70,6 +79,20 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
   const setTheme = (patch: Partial<Theme>, customColors = false) => {
     setCustomPalette(previous => normalizeFoliaTheme(patch, previous));
     if (customColors) { setCustomTheme(true); localStorage.setItem('openmusic:folia-custom-theme', 'on'); }
+  };
+  const switchVisualizerMode = async (nextMode: string) => {
+    if (nextMode === mode || themeLoading) return;
+    setThemeLoading(true);
+    setThemeProgress(12);
+    const timer = window.setInterval(() => setThemeProgress(value => Math.min(92, value + 8)), 90);
+    try {
+      await preloadFoliaVisualizer(nextMode);
+      setThemeProgress(100);
+      settings.handleSetVisualizerMode(nextMode, { notify: false });
+    } finally {
+      window.clearInterval(timer);
+      setThemeLoading(false);
+    }
   };
   const [panel, setPanel] = useState(false);
   const [settingsHost, setSettingsHost] = useState<FoliaSettingsHost | null>(null);
@@ -253,7 +276,7 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
       {!settingsHost && <nav aria-label="调节分类">{[['lyrics', '歌词'], ['background', '背景'], ['appearance', '外观']].map(([key, label]) => <button key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}</nav>}
       <div className="folia-controls-body">
         {tab === 'lyrics' && <>
-          <div className="st-card folia-settings-group"><Row label="歌词主题"><Select value={mode} onChange={value => settings.handleSetVisualizerMode(value, { notify: false })} options={VISUALIZER_REGISTRY.map(item => ({ value: item.mode, label: t(item.labelKey, item.labelFallback) }))} /></Row></div>
+          <div className="st-card folia-settings-group"><Row label={themeLoading ? `歌词主题 · 加载 ${themeProgress}%` : '歌词主题'}><Select value={mode} onChange={value => void switchVisualizerMode(value)} options={VISUALIZER_REGISTRY.map(item => ({ value: item.mode, label: t(item.labelKey, item.labelFallback) }))} /></Row></div>
           <p className="folia-status">{status}</p>
           {beatControls(entry.beatEffects)}
           {entry.renderSettingsPanel?.({ t, isDaylight: false, theme: controlTheme, controlCardBg: 'bg-white/5', rangeInputClass: 'w-full', tuning: tuning ? panelSettings[tuning.settingsKey] : undefined, onTuningChange: changeTuning, onSliderPointerDown: beginTuningDrag, onSliderCommit: commitTuning, settings: { ...panelSettings, ...assets } })}

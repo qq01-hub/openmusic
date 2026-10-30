@@ -436,8 +436,10 @@ export default function Room() {
   const [visualFxOpen, setVisualFxOpen] = useState(false);
   const [visualFxDragging, setVisualFxDragging] = useState(false);
   const isLgUp = useMediaQuery('(min-width: 1024px)');
+  const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1023px)');
   const isSmUp = useMediaQuery('(min-width: 640px)');
-  const showImmersiveEntry = isLgUp && !isMobileDevice() && !pureMode;
+  const canUseImmersive = (isLgUp || isTablet) && !pureMode;
+  const showImmersiveEntry = canUseImmersive;
   const [favoritesOpen, setFavoritesOpen] = useState(false);
   const [songHistoryOpen, setSongHistoryOpen] = useState(false);
   const [favoritesLoading, setFavoritesLoading] = useState(false);
@@ -2183,7 +2185,7 @@ export default function Room() {
 
   const applyVisualMode = useCallback(
     (mode: RoomVisualMode, options?: { notifyProxyChange?: boolean; reloadAudio?: boolean }) => {
-      if (!isLgUp) return;
+      if (!canUseImmersive) return;
       const prevNeedsProxy = shouldProxySongPlaybackUrl(visualMode);
       const nextNeedsProxy = shouldProxySongPlaybackUrl(mode);
       setVisualMode(mode);
@@ -2199,7 +2201,7 @@ export default function Room() {
         }
       }
     },
-    [isLgUp, room?.current, showToast, visualMode],
+    [canUseImmersive, room?.current, showToast, visualMode],
   );
 
   const refreshPlaybackUrlCacheForQuality = useCallback(() => {
@@ -2414,11 +2416,11 @@ export default function Room() {
   };
 
   useEffect(() => {
-    if (!isLgUp) setVisualFxOpen(false);
-  }, [isLgUp]);
+    if (!canUseImmersive) setVisualFxOpen(false);
+  }, [canUseImmersive]);
 
   const patchVisualFx = (patch: Partial<RoomVisualFxSettings>) => {
-    if (!isLgUp) return;
+    if (!canUseImmersive) return;
     const next = patchRoomVisualFx(patch);
     setVisualFx(next);
   };

@@ -356,6 +356,7 @@ npm run package:build # 组装发版包
 | 项目 | 作者 | 说明 |
 |------|------|------|
 | [Mineradio](https://github.com/XxHuberrr/Mineradio) | [@XxHuberrr](https://github.com/XxHuberrr) | 星河粒子、沉浸玻璃质感、舞台歌词等 |
+| [folia-major](https://github.com/chthollyphile/folia-major) | [@chthollyphile](https://github.com/chthollyphile) | 沉浸模式视觉与交互灵感 |
 
 ## 🔗 友情链接
 

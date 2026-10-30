@@ -39,7 +39,7 @@ const FORBIDDEN_WORD_MAX_LEN = 20;
 const COOLDOWN_OPTIONS = [0, 10, 30, 60, 120] as const;
 const QUEUE_LIMIT_OPTIONS = [50, 100, 200] as const;
 
-type SettingsTab = 'fm' | 'account' | 'member' | 'room' | 'announcement' | 'chat' | 'songRequest';
+type SettingsTab = 'fm' | 'account' | 'member' | 'room' | 'identity' | 'announcement' | 'chat' | 'songRequest';
 
 /** 房主扫码绑定网易云 / QQ 音乐账号。 */
 const MUSIC_ACCOUNT_TAB_ENABLED = true;
@@ -455,7 +455,7 @@ export default function RoomSettingsModal({
       if (MUSIC_ACCOUNT_TAB_ENABLED && hasMusicAccountPlatform) {
         items.push({ id: 'account', label: '账号' });
       }
-      items.push({ id: 'room', label: '房主' });
+      items.push({ id: 'room', label: '管理' });
     }
     if (canModerate) {
       items.push({ id: 'member', label: '贵宾' });
@@ -464,11 +464,11 @@ export default function RoomSettingsModal({
       items.push({ id: 'songRequest', label: '点歌' });
     }
     // 非房主仅用于找回身份
-    if (!isOwner && (wechatUinEnabled || linuxdoEnabled || githubEnabled)) {
-      items.push({ id: 'room', label: '身份' });
+    if (!isOwner && anonymousLoginEnabled && (wechatUinEnabled || linuxdoEnabled || githubEnabled)) {
+      items.push({ id: 'identity', label: '身份' });
     }
     return items;
-  }, [isOwner, canModerate, wechatUinEnabled, linuxdoEnabled, githubEnabled, hasMusicAccountPlatform]);
+  }, [isOwner, canModerate, anonymousLoginEnabled, wechatUinEnabled, linuxdoEnabled, githubEnabled, hasMusicAccountPlatform]);
 
   // 打开弹窗时 tabs 可能刚因预取变为含「身份」；若仍停留在旧首 tab 则不强制跳转
   useEffect(() => {
@@ -497,8 +497,8 @@ export default function RoomSettingsModal({
     if (canModerate) {
       initialTabs.push('member', 'announcement', 'chat', 'songRequest');
     }
-    if (!isOwner && (identityWechatUinEnabled || identityLinuxdoEnabled || identityGithubEnabled)) {
-      initialTabs.push('room');
+    if (!isOwner && anonymousLoginEnabled && (identityWechatUinEnabled || identityLinuxdoEnabled || identityGithubEnabled)) {
+      initialTabs.push('identity');
     }
     setActiveTab(initialTabs[0] ?? 'announcement');
   }, [
@@ -514,6 +514,7 @@ export default function RoomSettingsModal({
     identityWechatUinEnabled,
     identityLinuxdoEnabled,
     identityGithubEnabled,
+    anonymousLoginEnabled,
     maxAdmins,
     hasMusicAccountPlatform,
   ]);
@@ -655,7 +656,7 @@ export default function RoomSettingsModal({
       >
         <div className="flex flex-shrink-0 items-center justify-between border-b border-white/10 px-5 py-4">
           <h2 className="text-base font-semibold text-white">
-            {!isOwner && activeTab === 'room' ? '找回身份' : '房间设置'}
+            {!isOwner && activeTab === 'identity' ? '找回身份' : '房间设置'}
           </h2>
           <button
             type="button"
@@ -976,9 +977,9 @@ export default function RoomSettingsModal({
             />
           )}
 
-          {activeTab === 'room' && (
+          {(activeTab === 'room' || activeTab === 'identity') && (
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="md:col-span-2 rounded-2xl border border-netease-red/20 bg-gradient-to-br from-netease-red/[0.12] via-white/[0.03] to-transparent p-4">
+              {isOwner && <div className="md:col-span-2 rounded-2xl border border-netease-red/20 bg-gradient-to-br from-netease-red/[0.12] via-white/[0.03] to-transparent p-4">
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5 rounded-xl bg-netease-red/15 p-2 text-netease-red">
                     <Crown className="h-4 w-4" />
@@ -990,7 +991,7 @@ export default function RoomSettingsModal({
                     </p>
                   </div>
                 </div>
-              </div>
+              </div>}
               {isOwner && (
                 <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <div className="mb-2 flex items-center gap-2">

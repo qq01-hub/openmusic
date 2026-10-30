@@ -61,7 +61,7 @@ const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: s
 };
 
 function LinuxDoMark() {
-  return <img src="/branding/linuxdo.svg" alt="" className="h-5 w-5 object-contain" />;
+  return <img src="/branding/linuxdo.svg?omv=3" alt="" className="linuxdo-mark h-5 w-5 object-contain" />;
 }
 
 function ProviderIcon({ provider }: { provider: Exclude<AccountIdentityProvider, 'email'> }) {
@@ -604,7 +604,7 @@ export default function AccountAccess({
             </div>
             <div className="account-manage-sections space-y-2.5">
               <div className="account-section-card rounded-2xl p-3.5">
-                <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="account-section-heading mb-3 flex items-center justify-between gap-3">
                   <div><p className="text-sm font-medium text-white">音乐会员</p><p className="mt-1 text-xs text-netease-muted">新建房间时会自动使用已保存的会员账号</p></div>
                   {accountDataLoading && <Loader2 className="h-4 w-4 animate-spin text-white/45" />}
                 </div>
@@ -624,8 +624,11 @@ export default function AccountAccess({
                 </div>
               </div>
                <div className="account-section-card rounded-2xl p-3.5">
-                <p className="text-sm font-medium text-white">我的房间</p>
-                <div className="mt-3 space-y-2">
+                <div className="account-section-heading mb-3">
+                  <p className="text-sm font-medium text-white">我的房间</p>
+                  <p className="mt-1 text-xs text-netease-muted">管理已创建的房间</p>
+                </div>
+                <div className="space-y-2">
                   {accountRooms.length > 0 ? accountRooms.map((room) => <Link key={room.id} to={`/room/${room.id}`} onClick={() => setPanelOpen(false)} className="account-row flex items-center justify-between rounded-xl px-3 py-2.5 transition"><span className="min-w-0"><span className="block truncate text-sm text-white">{room.name}</span><span className="mt-0.5 block text-xs text-white/40">{room.id} · {room.userCount} 人在线</span></span><ChevronRight className="h-4 w-4 text-white/35" /></Link>) : <p className="py-2 text-xs text-white/40">还没有创建房间</p>}
                 </div>
               </div>

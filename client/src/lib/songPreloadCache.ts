@@ -1,6 +1,6 @@
 import { getAvailableSources, getSongUrlInfo, getTrackKey, searchSongs, unwrapQishuiAudioUrl } from '../api/music';
 import { prefetchQishuiLocalPlayback } from './qishuiLocalPlayback';
-import { isHttpsPageContext } from './mediaProxyUrl';
+import { isHttpsPageContext, shouldProxyPlaybackUrl, toProxiedMediaUrl } from './mediaProxyUrl';
 import { isIOS } from './audioUnlock';
 import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
 import { stripApiSignParams } from './signedApiUrl';
@@ -21,6 +21,7 @@ import {
   resetPlaybackQualityLock,
 } from './playbackQualityLock';
 import { useAudioStore } from '../stores/audioStore';
+import { useRoomStore } from '../stores/roomStore';
 import type { MusicSource, QueueItem, RoomState, SearchResult } from '../types';
 import { isMobileDevice } from './audioUnlock';
 import { normalizeDurationMs } from './duration';
@@ -723,13 +724,20 @@ export function seedSharedSongUrl(
   const raw = unwrapQishuiAudioUrl(songSourceOf(song), String(entry.url || '').trim());
   if (!raw || isBlockedPlaybackUrl(raw)) return false;
 
-  const url = stripApiSignParams(raw);
-  if (!url) return false;
+  const stripped = stripApiSignParams(raw);
+  if (!stripped) return false;
 
   const qualityLabel = entry.qualityLabel?.trim() || undefined;
   const key = urlCacheKey(song, getEffectivePlaybackQuality(song));
   const crossSource = Boolean(entry.crossSource);
   const crossSourceFrom = normalizeMusicSource(entry.crossSourceFrom);
+  const effectiveSource = crossSource ? (crossSourceFrom || songSourceOf(song)) : songSourceOf(song);
+  const url = effectiveSource !== 'qishui' && shouldProxyPlaybackUrl(
+    stripped,
+    shouldProxySongPlaybackUrl() || (isIOS() && effectiveSource === 'kugou'),
+  )
+    ? toProxiedMediaUrl(stripped)
+    : stripped;
   const cached = { url, qualityLabel, crossSource: crossSource || undefined, crossSourceFrom, loudness: normalizeLoudness(entry.loudness), duration: normalizeDuration(entry.duration) };
   urlCache.set(key, cached);
   urlCache.set(trackKeyOf(song), cached);
@@ -887,7 +895,9 @@ export function prefetchQueueSongs(
   for (const song of targets) {
     void fetchSongUrl(song, { allowQualityDowngrade: false }).then((result) => {
       if (!result?.url || !firstQishui || song.queueId !== firstQishui.queueId) return;
-      prefetchQishuiLocalPlayback(result.url);
+      const room = useRoomStore.getState().room;
+      const proxyQishui = Boolean(room?.qishuiProxyEnabled) && Number(room?.qishuiProxyPercent ?? 100) > 0;
+      prefetchQishuiLocalPlayback(result.url, proxyQishui);
     });
   }
 }

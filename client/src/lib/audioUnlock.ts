@@ -89,7 +89,7 @@ export function configureInlineAudio(audio: HTMLAudioElement): void {
   audio.setAttribute('x5-playsinline', 'true');
   audio.setAttribute('x5-video-player-type', 'h5-page');
   audio.setAttribute('x5-video-player-fullscreen', 'false');
-  audio.preload = isMobileDevice() ? 'metadata' : 'auto';
+  audio.preload = 'auto';
   if (isIOS()) {
     const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
     try {

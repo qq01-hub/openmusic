@@ -29,10 +29,30 @@ interface Props {
 
 export default function RoomVisualPresetGrid({ value, onChange }: Props) {
   const [switchingMode, setSwitchingMode] = useState<RoomVisualMode | null>(null);
+  const [switchProgress, setSwitchProgress] = useState(0);
+  const [switchError, setSwitchError] = useState<RoomVisualMode | null>(null);
   const timerRef = useRef<number | null>(null);
   const warmPreset = (mode: RoomVisualMode) => {
     if (mode === 'folia') void preloadFoliaStage().catch(() => {});
   };
+
+  useEffect(
+    () => {
+      const idleWindow = window as unknown as {
+        requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+        cancelIdleCallback?: (handle: number) => void;
+      };
+      const warmDuringIdle = () => warmPreset('folia');
+      const idleHandle = idleWindow.requestIdleCallback
+        ? idleWindow.requestIdleCallback(warmDuringIdle, { timeout: 2500 })
+        : window.setTimeout(warmDuringIdle, 1200);
+      return () => {
+        if (idleWindow.cancelIdleCallback && idleWindow.requestIdleCallback) idleWindow.cancelIdleCallback(idleHandle);
+        else window.clearTimeout(idleHandle);
+      };
+    },
+    [],
+  );
 
   useEffect(
     () => () => {
@@ -42,16 +62,30 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
   );
 
   const handleSelect = useCallback(
-    (mode: RoomVisualMode) => {
+    async (mode: RoomVisualMode) => {
       if (mode === value) return;
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      setSwitchError(null);
       setSwitchingMode(mode);
-      warmPreset(mode);
-      timerRef.current = window.setTimeout(() => {
-        setSwitchingMode(null);
-        timerRef.current = null;
-      }, PULSE_MS);
-      onChange(mode);
+      setSwitchProgress(8);
+      const startedAt = Date.now();
+      const progressTimer = window.setInterval(() => {
+        setSwitchProgress((current) => Math.min(92, Math.max(current, Math.round(8 + (Date.now() - startedAt) / 18))));
+      }, 80);
+      try {
+        if (mode === 'folia') await preloadFoliaStage();
+        onChange(mode);
+        setSwitchProgress(100);
+      } catch {
+        setSwitchError(mode);
+        return;
+      } finally {
+        window.clearInterval(progressTimer);
+        timerRef.current = window.setTimeout(() => {
+          setSwitchingMode(null);
+          timerRef.current = null;
+        }, PULSE_MS);
+      }
     },
     [onChange, value],
   );
@@ -73,7 +107,7 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
             onPointerEnter={() => warmPreset(mode)}
             onFocus={() => warmPreset(mode)}
           >
-            <div className="pc-name">{meta.name}</div>
+            <div className="pc-name">{switching ? `${meta.name} · ${switchError === mode ? '加载失败' : `加载 ${switchProgress}%`}` : meta.name}</div>
             <div className="pc-desc">{PRESET_DESC[mode]}</div>
           </button>
         );

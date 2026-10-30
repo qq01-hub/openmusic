@@ -28,6 +28,28 @@ export function isPublicMetingCoverRequest(req) {
     && (query.size === undefined || typeof query.size === 'string' && /^[1-9]\d{0,3}$/u.test(query.size) && Number(query.size) <= 2048);
 }
 
+export function isMediaProxyCoverRequest(req) {
+  if (req.method !== 'GET' || req.path.toLowerCase().replace(/\/+$/u, '') !== '/api/media-proxy') return false;
+  const query = req.query || {};
+  if (query.size !== undefined && /^[1-9]\d{0,3}$/u.test(String(query.size)) && Number(query.size) <= 2048) return true;
+  try {
+    const parsed = new URL(String(query.url || '').trim());
+    const host = parsed.hostname.toLowerCase();
+    if (/\.(?:jpe?g|png|gif|webp|avif|bmp)$/iu.test(parsed.pathname)) return true;
+    return ['imge.kugou.com', 'imgessl.kugou.com', 'kgimg.com', 'kgimg.net', 'douyinpic.com', 'gtimg.cn', 'gtimg.com'].some(
+      domain => host === domain || host.endsWith(`.${domain}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isContinuationMediaRangeRequest(req) {
+  if (req.method !== 'GET' || req.path.toLowerCase().replace(/\/+$/u, '') !== '/api/media-proxy') return false;
+  const range = String(req.headers?.range || '').trim();
+  return /^bytes=[1-9]\d*-\d*$/iu.test(range);
+}
+
 export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity, ensureIdentity, risk, getIp, getNetworkContext = () => ({}), withContext, metric, verifyDevice = async () => { throw new DeviceProofError(); }, onHumanChallenge = () => {}, resolveAnonymous = async () => null }) {
   return async (req, res, next) => {
     const startedAt = performance.now();
@@ -54,7 +76,22 @@ export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity,
       }
       if (!account.anonymous && !publicCover && (/^\/api\/(?:meting$|music(?:\/|$)|qishui-source$)/u.test(path) || path.startsWith('/api/auth/') && req.method === 'POST')) await verifyDevice(req);
       const ip = getIp(req);
-      const kind = publicCover ? 'image' : /^\/api\/(?:meting|music(?:\/|$)|media-proxy|qishui-source)/u.test(path) ? 'music' : 'api';
+      const mediaProxyCover = isMediaProxyCoverRequest(req);
+      if (isContinuationMediaRangeRequest(req) && !mediaProxyCover) {
+        if (account.status === 'blocked') {
+          return res.status(403).json({ error: '账户访问已受限，请联系管理员复核', code: 'ACCOUNT_RISK_BLOCKED' });
+        }
+        const identity = resolveIdentity(req);
+        const roomUserId = account.roomUserId || await ensureIdentity(account.id);
+        if (!identity?.userId || identity.userId !== roomUserId) {
+          return res.status(401).json({ error: '账户身份已变化，请刷新页面后重试', code: 'ACCOUNT_IDENTITY_MISMATCH' });
+        }
+        if (!account.anonymous) req.account = account;
+        req.riskAccount = account;
+        req.apiIdentity = identity;
+        return withContext({ accountId: account.id, userId: identity.userId, clientIp: ip }, () => next());
+      }
+      const kind = (publicCover || mediaProxyCover) ? 'image' : /^\/api\/(?:meting|music(?:\/|$)|media-proxy|qishui-source)/u.test(path) ? 'music' : 'api';
       const musicContext = kind === 'music' ? musicRequestContext(path, req.query) : null;
       // 未识别的 Meting 操作也计入取链预算，防止上游接受别名、缺省值或重复参数后绕过额度
       const operation = musicContext?.operation || (path === '/api/meting' ? 'url' : req.query?.type);

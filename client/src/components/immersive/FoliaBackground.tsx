@@ -19,6 +19,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   const host = useRef<HTMLDivElement>(null);
   const [reload, setReload] = useState(0);
   const [ready, setReady] = useState(0);
+  const [loadingProgress, setLoadingProgress] = useState(8);
   const [failed, setFailed] = useState(false);
   const [analyzeBeats, setAnalyzeBeats] = useState(false);
   const stageReady = useRef(false);
@@ -36,6 +37,8 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
     const controller = new AbortController();
     stageReady.current = false;
     stageMounted.current = false;
+    setLoadingProgress(8);
+    const progressTimer = window.setInterval(() => setLoadingProgress((value) => Math.min(92, value + 3)), 180);
     const shadow = host.current!.shadowRoot || host.current!.attachShadow({ mode: 'open' });
     delete host.current!.dataset.ready;
     const dispose = () => {
@@ -45,6 +48,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       stageMounted.current = false;
       controller.abort();
       window.clearTimeout(timeout);
+      window.clearInterval(progressTimer);
       unmount?.();
       shadow.replaceChildren();
     };
@@ -100,6 +104,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       if (event.data?.type === 'openmusic:folia-ready') {
         if (stageReady.current) return;
         stageReady.current = true;
+        setLoadingProgress(100);
         setReady(value => value + 1);
         setFailed(false);
       }
@@ -185,7 +190,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   return <div className="pointer-events-auto absolute inset-0 z-10">
     {analyzeBeats && <GalaxyBeatMapDriver song={song} isPlaying={isPlaying} />}
     <div ref={host} data-folia-stage aria-label="Folia 沉浸歌词舞台" className="absolute inset-0" />
-    {!ready && !failed && <div role="status" className="absolute inset-0 flex items-center justify-center text-white/70">正在加载 Folia 舞台</div>}
+    {!ready && !failed && <div role="status" aria-live="polite" className="absolute inset-0 flex items-center justify-center text-white/70">正在加载 Folia 舞台 · {loadingProgress}%</div>}
     {failed && <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-[#12141c] text-white">
       <p>Folia 舞台暂时无法加载</p><button type="button" onClick={() => { resetFoliaStageLoader(); setReady(0); setFailed(false); setReload(value => value + 1); }}>重新加载</button>
     </div>}

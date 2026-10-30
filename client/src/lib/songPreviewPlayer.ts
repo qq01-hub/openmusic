@@ -1,9 +1,9 @@
 import type { SearchResult } from '../types';
 import { getSongUrlInfo, songKey } from '../api/music';
 import { resolveQishuiLocalPlaybackUrl, isQishuiLocalPlaybackUrl } from './qishuiLocalPlayback';
-import { getSharedAudio } from './audioElement';
+import { applyIndependentAudioVolume, getSharedAudio } from './audioElement';
 import { getAudioController } from './audioController';
-import { configureInlineAudio } from './audioUnlock';
+import { configureInlineAudio, isIOS } from './audioUnlock';
 import {
   acquireRoomAudio,
   consumeRoomResumeRequest,
@@ -39,7 +39,7 @@ function notify() {
 
 export function applyPreviewVolume(volume: number): void {
   if (!previewAudio) return;
-  previewAudio.volume = Math.min(1, Math.max(0, volume));
+  applyIndependentAudioVolume(previewAudio, volume);
 }
 
 function syncPreviewVolume(): void {
@@ -50,6 +50,7 @@ function getOrCreatePreviewAudio(): HTMLAudioElement {
   if (!previewAudio) {
     previewAudio = new Audio();
     configureInlineAudio(previewAudio);
+    if (isIOS()) previewAudio.crossOrigin = 'anonymous';
     previewAudio.preload = 'metadata';
     syncPreviewVolume();
     previewAudio.addEventListener('ended', () => {

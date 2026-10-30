@@ -60,9 +60,10 @@ import {
   getCachedUrlCrossSourceFrom,
   getTrackCrossSourceFrom,
 } from '../lib/songPreloadCache';
-import { resolveQishuiLocalPlaybackUrl } from '../lib/qishuiLocalPlayback';
+import { resolveQishuiLocalPlaybackUrl, retainQishuiPlaybackUrl } from '../lib/qishuiLocalPlayback';
+import { seekAudioTo, isExpectedAudioSeek, finishAudioSeek } from '../lib/audioSeek';
 import { refreshSignedApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
-import { isProxiedMediaUrl, toProxiedMediaUrl } from '../lib/mediaProxyUrl';
+import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../lib/mediaProxyUrl';
 import { shouldProxySongPlaybackUrl } from '../lib/roomVisualPreset';
 import {
   classifyMediaPlaybackError,
@@ -77,7 +78,7 @@ import {
   isPlaybackQualityLockedToLowest,
   lockPlaybackQualityToLowest,
 } from '../lib/playbackQualityLock';
-import { waitForAudioCanPlay } from '../lib/audioReady';
+import { waitForAudioCanPlay, waitForAudioMinimumReady } from '../lib/audioReady';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
 import { resetDriftController } from '../lib/driftController';
 import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying, resolveInitialTrackSyncTime } from '../lib/playbackState';
@@ -208,19 +209,22 @@ async function reloadAudioWithFreshSign(audio: HTMLAudioElement): Promise<void> 
   }
   const fresh = (await refreshSignedApiUrl(prevSrc)) || prevSrc;
   const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+  // 若代理流仍在正常加载且地址未变，勿调 load() 清空已有缓冲重头拉取
+  if (fresh === prevSrc && !audio.error && audio.networkState === HTMLMediaElement.NETWORK_LOADING) {
+    await audio.play().catch(() => {});
+    return;
+  }
   if (fresh !== prevSrc) {
     audio.src = fresh;
-    try {
-      if (resumeAt > 0) audio.currentTime = resumeAt;
-    } catch {
-      // ignore seek failures before metadata
-    }
   }
   audio.load();
-  try {
-    if (resumeAt > 0) audio.currentTime = resumeAt;
-  } catch {
-    // ignore
+  if (resumeAt > 0) {
+    await waitForAudioMinimumReady(audio);
+    try {
+      seekAudioTo(audio, resumeAt);
+    } catch {
+      // ignore
+    }
   }
   await audio.play().catch(() => {});
 }
@@ -285,6 +289,7 @@ function revertUnauthorizedSeek(audio: HTMLAudioElement): void {
   if (canSeekInRoom(live, canControlPlayback)) return;
   const current = live?.current;
   if (!current || !isAudioBoundToQueue(audio, current.queueId)) return;
+  if (isExpectedAudioSeek(audio)) return;
 
   const state = getClientPlaybackState();
   const expected = state?.trackId === current.queueId
@@ -294,7 +299,7 @@ function revertUnauthorizedSeek(audio: HTMLAudioElement): void {
 
   enforcingFollowerSeek = true;
   try {
-    audio.currentTime = Math.max(0, expected);
+    seekAudioTo(audio, Math.max(0, expected));
     snapSmoothPlaybackTime(expected);
   } finally {
     enforcingFollowerSeek = false;
@@ -518,6 +523,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   const recoverReadyAudio = useCallback((audio: HTMLAudioElement) => {
     if (isRoomAudioTakenOver() || skippingRef.current) return;
+    // loadedmetadata/loadeddata 早于 canplay，加载缓冲期间不提前触发强制跳转与开播
+    if (useAudioStore.getState().trackLoading) return;
     const liveRoom = useRoomStore.getState().room;
     if (!liveRoom?.current || !liveRoom.isPlaying) return;
     if (!isAudioBoundToQueue(audio, liveRoom.current.queueId)) return;
@@ -724,7 +731,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               const resumeAt = audio.currentTime;
               void audio.play().then(() => {
                 if (resumeAt > 1 && audio.currentTime < resumeAt - 1) {
-                  audio.currentTime = resumeAt;
+                  seekAudioTo(audio, resumeAt);
                 }
               }).catch(() => {});
             }
@@ -784,6 +791,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
       audio.addEventListener('seeked', () => {
         if (enforcingFollowerSeek) return;
+        if (isExpectedAudioSeek(audio)) {
+          finishAudioSeek(audio);
+          return;
+        }
         revertUnauthorizedSeek(audio);
       });
 
@@ -807,6 +818,34 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         if (isHumanCheckPending()) return;
 
         recordSongPlaybackFailure();
+
+        const failedSrc = audio.currentSrc || audio.src;
+        if (
+          (song.source || 'netease') !== 'qishui'
+          && failedSrc
+          && !isSameOriginMediaUrl(failedSrc)
+          && !isProxiedMediaUrl(failedSrc)
+          && runtime.tempRetries.current < MAX_TEMP_PLAYBACK_RETRIES
+        ) {
+          const proxied = toProxiedMediaUrl(failedSrc);
+          if (proxied && proxied !== failedSrc) {
+            runtime.tempRetries.current += 1;
+            controller.enqueue(async () => {
+              const freshProxied = (await refreshSignedApiUrl(proxied)) || proxied;
+              const resumeAt = Number.isFinite(controller.audio.currentTime) ? controller.audio.currentTime : 0;
+              controller.audio.pause();
+              controller.audio.src = freshProxied;
+              bindAudioQueueId(controller.audio, song.queueId);
+              controller.audio.load();
+              if (resumeAt > 0) {
+                await waitForAudioMinimumReady(controller.audio);
+                try { seekAudioTo(controller.audio, resumeAt); } catch { /* ignore */ }
+              }
+              await controller.audio.play().catch(() => {});
+            });
+            return;
+          }
+        }
 
         // 汽水严禁回退到 media-proxy（那是服务端拉密文/解密路径）；只走本地解密或恢复逻辑。
         if ((song.source || 'netease') === 'qishui') {
@@ -927,7 +966,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
                   fromProxied: false,
                 }));
                 if (resumeAt > 0) {
-                  try { controller.audio.currentTime = resumeAt; } catch { /* metadata 尚未就绪 */ }
+                  await waitForAudioMinimumReady(controller.audio);
+                  try { seekAudioTo(controller.audio, resumeAt); } catch { /* metadata 尚未就绪 */ }
                 }
                 await controller.audio.play().catch(() => {});
                 return;
@@ -936,7 +976,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
             await reloadAudioWithFreshSign(controller.audio);
           });
-        }, 2500);
+        }, isProxiedMediaUrl(audio.currentSrc || audio.src) ? 6000 : 2500);
       });
 
       audio.addEventListener('playing', () => {
@@ -1067,6 +1107,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       loadGeneration.current += 1;
       loadLockRef.current = EMPTY_LOAD_LOCK;
       suppressAutoResumeRef.current = false;
+      retainQishuiPlaybackUrl('');
       controller.enqueue(() => {
         const audio = controller.audio;
         audio.pause();
@@ -1246,7 +1287,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             }
             if (localResult.status === 'ok') {
               playbackUrl = localResult.url;
-              qishuiWebAudio = proxyQishui;
+              qishuiWebAudio = isIOS() || shouldProxySongPlaybackUrl() || proxyQishui;
             }
           }
           qualityLabel = resolvedMeta.qualityLabel;
@@ -1302,7 +1343,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         if (gen !== loadGeneration.current) return;
 
         const effectiveSource = crossSourceFrom || current.source || 'netease';
-        const useWebAudioOutput = qishuiWebAudio
+        const useWebAudioOutput = isIOS()
+          || qishuiWebAudio
           || (shouldProxySongPlaybackUrl() && isProxiedMediaUrl(playbackUrl))
           || (isIOS() && effectiveSource === 'kugou' && isProxiedMediaUrl(playbackUrl));
         setSharedAudioRouting(useWebAudioOutput);
@@ -1325,6 +1367,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               : Math.max(0, Number(useRoomStore.getState().room?.currentTime) || 0);
             snapSmoothPlaybackTime(justSkippedRef.current ? 0 : previewTime);
           }
+          retainQishuiPlaybackUrl(playbackUrl);
           audio.src = playbackUrl;
           bindAudioQueueId(audio, current.queueId);
           audio.load();

@@ -10,6 +10,14 @@ export const DEFAULT_MEDIA_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const MAX_MEDIA_REDIRECTS = 5;
+const DNS_CACHE_TTL_MS = 60_000;
+const MAX_DNS_CACHE_ENTRIES = 512;
+const validatedDnsCache = new Map();
+const REDIRECT_CACHE_TTL_MS = 180_000;
+const MAX_REDIRECT_CACHE_ENTRIES = 512;
+const validatedRedirectCache = new Map();
+const httpMediaAgent = new http.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, timeout: 60_000 });
+const httpsMediaAgent = new https.Agent({ keepAlive: true, maxSockets: 128, maxFreeSockets: 32, timeout: 60_000 });
 /** 缓冲类响应（封面图等）体积上限，防止代理内存耗尽 */
 const MAX_BUFFERED_MEDIA_BYTES = 8 * 1024 * 1024;
 /** 部分网易云封面 CDN 即使请求 size=96 仍会返回原图，允许图片使用更高但有限的上限。 */
@@ -119,6 +127,12 @@ async function assertPublicDnsTarget(hostname, timeoutMs) {
     return [{ address: host, family: isIP(host) }];
   }
 
+  const cacheKey = host.toLowerCase();
+  const cached = validatedDnsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.records;
+  }
+
   let records;
   let deadline;
   try {
@@ -142,7 +156,16 @@ async function assertPublicDnsTarget(hostname, timeoutMs) {
     err.statusCode = 403;
     throw err;
   }
-  return records;
+  // 优先使用 IPv4，规避容器或宿主无 IPv6 出口时的连接等待
+  const sorted = [...records].sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
+  validatedDnsCache.delete(cacheKey);
+  validatedDnsCache.set(cacheKey, { records: sorted, expiresAt: Date.now() + DNS_CACHE_TTL_MS });
+  while (validatedDnsCache.size > MAX_DNS_CACHE_ENTRIES) {
+    const oldest = validatedDnsCache.keys().next().value;
+    if (!oldest) break;
+    validatedDnsCache.delete(oldest);
+  }
+  return sorted;
 }
 
 /**
@@ -264,18 +287,25 @@ async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist,
 function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false } = {}) {
   return new Promise((resolve, reject) => {
     const transport = parsed.protocol === 'https:' ? https : http;
+    const agent = parsed.protocol === 'https:' ? httpsMediaAgent : httpMediaAgent;
     let deadline;
+    const timeout = () => request.destroy(Object.assign(new Error('媒体请求超时'), { code: 'ETIMEDOUT' }));
     const request = transport.request({
       protocol: parsed.protocol,
       hostname: parsed.hostname.replace(/^\[|\]$/gu, ''),
       port: parsed.port || undefined,
       path: `${parsed.pathname}${parsed.search}`,
-      method, headers, signal,
+      method, headers, signal, agent,
       lookup: (_hostname, options, callback) => options?.all
         ? callback(null, addresses)
         : callback(null, addresses[0].address, addresses[0].family),
     }, (response) => {
       clearTimeout(deadline);
+      request.off('timeout', timeout);
+      // 响应头到达后移除首包超时，改为较长流式空闲超时，避免播放中途因背压在 20s 被掐断
+      request.setTimeout(120_000, () => {
+        response.destroy(Object.assign(new Error('媒体流读取超时'), { code: 'ETIMEDOUT' }));
+      });
       try {
         const responseHeaders = new Headers();
         for (const [name, value] of Object.entries(response.headers)) {
@@ -315,7 +345,6 @@ function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, {
     });
     request.on('error', reject);
     request.once('close', () => clearTimeout(deadline));
-    const timeout = () => request.destroy(Object.assign(new Error('媒体请求超时'), { code: 'ETIMEDOUT' }));
     deadline = setTimeout(timeout, timeoutMs);
     request.setTimeout(timeoutMs, timeout);
     request.end();
@@ -339,12 +368,34 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
   const requireAllowlist = fetchOptions.requireAllowlist !== false;
   const headers = { ...(fetchOptions.headers || {}) };
 
-  let currentUrl = preferHttpsMediaUrl(rawUrl);
+  const initialUrl = preferHttpsMediaUrl(rawUrl);
+  const cachedRedirect = validatedRedirectCache.get(initialUrl);
+  let usedCachedRedirect = Boolean(cachedRedirect && cachedRedirect.expiresAt > Date.now());
+  let currentUrl = usedCachedRedirect ? cachedRedirect.targetUrl : initialUrl;
   for (let hop = 0; hop <= MAX_MEDIA_REDIRECTS; hop += 1) {
     fetchOptions.signal?.throwIfAborted();
     const target = await assertSafeMediaUrl(currentUrl, extraAllowedHosts, { requireAllowlist, timeoutMs });
     fetchOptions.signal?.throwIfAborted();
-    const response = await requestPinnedMedia(target, headers, fetchOptions.signal, timeoutMs, fetchOptions);
+    let response;
+    try {
+      response = await requestPinnedMedia(target, headers, fetchOptions.signal, timeoutMs, fetchOptions);
+    } catch (err) {
+      if (usedCachedRedirect) {
+        validatedRedirectCache.delete(initialUrl);
+        usedCachedRedirect = false;
+        currentUrl = initialUrl;
+        continue;
+      }
+      throw err;
+    }
+
+    if (usedCachedRedirect && response.status >= 400 && response.status !== 416) {
+      await cancelMediaBody(response);
+      validatedRedirectCache.delete(initialUrl);
+      usedCachedRedirect = false;
+      currentUrl = initialUrl;
+      continue;
+    }
 
     if (response.status >= 300 && response.status < 400) {
       const location = String(response.headers.get('location') || '').trim();
@@ -367,6 +418,16 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
         if (['authorization', 'cookie', 'proxy-authorization'].includes(name.toLowerCase()) || name.toLowerCase().startsWith('x-openmusic-')) delete headers[name];
       }
       continue;
+    }
+
+    if (currentUrl !== initialUrl && (response.ok || response.status === 206)) {
+      validatedRedirectCache.delete(initialUrl);
+      validatedRedirectCache.set(initialUrl, { targetUrl: currentUrl, expiresAt: Date.now() + REDIRECT_CACHE_TTL_MS });
+      while (validatedRedirectCache.size > MAX_REDIRECT_CACHE_ENTRIES) {
+        const oldest = validatedRedirectCache.keys().next().value;
+        if (!oldest) break;
+        validatedRedirectCache.delete(oldest);
+      }
     }
 
     return response;

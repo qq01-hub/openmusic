@@ -10,6 +10,7 @@ import {
   type ClientPlaybackState,
 } from './playbackState';
 import { isAudioBuffering } from './audioBuffering';
+import { seekAudioTo } from './audioSeek';
 import { waitForAudioProgress } from './audioReady';
 import { getBufferedAheadSeconds } from './audioReadiness';
 import { shouldSkipRoutineSync as shouldSkipByBufferingState } from './syncStateMachine';
@@ -243,7 +244,7 @@ function explicitHardSeek(
   if (trackId) ensureFinalSyncTrack(trackId);
   finalSyncDone = false;
   lockPlaybackRate(audio);
-  audio.currentTime = target;
+  seekAudioTo(audio, target);
   snapSmoothPlaybackTime(target);
   debugLog('sync_seek_done', debugLine({
     reason,
@@ -284,7 +285,7 @@ function applyAutoPlaybackSync(
 
   const diff = target - audio.currentTime;
   if (diff > 0) {
-    audio.currentTime = target;
+    seekAudioTo(audio, target);
     snapSmoothPlaybackTime(target);
     finalSyncDone = true;
   }
@@ -353,7 +354,7 @@ async function recoverFromEndedAudio(
   finalSyncDone = false;
   lockPlaybackRate(audio);
   audio.pause();
-  audio.currentTime = seekTarget;
+  seekAudioTo(audio, seekTarget);
   snapSmoothPlaybackTime(seekTarget);
 
   const initial = await tryPlayWithAutoplayFallback(audio, Boolean(options.tvMode));
@@ -513,7 +514,11 @@ async function applyMandatorySync(
     return 'paused';
   }
 
-  explicitHardSeek(audio, target, trackId, options.forceZero ? 'force_zero' : 'mandatory');
+  if (audio.paused || options.forceZero || Math.abs(target - audio.currentTime) > 0.25) {
+    if (audio.paused || options.forceZero || Math.abs(target - audio.currentTime) > 0.25) {
+    explicitHardSeek(audio, target, trackId, options.forceZero ? 'force_zero' : 'mandatory');
+  }
+  }
 
   if (audio.paused) {
     const initial = await tryPlayWithAutoplayFallback(audio, Boolean(options.tvMode));

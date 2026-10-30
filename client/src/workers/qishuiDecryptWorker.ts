@@ -230,7 +230,8 @@ function findFlacMetadata(stsd: Box): Uint8Array | null {
     if (stsd.data[index] !== marker[0] || stsd.data[index + 1] !== marker[1]
       || stsd.data[index + 2] !== marker[2] || stsd.data[index + 3] !== marker[3]) continue;
     const size = u32(stsd.data, index - 4);
-    if (size >= 8 && index - 4 + size <= stsd.data.length) return stsd.data.subarray(index + 4, index - 4 + size);
+    // dfLa 是 FullBox，跳过 4 字节 version/flags 后才是 FLAC 元数据块
+    if (size >= 12 && index - 4 + size <= stsd.data.length) return stsd.data.subarray(index + 8, index - 4 + size);
   }
   return null;
 }
@@ -284,44 +285,41 @@ async function decryptAudio(data: Uint8Array, rawKey: string): Promise<{ data: U
     ['decrypt'],
   );
   const metadata = findFlacMetadata(stsd);
-  // 复用 16 字节 counter，避免为每个 sample 分配独立 IV Uint8Array（高采样数时对象开销巨大）
-  const counter = new Uint8Array(16);
+  // 小批并行避免每个样本串行跨 WebCrypto 调度，同时控制内存峰值
+  const decryptSamples = async (write: (sample: Uint8Array, index: number) => void) => {
+    for (let start = 0; start < sizes.length; start += 64) {
+      await Promise.all(Array.from({ length: Math.min(64, sizes.length - start) }, async (_, offset) => {
+        const index = start + offset;
+        const counter = new Uint8Array(16);
+        counter.set(senc.data.subarray(8 + index * 8, 16 + index * 8));
+        const sourceOffset = sampleOffsets[index];
+        const decrypted = await crypto.subtle.decrypt(
+          { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 64 },
+          key,
+          toArrayBuffer(data.subarray(sourceOffset, sourceOffset + sizes[index])),
+        );
+        write(new Uint8Array(decrypted), index);
+      }));
+    }
+  };
   if (metadata) {
     const header = new TextEncoder().encode('fLaC');
     const totalBytes = sizes.reduce((sum, size) => sum + size, 0);
     const output = new Uint8Array(header.length + metadata.length + totalBytes);
     output.set(header, 0);
     output.set(metadata, header.length);
+    const outputOffsets = new Uint32Array(sizes.length);
     let writeAt = header.length + metadata.length;
     for (let index = 0; index < sizes.length; index += 1) {
-      const size = sizes[index];
-      const sourceOffset = sampleOffsets[index];
-      counter.fill(0);
-      counter.set(senc.data.subarray(8 + index * 8, 16 + index * 8));
-      const decrypted = await crypto.subtle.decrypt(
-        { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 64 },
-        key,
-        toArrayBuffer(data.subarray(sourceOffset, sourceOffset + size)),
-      );
-      output.set(new Uint8Array(decrypted), writeAt);
-      writeAt += size;
+      outputOffsets[index] = writeAt;
+      writeAt += sizes[index];
     }
+    await decryptSamples((sample, index) => output.set(sample, outputOffsets[index]));
     return { data: output, contentType: 'audio/flac' };
   }
 
-  const samples: Uint8Array[] = [];
-  for (let index = 0; index < sizes.length; index += 1) {
-    const size = sizes[index];
-    const sourceOffset = sampleOffsets[index];
-    counter.fill(0);
-    counter.set(senc.data.subarray(8 + index * 8, 16 + index * 8));
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 64 },
-      key,
-      toArrayBuffer(data.subarray(sourceOffset, sourceOffset + size)),
-    );
-    samples.push(new Uint8Array(decrypted));
-  }
+  const samples: Uint8Array[] = new Array(sizes.length);
+  await decryptSamples((sample, index) => { samples[index] = sample; });
   const ftyp = box(data, 'ftyp');
   const draftMoov = cleanBoxChildren(data, moov.offset + 8, moov.offset + moov.size, {
     sizes, stsc: stscEntries, chunkCount, mdatOffset: 0,
@@ -337,14 +335,14 @@ async function decryptAudio(data: Uint8Array, rawKey: string): Promise<{ data: U
 }
 
 const workerScope = self as unknown as {
-  onmessage: ((event: MessageEvent<{ id: number; url: string; auth: string }>) => void) | null;
+  onmessage: ((event: MessageEvent<{ id: number; url: string; auth: string; proxy?: boolean }>) => void) | null;
   postMessage: (message: unknown, transfer?: Transferable[]) => void;
 };
 
-workerScope.onmessage = async (event: MessageEvent<{ id: number; url: string; auth: string }>) => {
-  const { id, url, auth } = event.data;
+workerScope.onmessage = async (event: MessageEvent<{ id: number; url: string; auth: string; proxy?: boolean }>) => {
+  const { id, url, auth, proxy } = event.data;
   try {
-    const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+    const response = await fetch(url, { credentials: proxy ? 'include' : 'omit', referrerPolicy: 'no-referrer' });
     if (!response.ok) throw new Error(`汽水 CDN 请求失败: ${response.status}`);
     const encrypted = await readResponse(response);
     const decrypted = await decryptAudio(encrypted, auth);
