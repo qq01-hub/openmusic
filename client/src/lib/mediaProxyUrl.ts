@@ -1,5 +1,3 @@
-import { isIOS } from './audioUnlock';
-
 /** 音乐平台 CDN 域名（与服务端 mediaProxy 的允许列表保持一致） */
 const MUSIC_CDN_DOMAINS = [
   '163.com', '126.net', 'netease.com',
@@ -22,24 +20,15 @@ export function isAllowedCoverHostname(hostname: string): boolean {
 
 /**
  * 将第三方媒体 URL 转为同源 `/api/media-proxy`。
- * 用于着色器频谱、iOS 网页音量与封面 Canvas 采样
- * 桌面普通播放与列表封面走直链或 `/api/meting`
+ * 仅用于：① 着色器背景下的歌曲播放（Web Audio 频谱）；② 封面背景 Canvas 采样（AmbientCoverLayers）。
+ * 普通播放（off / cover-bg）与列表封面走直链或 `/api/meting`。
  */
 
 const MEDIA_PROXY_PATH = '/api/media-proxy';
 
 export function isProxiedMediaUrl(url: string): boolean {
   if (!url) return false;
-  if (url.startsWith(`${MEDIA_PROXY_PATH}?`)) return true;
-  try {
-    const parsed = new URL(url);
-    if (typeof window !== 'undefined' && parsed.origin !== window.location.origin) return false;
-    return /^https?:$/.test(parsed.protocol)
-      && parsed.pathname === MEDIA_PROXY_PATH
-      && Boolean(parsed.search);
-  } catch {
-    return false;
-  }
+  return url.startsWith(`${MEDIA_PROXY_PATH}?`);
 }
 
 /** 汽水鉴权解密端点禁止套 media-proxy：解密只能在浏览器本地完成。 */
@@ -115,12 +104,10 @@ export function shouldProxyInsecurePlaybackUrl(url: string): boolean {
 /**
  * 播放地址是否应走同源代理：
  * - 沉浸/Web Audio 频谱模式
- * - iOS Web Audio 音量控制
  * - HTTPS 站点上的 HTTP 音频（如酷狗直链）
  */
 export function shouldProxyPlaybackUrl(url: string, visualModeProxy = false): boolean {
-  // iOS 音量经 Web Audio 控制，外链需同源代理以避免跨域音频被静音
-  return visualModeProxy || isIOS() || shouldProxyInsecurePlaybackUrl(url);
+  return visualModeProxy || shouldProxyInsecurePlaybackUrl(url);
 }
 
 /**

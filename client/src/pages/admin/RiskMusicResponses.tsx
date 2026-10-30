@@ -25,7 +25,7 @@ export default function RiskMusicResponses({ detail, compact = false, onInspect 
       ['失败 / 中断', `${count(daily.response_failed)} / ${count(daily.response_aborted)}`],
       ['替代曲响应', count(daily.response_substituted)],
       ['采样目标歌曲', `${count(analysis?.distinctSongs)} 首`],
-    ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div> : <Descriptions size="small" column={{ xs: 1, sm: 2, lg: 3 }} items={[
+    ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}</div> : <Descriptions size="middle" column={{ xs: 1, sm: 2, lg: 3 }} items={[
       { key: 'total', label: '今日已记录响应', children: count(daily.response_total) },
       { key: 'ok', label: '今日正常 / 空结果', children: `${count(daily.response_ok)} / ${count(daily.response_empty)}` },
       { key: 'failed', label: '今日失败 / 中断', children: `${count(daily.response_failed)} / ${count(daily.response_aborted)}` },

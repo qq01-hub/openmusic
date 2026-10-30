@@ -4,7 +4,6 @@ import {
   normalizeRoomAudioQuality,
 } from '../api/music/quality';
 import type { RoomAudioQuality } from '../types';
-import { resetIosQualityMemory } from '../lib/iosPlaybackQuality';
 
 const STORAGE_KEY = 'openmusic:user-audio-quality';
 
@@ -46,16 +45,10 @@ export const useUserQualityStore = create<UserQualityStore>((set, get) => ({
     ) {
       return;
     }
-    for (const source of ['netease', 'tencent', 'kugou', 'qishui'] as const) {
-      if (current?.[source] !== quality[source]) resetIosQualityMemory(source);
-    }
     persistQuality(quality);
     set({ quality });
   },
   clearQuality: () => {
-    for (const source of ['netease', 'tencent', 'kugou', 'qishui'] as const) {
-      resetIosQualityMemory(source);
-    }
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {

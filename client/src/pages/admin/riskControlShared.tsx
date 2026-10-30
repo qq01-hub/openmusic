@@ -51,7 +51,7 @@ export type RiskPage = { items: RiskAccount[]; total: number; high: number; bloc
 export type RiskEvent = { at: number; ip: string; accountId?: string; accountHash?: string; code: string; kind?: string };
 
 export const STATUS_OPTIONS = [{ value: 'normal', label: '正常' }, { value: 'watch', label: '关注' }, { value: 'blocked', label: '限制访问' }];
-export const PROVIDERS: Record<string, string> = { email: '邮箱', github: 'GitHub', linuxdo: 'Linux.do', wechat: '微信文件传输助手登录', wechat_scan: '微信扫码登录', qq_scan: 'QQ扫码登录' };
+export const PROVIDERS: Record<string, string> = { email: '邮箱', github: 'GitHub', linuxdo: 'Linux.do', wechat: '微信文件传输助手登录' };
 export const POLICY_LABELS: Record<keyof Policy, string> = { minuteLimit: '账户每分钟总请求', dayLimit: '账户每日总请求', musicMinuteLimit: '账户每分钟音乐请求', musicDayLimit: '账户每日音乐请求', ipMinuteLimit: '同 IP 每分钟总请求', urlMinuteLimit: '账户每分钟取链', urlBurstLimit: '取链突发容量（10秒补满）' };
 export const time = (value: number) => value ? formatAuditTime(value) : '未记录';
 export const count = (value: number | string | undefined) => Number(value || 0).toLocaleString('zh-CN');

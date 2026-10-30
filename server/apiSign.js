@@ -64,8 +64,6 @@ const ACCOUNT_PUBLIC_POST_PATHS = new Set([
   '/api/auth/email/login',
   '/api/auth/logout',
   '/api/auth/wechat/account',
-  '/api/auth/social/wechat_scan/start', '/api/auth/social/wechat_scan/poll', '/api/auth/social/wechat_scan/complete',
-  '/api/auth/social/qq_scan/start', '/api/auth/social/qq_scan/poll', '/api/auth/social/qq_scan/complete',
 ]);
 
 export function isPublicApiPath(req) {

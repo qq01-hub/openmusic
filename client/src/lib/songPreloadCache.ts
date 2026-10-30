@@ -1,19 +1,11 @@
 import { getAvailableSources, getSongUrlInfo, getTrackKey, searchSongs, unwrapQishuiAudioUrl } from '../api/music';
 import { prefetchQishuiLocalPlayback } from './qishuiLocalPlayback';
 import { isHttpsPageContext } from './mediaProxyUrl';
-import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
 import { isIOS } from './audioUnlock';
-import {
-  buildPlaybackQualityFallbackChain,
-  getFirstSupportedIosQuality,
-  recordPlaybackQualityFallback,
-  getIosQualityRevision,
-  rememberPlayableIosQuality,
-} from './iosPlaybackQuality';
+import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
 import { stripApiSignParams } from './signedApiUrl';
 import {
   getLowestQuality,
-  getQualityOptionsForSource,
   getUserPlaybackQuality,
 } from '../api/music/quality';
 import {
@@ -29,45 +21,12 @@ import {
   resetPlaybackQualityLock,
 } from './playbackQualityLock';
 import { useAudioStore } from '../stores/audioStore';
-import { useRoomStore } from '../stores/roomStore';
 import type { MusicSource, QueueItem, RoomState, SearchResult } from '../types';
 import { isMobileDevice } from './audioUnlock';
 import { normalizeDurationMs } from './duration';
+import { isHumanCheckPending } from './humanCheckState';
 
 const MAX_URL_CACHE = 24;
-type IosQualityAttempt = { source: MusicSource; requested: string; quality: string; revision: number };
-const iosUrlQualities = new Map<string, IosQualityAttempt>();
-const iosAudioQualities = new WeakMap<HTMLAudioElement, { attempt: IosQualityAttempt; startedAt: number | null; recorded: boolean }>();
-
-/** 换源时保存请求代次，用户改音质后旧音频不能重新写回记忆 */
-export function bindSongPlaybackQuality(audio: HTMLAudioElement, source: MusicSource, url: string): void {
-  iosAudioQualities.delete(audio);
-  if (!isIOS()) return;
-  const attempt = iosUrlQualities.get(`${source}:${stripApiSignParams(url)}`);
-  if (attempt) iosAudioQualities.set(audio, { attempt, startedAt: null, recorded: false });
-}
-
-export function recordPlayableSongQuality(audio: HTMLAudioElement): void {
-  const bound = iosAudioQualities.get(audio);
-  if (!bound) return;
-  if (bound.recorded) return;
-  if (audio.paused || audio.seeking || audio.ended || audio.readyState < 3) {
-    bound.startedAt = null;
-    return;
-  }
-  if (bound.startedAt === null || audio.currentTime < bound.startedAt) {
-    bound.startedAt = audio.currentTime;
-    return;
-  }
-  if (audio.currentTime - bound.startedAt < 0.1) return;
-  const { source, requested, quality, revision } = bound.attempt;
-  rememberPlayableIosQuality(source, requested, quality, revision);
-  bound.recorded = true;
-}
-
-export function getSongPlaybackQualityAttempt(audio: HTMLAudioElement): Readonly<IosQualityAttempt> | undefined {
-  return iosAudioQualities.get(audio)?.attempt;
-}
 const DEFAULT_PREFETCH_COUNT = 2;
 // v4: 汽水带 auth 的 audio_mp4 必须保留解密包装地址，淘汰旧版直链缓存。
 const URL_CACHE_STORAGE_KEY = 'openmusic:song-url-cache:v4';
@@ -396,24 +355,17 @@ async function fetchCrossSourceFallback(song: QueueItem): Promise<CachedUrlEntry
 
 function getEffectivePlaybackQuality(song: Pick<QueueItem, 'id' | 'source'>): string | undefined {
   const source = songSourceOf(song);
-  const requestedQuality = getUserPlaybackQuality(source);
-  if (!isIOS() && isPlaybackQualityLockedToLowest()) {
-    return getLowestQuality(source) ?? requestedQuality;
+  if (isPlaybackQualityLockedToLowest()) {
+    return getLowestQuality(source) ?? getUserPlaybackQuality(source);
   }
-  if (isIOS() && requestedQuality) {
-    return getFirstSupportedIosQuality(
-      source,
-      requestedQuality,
-      getQualityOptionsForSource(source).map((option) => option.value),
-    );
-  }
-  return requestedQuality;
+  return getUserPlaybackQuality(source);
 }
 
 function songLikelyNeedsPlaybackProxy(song: Pick<QueueItem, 'source' | 'url'>): boolean {
   // 汽水始终本地解密，缓存键不要跟沉浸模式 proxy 标签绑在一起
   if (songSourceOf(song) === 'qishui') return false;
-  if (isIOS() || shouldProxySongPlaybackUrl()) return true;
+  if (shouldProxySongPlaybackUrl()) return true;
+  if (isIOS() && songSourceOf(song) === 'kugou') return true;
   if (!isHttpsPageContext()) return false;
   // 酷狗播放链多为 http://，HTTPS 站点必须走 media-proxy（不可升 https）
   if (songSourceOf(song) === 'kugou') return true;
@@ -500,9 +452,7 @@ async function fetchSongUrlOnce(
   quality: string | undefined,
   options: { refresh?: boolean } = {},
 ): Promise<FetchUrlResult> {
-  const source = songSourceOf(song);
-  const requested = getUserPlaybackQuality(source);
-  const revision = getIosQualityRevision(source);
+  if (isHumanCheckPending()) return { ok: false, errorClass: 'service' };
   const key = urlCacheKey(song, quality);
   const identityKey = identityUrlCacheKey(song, quality);
   if (options.refresh) {
@@ -526,7 +476,7 @@ async function fetchSongUrlOnce(
     const cached = urlCache.get(key);
     if (cached) {
       // 旧缓存可能仍是汽水的 /audio/qishui 包装地址；带 auth 的地址必须保留，
-      // 由浏览器 Worker 解密后再播放
+      // 由 Meting 解密后再交给浏览器播放。
       const unwrappedCachedUrl = songSourceOf(song) === 'qishui'
         ? unwrapQishuiAudioUrl('qishui', cached.url)
         : cached.url;
@@ -592,16 +542,6 @@ async function fetchSongUrlOnce(
       }
 
       const entry = { url, qualityLabel, loudness, duration };
-      if (isIOS() && requested && quality && revision === getIosQualityRevision(source)) {
-        const actualQuality = getQualityOptionsForSource(source)
-          .find((option) => option.label === qualityLabel || option.value === qualityLabel)?.value || quality;
-        const attemptKey = `${source}:${stripApiSignParams(url)}`;
-        iosUrlQualities.delete(attemptKey);
-        iosUrlQualities.set(attemptKey, { source, requested, quality: actualQuality, revision });
-        while (iosUrlQualities.size > MAX_URL_CACHE * 4) {
-          iosUrlQualities.delete(iosUrlQualities.keys().next().value!);
-        }
-      }
       urlCache.set(key, entry);
       identityUrlCache.set(identityKey, {
         expiresAt: Date.now() + IDENTITY_URL_CACHE_TTL_MS,
@@ -630,7 +570,7 @@ async function tryLowestQualityFetch(
   const lowest = getLowestQuality(source);
   if (!lowest) return { ok: false, errorClass: 'service' };
 
-  if (!isIOS()) lockPlaybackQualityToLowest();
+  lockPlaybackQualityToLowest();
   return fetchSongUrlOnce(song, lowest, { refresh: true });
 }
 
@@ -638,6 +578,7 @@ async function fetchSongUrl(
   song: Pick<QueueItem, 'queueId' | 'id' | 'source' | 'url'>,
   options: { refresh?: boolean; allowQualityDowngrade?: boolean } = {},
 ): Promise<CachedUrlEntry | null> {
+  if (isHumanCheckPending()) return null;
   const source = songSourceOf(song);
   const quality = getEffectivePlaybackQuality(song);
   const lowest = getLowestQuality(source);
@@ -663,9 +604,7 @@ async function fetchSongUrl(
     clearTrackSourceError(song);
     // 命中跨源缓存时补打标，避免刷新/重取后标丢失
     if (first.crossSource) markTrackCrossSource(song, first.crossSourceFrom);
-    if (allowQualityDowngrade) {
-      publishActualQuality(song, first.qualityLabel, first.crossSource ? first.crossSourceFrom : songSourceOf(song));
-    }
+    publishActualQuality(song, first.qualityLabel, first.crossSource ? first.crossSourceFrom : songSourceOf(song));
     return {
       url: first.url,
       qualityLabel: first.qualityLabel,
@@ -682,25 +621,6 @@ async function fetchSongUrl(
 
   // 播放取链可降档；预取不做降档（避免 lockPlaybackQualityToLowest 影响全屋）
   if (allowQualityDowngrade && source !== 'qishui' && !alreadyAtLowest) {
-    if (isIOS() && quality) {
-      const qualities = getQualityOptionsForSource(source).map((option) => option.value);
-      const chain = buildPlaybackQualityFallbackChain(quality, qualities, true);
-      for (let index = 1; index < chain.length; index += 1) {
-        const fallback = await fetchSongUrlOnce(song, chain[index], { refresh: true });
-        recordPlaybackQualityFallback(quality, chain[index], index);
-        if (!fallback.ok) continue;
-        clearTrackSourceError(song);
-        publishActualQuality(song, fallback.qualityLabel, fallback.crossSource ? fallback.crossSourceFrom : songSourceOf(song));
-        return {
-          url: fallback.url,
-          qualityLabel: fallback.qualityLabel,
-          crossSource: Boolean(fallback.crossSource),
-          crossSourceFrom: fallback.crossSourceFrom,
-          loudness: fallback.loudness,
-          duration: fallback.duration,
-        };
-      }
-    }
     const fallback = await tryLowestQualityFetch(song);
     if (fallback.ok) {
       clearTrackSourceError(song);
@@ -725,37 +645,18 @@ async function fetchSongUrl(
   return null;
 }
 
-/** 媒体失败后重取地址，iOS 保留已试档位供下一次播放失败继续降档 */
+/** B 类服务错误：单级降至最低档并重取 URL（仅调用方负责重试 1 次播放） */
 export async function fetchServiceFallbackUrl(
   song: QueueItem,
-  attemptedQualities: Set<string> = new Set(),
 ): Promise<string | null> {
+  if (isHumanCheckPending()) return null;
   const source = songSourceOf(song);
-  const quality = isIOS()
-    ? [...attemptedQualities].at(-1) || getEffectivePlaybackQuality(song)
-    : getEffectivePlaybackQuality(song);
+  const quality = getEffectivePlaybackQuality(song);
   const lowest = getLowestQuality(source);
 
   // 汽水只提供 PC 完整流，当前地址播放失败后直接走跨源，
   // 不再重复请求汽水的低音质或试听地址。
   if (source === 'qishui') {
-    return (await fetchCrossSourceFallback(song))?.url || null;
-  }
-
-  if (isIOS() && lowest && quality && quality !== lowest) {
-    const qualities = getQualityOptionsForSource(source).map((option) => option.value);
-    const chain = buildPlaybackQualityFallbackChain(quality, qualities, true);
-    attemptedQualities.add(quality);
-    const remaining = buildPlaybackQualityFallbackChain(quality, qualities, true, attemptedQualities);
-    for (const attemptedQuality of remaining) {
-      attemptedQualities.add(attemptedQuality);
-      const fallback = await fetchSongUrlOnce(song, attemptedQuality, { refresh: true });
-      recordPlaybackQualityFallback(quality, attemptedQuality, chain.indexOf(attemptedQuality));
-      if (fallback.ok) {
-        publishActualQuality(song, fallback.qualityLabel, fallback.crossSource ? fallback.crossSourceFrom : source);
-        return fallback.url;
-      }
-    }
     return (await fetchCrossSourceFallback(song))?.url || null;
   }
 
@@ -819,12 +720,6 @@ export function seedSharedSongUrl(
   song: Pick<QueueItem, 'queueId' | 'id' | 'source' | 'url'>,
   entry: { url: string; qualityLabel?: string; crossSource?: boolean; crossSourceFrom?: MusicSource; loudness?: TrackLoudness; duration?: number },
 ) {
-  const source = songSourceOf(song);
-  const effective = getEffectivePlaybackQuality(song);
-  if (isIOS() && !entry.crossSource && effective !== getUserPlaybackQuality(source)) {
-    const sharedQuality = getQualityOptionsForSource(source).find((option) => option.label === entry.qualityLabel)?.value;
-    if (sharedQuality !== effective) return false;
-  }
   const raw = unwrapQishuiAudioUrl(songSourceOf(song), String(entry.url || '').trim());
   if (!raw || isBlockedPlaybackUrl(raw)) return false;
 
@@ -992,7 +887,7 @@ export function prefetchQueueSongs(
   for (const song of targets) {
     void fetchSongUrl(song, { allowQualityDowngrade: false }).then((result) => {
       if (!result?.url || !firstQishui || song.queueId !== firstQishui.queueId) return;
-      prefetchQishuiLocalPlayback(result.url, Boolean(useRoomStore.getState().room?.qishuiProxyEnabled));
+      prefetchQishuiLocalPlayback(result.url);
     });
   }
 }

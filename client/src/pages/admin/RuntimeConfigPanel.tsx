@@ -19,8 +19,10 @@ import {
   Typography,
 } from 'antd';
 import AdminLoading from './AdminLoading';
+import AiModelPoolManager from './AiModelPoolManager';
 import JsonPathTree from './JsonPathTree';
 import SettingsSection from './SettingsSection';
+import './RuntimeConfigPanel.css';
 import type {
   CustomMusicApi,
   CustomMusicApiStatus,
@@ -42,8 +44,6 @@ type RuntimeTextField = Exclude<
   | 'smtpPort'
   | 'smtpSecure'
   | 'anonymousLoginEnabled'
-  | 'apihzWechatEnabled'
-  | 'apihzQqEnabled'
   | 'turnstileEnabled'
   | 'riskChallengeEnabled'
   | 'riskChallengeCooldownMinutes'
@@ -180,18 +180,6 @@ const RUNTIME_FIELD_GROUPS: RuntimeFieldGroup[] = [
     ],
   },
   {
-    id: 'aiModel',
-    title: 'AI 模型服务',
-    purpose: (
-      <>
-        聊天室助手；兼容 OpenAI 风格的 Chat Completions 与 Responses API。文本模型负责对话和工具调用，视觉模型用于识图。
-      </>
-    ),
-    fields: [
-      { key: 'aiBotName', label: '助手昵称', placeholder: '小音' },
-    ],
-  },
-  {
     id: 'roomCredential',
     title: '房间凭证安全存储',
     purpose: '用于加密 Redis 中的房间音乐登录凭证；首次部署会自动生成，配置后请勿重复更换',
@@ -290,25 +278,6 @@ function createMusicApi(): CustomMusicApi {
       url: 'url',
       lrc: 'lrc',
     },
-  };
-}
-
-function createAiModelPool(): AiModelPool {
-  return {
-    id: globalThis.crypto?.randomUUID?.() || `ai-pool-${Date.now()}`,
-    enabled: true,
-    type: 'text',
-    name: '',
-    apiBaseUrl: '',
-    apiProtocol: 'chat_completions',
-    apiKey: '',
-    configuredApiKey: false,
-    model: '',
-    enableThinking: false,
-    contextWindowTokens: 256 * 1024,
-    maxRequestsPerMinute: 1000,
-    maxTokensPerMinute: 50_000,
-    priority: 100,
   };
 }
 
@@ -1487,49 +1456,30 @@ export default function RuntimeConfigPanel({
   const aiModelSection = (
     <>
       <SettingsSection title="聊天室 AI" description={`开启后可用「@${draft.aiBotName || '小音'}」「/${draft.aiBotName || '小音'}」唤醒；图片识图走视觉模型。改完后点下方保存。`}>
-        <Switch
-          checked={Boolean(draft.aiEnabled)}
-          checkedChildren="已启用"
-          unCheckedChildren="未启用"
-          onChange={(checked) => setDraft({ ...draft, aiEnabled: checked })}
-          aria-label="启用聊天室 AI"
-        />
+        <Row gutter={[24, 16]} align="middle">
+          <Col xs={24} sm={8}>
+            <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>功能状态</Typography.Text>
+            <Switch
+              checked={Boolean(draft.aiEnabled)}
+              checkedChildren="已启用"
+              unCheckedChildren="未启用"
+              onChange={(checked) => setDraft({ ...draft, aiEnabled: checked })}
+              aria-label="启用聊天室 AI"
+            />
+          </Col>
+          <Col xs={24} sm={16}>
+            <label htmlFor="admin-ai-bot-name" style={{ display: 'block', marginBottom: 8 }}>助手昵称</label>
+            <Input id="admin-ai-bot-name" value={draft.aiBotName} placeholder="小音" onChange={(e) => setDraft({ ...draft, aiBotName: e.target.value })} />
+          </Col>
+        </Row>
       </SettingsSection>
-      {fieldGroup('aiModel')}
-      <SettingsSection title="模型池" description="文本与识图分别调度；同优先级模型按当前并发负载均衡。">
-        <Space orientation="vertical" style={{ width: '100%' }} size="middle">
-          {draft.aiModelPools.map((pool, index) => (
-            <Card
-              key={pool.id}
-              size="small"
-              title={`模型 ${index + 1}`}
-              extra={<Space size={0}><Button type="text" loading={aiTestLoading && aiTestingPoolId === pool.id} onClick={() => void runAiTest(pool)}>测试</Button><Button type="text" danger icon={<DeleteOutlined />} aria-label={`删除模型 ${index + 1}`} onClick={() => setDraft({ ...draft, aiModelPools: draft.aiModelPools.filter((_, poolIndex) => poolIndex !== index) })} /></Space>}
-            >
-              <Row gutter={[12, 12]}>
-                <Col xs={24} sm={8}><Select value={pool.type} style={{ width: '100%' }} options={[{ value: 'text', label: '文本处理' }, { value: 'vision', label: '图片处理' }]} onChange={(type) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, type, ...(type === 'text' ? { enableThinking: item.enableThinking === true } : { enableThinking: undefined }) } : item) })} /></Col>
-                <Col xs={24} sm={8}><Input placeholder="名称（可选）" value={pool.name} onChange={(e) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, name: e.target.value } : item) })} /></Col>
-                <Col xs={24} sm={8}><Switch checked={pool.enabled} checkedChildren="启用" unCheckedChildren="停用" onChange={(enabled) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, enabled } : item) })} /></Col>
-                <Col xs={24} sm={12}><Input placeholder="Base URL" value={pool.apiBaseUrl} onChange={(e) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, apiBaseUrl: e.target.value } : item) })} /></Col>
-                <Col xs={24} sm={12}><Input.Password placeholder={pool.configuredApiKey ? '已保存；留空保持不变' : 'API Key'} value={pool.apiKey} onChange={(e) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, apiKey: e.target.value } : item) })} /></Col>
-                <Col xs={24} sm={12}><Input placeholder="模型 ID" value={pool.model} onChange={(e) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, model: e.target.value } : item) })} /></Col>
-                <Col xs={24} sm={12}><Select value={pool.apiProtocol} style={{ width: '100%' }} options={[{ value: 'chat_completions', label: 'Chat Completions' }, { value: 'responses', label: 'Responses API' }]} onChange={(apiProtocol) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, apiProtocol } : item) })} /></Col>
-                {pool.type === 'text' && (
-                  <Col xs={24} sm={8}>
-                    <Space size="small">
-                      <Switch checked={pool.enableThinking === true} onChange={(enableThinking) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, enableThinking } : item) })} aria-label="启用深度思考" />
-                      <Typography.Text>深度思考</Typography.Text>
-                    </Space>
-                  </Col>
-                )}
-                <Col xs={24} sm={8}><Space.Compact style={{ width: '100%' }}><Typography.Text style={{ padding: '4px 8px', border: '1px solid #d9d9d9', whiteSpace: 'nowrap' }}>上下文</Typography.Text><InputNumber value={Math.round(pool.contextWindowTokens / 1024)} min={4} max={2048} step={1} precision={0} addonAfter="K" style={{ width: '100%' }} onChange={(contextWindowK) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, contextWindowTokens: (Number(contextWindowK) || 256) * 1024 } : item) })} /></Space.Compact></Col>
-                <Col xs={12} sm={8}><Space.Compact style={{ width: '100%' }}><Typography.Text style={{ padding: '4px 8px', border: '1px solid #d9d9d9', whiteSpace: 'nowrap' }}>RPM</Typography.Text><InputNumber value={pool.maxRequestsPerMinute} min={1} max={10_000} style={{ width: '100%' }} onChange={(maxRequestsPerMinute) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, maxRequestsPerMinute: Number(maxRequestsPerMinute) || 1 } : item) })} /></Space.Compact></Col>
-                <Col xs={12} sm={8}><Space.Compact style={{ width: '100%' }}><Typography.Text style={{ padding: '4px 8px', border: '1px solid #d9d9d9', whiteSpace: 'nowrap' }}>TPM</Typography.Text><InputNumber value={pool.maxTokensPerMinute} min={1_000} max={2_000_000} step={1_000} style={{ width: '100%' }} onChange={(maxTokensPerMinute) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, maxTokensPerMinute: Number(maxTokensPerMinute) || 1_000 } : item) })} /></Space.Compact></Col>
-                <Col xs={24} sm={8}><Space.Compact style={{ width: '100%' }}><Typography.Text style={{ padding: '4px 8px', border: '1px solid #d9d9d9', whiteSpace: 'nowrap' }}>优先级</Typography.Text><InputNumber value={pool.priority} min={1} max={1000} style={{ width: '100%' }} onChange={(priority) => setDraft({ ...draft, aiModelPools: draft.aiModelPools.map((item, poolIndex) => poolIndex === index ? { ...item, priority: Number(priority) || 100 } : item) })} /></Space.Compact></Col>
-              </Row>
-            </Card>
-          ))}
-          <Button type="dashed" icon={<PlusOutlined />} disabled={draft.aiModelPools.length >= 20} onClick={() => setDraft({ ...draft, aiModelPools: [...draft.aiModelPools, createAiModelPool()] })}>添加模型</Button>
-        </Space>
+      <SettingsSection title="模型池" description="文本与识图分别调度，使用紧凑列表管理模型，在弹窗中编辑详细参数">
+        <AiModelPoolManager
+          pools={draft.aiModelPools}
+          onChange={(aiModelPools) => setDraft({ ...draft, aiModelPools })}
+          onTest={(pool) => void runAiTest(pool)}
+          testingId={aiTestLoading ? aiTestingPoolId : ''}
+        />
       </SettingsSection>
       {aiTestResult && (
         <SettingsSection title="测试结果">
@@ -1753,13 +1703,6 @@ export default function RuntimeConfigPanel({
           <Divider style={{ margin: 0 }} />
           {fieldGroup('smtp')}
           <Divider style={{ margin: 0 }} />
-          <SettingsSection title="微信与 QQ 扫码登录" description="登录列表中微信第一、QQ 第二，前台用户与后台管理员均可绑定，复用第三方服务中接口盒子的 ID 和密钥，登录仅支持 https://cn.apihz.cn/api 或 https://vip.apihz.cn/api，微信扫码身份与文件传输助手独立">
-            <Space orientation="vertical">
-              <Space><Switch checked={draft.apihzWechatEnabled === true} onChange={apihzWechatEnabled => setDraft({ ...draft, apihzWechatEnabled })} aria-label="启用微信扫码登录" /><Typography.Text>微信扫码登录 · 保存后生效</Typography.Text></Space>
-              <Space><Switch checked={draft.apihzQqEnabled === true} onChange={apihzQqEnabled => setDraft({ ...draft, apihzQqEnabled })} aria-label="启用QQ扫码登录" /><Typography.Text>QQ扫码登录 · 保存后生效</Typography.Text></Space>
-              {(!draft.configuredSecrets.apihzId || !draft.configuredSecrets.apihzKey) && <Typography.Text type="warning">请先在第三方服务中保存接口盒子 ID 和密钥</Typography.Text>}
-            </Space>
-          </SettingsSection>
           <Divider style={{ margin: 0 }} />
           {fieldGroup('linuxdo')}
           <Divider style={{ margin: 0 }} />
@@ -1791,31 +1734,29 @@ export default function RuntimeConfigPanel({
   ];
 
   return (
-    <>
+    <div className="runtime-config-panel">
       <Tabs
+        className="runtime-config-tabs"
         activeKey={activeTab}
         onChange={setActiveTab}
         items={tabItems}
       />
 
       <div
+          className="runtime-config-savebar"
           style={{
             position: 'sticky',
             bottom: 0,
             zIndex: 10,
             marginTop: 'auto',
-            marginLeft: -20,
-            marginRight: -20,
-            padding: '12px 20px',
-            background: 'rgba(255,255,255,0.96)',
-            backdropFilter: 'blur(8px)',
+            paddingBlock: 12,
+            background: '#fff',
             borderTop: '1px solid #f0f0f0',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
             gap: 12,
             flexWrap: 'wrap',
-            boxShadow: '0 -4px 16px rgba(15, 23, 42, 0.04)',
           }}
         >
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -1825,6 +1766,6 @@ export default function RuntimeConfigPanel({
             保存配置
           </Button>
       </div>
-    </>
+    </div>
   );
 }

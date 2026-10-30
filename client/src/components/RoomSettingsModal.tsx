@@ -74,6 +74,7 @@ interface Props {
   enabledMusicAccountPlatforms?: FmSource[];
   fmModeBeforeOff?: string;
   qishuiProxyEnabled?: boolean;
+  qishuiProxyPercent?: number;
   qishuiProxySaving?: boolean;
   initialTab?: SettingsTab;
   playlistRoaming?: { enabled: boolean; dedupeByName: boolean; playlists: Array<{ id: string; source: FmSource; name: string; url?: string; songs: { id: string; name: string; artist: string; source: string }[] }> } | null;
@@ -138,7 +139,7 @@ interface Props {
   onMusicAccountUnbind?: (platform: 'netease' | 'tencent' | 'kugou' | 'qishui') => Promise<{ success: boolean; error?: string }>;
   onClose: () => void;
   onSaveFmMode: (mode: string, source?: FmSource) => void;
-  onSaveQishuiProxy?: (enabled: boolean) => void | Promise<void>;
+  onSaveQishuiProxy?: (enabled: boolean, percent: number) => void | Promise<void>;
   onSavePlaylistRoaming?: (payload: { platform?: 'netease' | 'qq' | 'kugou' | 'qishui'; input?: string; clear?: boolean; playlistId?: string; playlistSource?: FmSource; playlistName?: string; dedupeByName?: boolean; playlistEnabled?: boolean }) => Promise<{ success: boolean; error?: string }> | void;
   onOpenMemberModal: () => void;
   onSaveAnnouncement: (options: { enabled: boolean; text: string }) => void;
@@ -306,6 +307,7 @@ export default function RoomSettingsModal({
   enabledMusicAccountPlatforms,
   fmModeBeforeOff,
   qishuiProxyEnabled = false,
+  qishuiProxyPercent = 100,
   qishuiProxySaving = false,
   initialTab,
   playlistRoaming = null,
@@ -1028,10 +1030,20 @@ export default function RoomSettingsModal({
                   <Toggle
                     checked={qishuiProxyEnabled}
                     disabled={qishuiProxySaving}
-                    onChange={(enabled) => { void onSaveQishuiProxy(enabled); }}
+                    onChange={(enabled) => { void onSaveQishuiProxy(enabled, qishuiProxyPercent); }}
                     label="汽水同源代理"
-                    description="通过本站转发加密音频，仍由浏览器本地解密，加载速度取决于代理线路；汽水音源内部音量统一降低 30%，滑块显示不变"
+                    description="按比例让汽水密文先经本站转发，再由浏览器本地解密，降低部分线路直连失败；0% 为直连，100% 为全部歌曲"
                   />
+                  {qishuiProxyEnabled && <NumberStepper
+                    id="qishui-proxy-percent"
+                    value={qishuiProxyPercent}
+                    min={0}
+                    max={100}
+                    disabled={qishuiProxySaving}
+                    suffix="% 歌曲走代理"
+                    onChange={(percent) => { void onSaveQishuiProxy(true, percent); }}
+                    commitOnBlur
+                  />}
                 </section>
               )}
 

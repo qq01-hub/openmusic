@@ -65,7 +65,7 @@ export default function RiskControlPanel({ onOpenRoom, initialAccountId = '', on
 
   useEffect(() => { void load(); return () => listRequest.current?.abort(); }, [load]);
   useEffect(() => {
-    if (!autoRefresh || query || status || pool !== 'main') return;
+    if (!autoRefresh || query || status || pool === 'blocked') return;
     const timer = window.setInterval(() => { if (document.visibilityState === 'visible') void load(); }, 30000);
     return () => window.clearInterval(timer);
   }, [autoRefresh, query, status, pool, load]);
@@ -103,6 +103,8 @@ export default function RiskControlPanel({ onOpenRoom, initialAccountId = '', on
     try {
       await adminFetch(`/api/admin/risk/accounts/${encodeURIComponent(id)}/reset`, { method: 'POST', body: JSON.stringify({ reason }) });
       message.success('账户风险状态和分数已重置');
+      setData(null);
+      lastListError.current = '';
       await Promise.all([load(), selectedId.current === id ? openDetail(id) : Promise.resolve()]);
     } catch (reasonError) { message.error(errorText(reasonError, '风险重置失败')); throw reasonError; }
     finally { setSaving(false); }
@@ -158,7 +160,7 @@ export default function RiskControlPanel({ onOpenRoom, initialAccountId = '', on
       [pool === 'blocked' ? '风控池账户' : pool === 'all' ? '全量账户' : '主列表账户', data?.total], ['全站高风险', data?.high], ['风控池总数', data?.blocked],
     ].map(([label, value]) => <div className="risk-summary-item" key={String(label)}><span>{label}</span><strong>{typeof value === 'number' ? count(value) : '—'}</strong></div>)}</div>
     <Tabs className="risk-pool-tabs" activeKey={pool} onChange={changePool} items={[{ key: 'main', label: '待复核' }, { key: 'blocked', label: `风控池 · ${data ? count(data.blocked) : '—'}` }, { key: 'all', label: '全部账户' }]} />
-    <RiskSection title={pool === 'blocked' ? '已限制账户' : pool === 'all' ? '全部账户' : '待复核账户'} description="主列表排除已限制账户，关注和高风险但未处置的账户保留待复核，风控池按人工状态分类，不以评分自动封禁，校验记录不代表永久真人身份" actions={<label className="risk-auto-refresh"><Switch size="small" checked={autoRefresh && !query && !status && pool === 'main'} disabled={Boolean(query || status || pool !== 'main')} onChange={setAutoRefresh} aria-label="自动刷新风险列表" />自动刷新</label>}>
+      <RiskSection title={pool === 'blocked' ? '已限制账户' : pool === 'all' ? '全部账户' : '待复核账户'} description="主列表排除已限制账户，关注和高风险但未处置的账户保留待复核，风控池按人工状态分类，不以评分自动封禁，校验记录不代表永久真人身份" actions={<label className="risk-auto-refresh"><Switch size="small" checked={autoRefresh && !query && !status && pool !== 'blocked'} disabled={Boolean(query || status || pool === 'blocked')} onChange={setAutoRefresh} aria-label="自动刷新风险列表" />自动刷新</label>}>
       <div className="risk-filters"><Input.Search aria-label="搜索账户" placeholder="名称、昵称、账号、邮箱或 IP" value={lookup} allowClear onChange={event => { setLookup(event.target.value); if (!event.target.value) { setQuery(''); setPage(1); } }} onSearch={value => { const next = value.trim(); lastListError.current = ''; if (next === query && page === 1) void load(); else { setQuery(next); setPage(1); } }} enterButton="搜索" maxLength={254} /><Select aria-label="账户状态" value={status} disabled={pool === 'blocked'} onChange={value => { setStatus(value); setPage(1); }} options={[{ value: '', label: pool === 'blocked' ? '已限制' : '全部状态' }, ...(pool === 'main' ? STATUS_OPTIONS.filter(option => option.value !== 'blocked') : STATUS_OPTIONS)]} /><Select aria-label="排序方式" value={order} onChange={value => { setOrder(value); setPage(1); }} options={[{ value: 'risk', label: '风险优先' }, { value: 'recent', label: '最近活跃' }]} /></div>
       <p className="risk-mobile-hint">左右滑动查看更多</p>
       <Table<RiskAccount> className="risk-account-table" rowKey="id" loading={loading} dataSource={data?.items || []} scroll={{ x: 1140 }} rowClassName={account => queueScore(account) >= 60 ? 'risk-row-high' : ''} pagination={{ current: page, pageSize: 20, total: data?.total || 0, showSizeChanger: false, onChange: setPage, showTotal: total => `共 ${count(total)} 个账户` }} locale={{ emptyText: <Empty description={error ? '数据暂不可用，请恢复连接后重试' : query || status || pool !== 'main' ? '没有匹配的账户，请调整筛选条件' : '尚无风控记录，账户后续登录或访问时开始采集'} /> }} columns={[
@@ -169,7 +171,7 @@ export default function RiskControlPanel({ onOpenRoom, initialAccountId = '', on
         { title: '人机验证', width: 180, render: (_, account) => <div className="risk-cell-stack"><Tag color={account.humanChallenge?.bypass ? 'green' : account.humanChallenge?.pending ? 'orange' : account.lastHumanVerifiedAt ? 'blue' : 'default'}>{account.humanChallenge?.bypass ? '已放行' : account.humanChallenge?.pending ? '待验证' : account.lastHumanVerifiedAt ? '有通过记录' : '暂无记录'}</Tag>{account.humanChallenge && account.humanChallenge.triggers > 0 && <span className="risk-secondary">今日触发 {account.humanChallenge.triggers} · 通过 {account.humanChallenge.passes}</span>}{account.daily.untrustedForwarded > 0 && <Tag color="orange">异常转发声明</Tag>}</div> },
         { title: '最近活动', width: 160, render: (_, account) => <div className="risk-cell-stack"><span className="risk-secondary">{formatRelativeTime(account.lastSeenAt)}</span><Button className="risk-detail-link" type="link" onClick={() => void openDetail(account.id)}>查看画像</Button></div> },
       ]} />
-      <div className="risk-section-footer"><span>更新于 {time(data?.generatedAt || 0)} · 北京时间</span><span>{query || status || pool !== 'main' ? '手动刷新' : autoRefresh ? '每 30 秒刷新' : '自动刷新已暂停'}</span></div>
+      <div className="risk-section-footer"><span>更新于 {time(data?.generatedAt || 0)} · 北京时间</span><span>{query || status || pool === 'blocked' ? '手动刷新' : autoRefresh ? '每 30 秒刷新' : '自动刷新已暂停'}</span></div>
     </RiskSection>
     <Modal title="清除全站风控历史数据" open={clearOpen} onCancel={() => { if (!clearingRequest.current) setClearOpen(false); }} onOk={() => void clearHistory()} confirmLoading={clearing} closable={!clearing} keyboard={!clearing} cancelButtonProps={{ disabled: clearing }} okButtonProps={{ danger: true }} okText="确认清除" cancelText="取消">
       <Alert type="warning" showIcon title="清除后无法恢复，请确认已备份需要留存的数据" />

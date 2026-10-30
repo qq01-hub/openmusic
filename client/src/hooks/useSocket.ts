@@ -1605,10 +1605,10 @@ export function useSocket() {
     });
   }, []);
 
-  const setRoomQishuiProxy = useCallback((enabled: boolean): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+  const setRoomQishuiProxy = useCallback((enabled: boolean, percent = 100): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
       'set_room_qishui_proxy',
-      { enabled },
+      { enabled, percent },
       { success: false, error: '连接超时，请重试' },
     ).then((res) => {
       if (res.success && res.room) {

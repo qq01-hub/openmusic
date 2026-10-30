@@ -63,6 +63,7 @@ const DEFAULT_QUEUE_MAX_LENGTH = 200;
 export const MIN_PLAYBACK_RATE = 0.1;
 export const MAX_PLAYBACK_RATE = 3;
 export const DEFAULT_PLAYBACK_RATE = 1;
+export const DEFAULT_QISHUI_PROXY_PERCENT = 100;
 const ALLOWED_QUEUE_MAX_LENGTHS = [50, 100, 200];
 const ALLOWED_SONG_REQUEST_COOLDOWNS_SEC = [0, 10, 30, 60, 120];
 const DEFAULT_DISLIKE_SKIP_THRESHOLD = 5;
@@ -794,6 +795,7 @@ export function snapshotRoomForStorage(room) {
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
     qishuiProxyEnabled: room.qishuiProxyEnabled === true,
+    qishuiProxyPercent: normalizeQishuiProxyPercent(room.qishuiProxyPercent),
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     musicAccountSecrets: normalizeMusicAccountSecrets(room.musicAccountSecrets),
@@ -894,6 +896,7 @@ function restoreRoomFromStorage(data) {
   const fmModeBeforeOff = normalizeFmMode(data.fmModeBeforeOff);
   room.fmModeBeforeOff = fmModeBeforeOff === FM_MODE_OFF ? DEFAULT_FM_MODE : fmModeBeforeOff;
   room.qishuiProxyEnabled = data.qishuiProxyEnabled === true;
+  room.qishuiProxyPercent = normalizeQishuiProxyPercent(data.qishuiProxyPercent);
   room.playlistRoaming = normalizePlaylistRoaming(data.playlistRoaming);
   room.musicAccounts = normalizeMusicAccounts(data.musicAccounts);
   room.musicAccountSecrets = normalizeMusicAccountSecrets(data.musicAccountSecrets);
@@ -1307,6 +1310,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     fmSource: "netease",
     fmModeBeforeOff: DEFAULT_FM_MODE,
     qishuiProxyEnabled: false,
+    qishuiProxyPercent: DEFAULT_QISHUI_PROXY_PERCENT,
     playlistRoaming: null,
     /** 房主扫码绑定的音源账号公开信息 */
     musicAccounts: { netease: null, tencent: null, kugou: null, qishui: null },
@@ -1717,6 +1721,12 @@ export function normalizePlaybackRate(value) {
   return Number.isFinite(rate) && rate >= MIN_PLAYBACK_RATE && rate <= MAX_PLAYBACK_RATE
     ? rate
     : DEFAULT_PLAYBACK_RATE;
+}
+
+export function normalizeQishuiProxyPercent(value) {
+  const percent = Math.floor(Number(value));
+  if (!Number.isFinite(percent)) return DEFAULT_QISHUI_PROXY_PERCENT;
+  return Math.min(100, Math.max(0, percent));
 }
 
 function normalizeQueueMaxLength(value) {
@@ -3127,11 +3137,12 @@ export function setRoomFmMode(roomId, actorId, mode, connectionId = null, source
   return { room: serializeRoom(room) };
 }
 
-export function setQishuiProxyEnabled(roomId, actorId, enabled, connectionId = null) {
+export function setQishuiProxyEnabled(roomId, actorId, enabled, connectionId = null, percent = DEFAULT_QISHUI_PROXY_PERCENT) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
   if (!isOwnerConnection(room, actorId, connectionId)) return { error: "仅房主可设置汽水代理" };
   room.qishuiProxyEnabled = enabled === true;
+  room.qishuiProxyPercent = normalizeQishuiProxyPercent(percent);
   persistRoom(room);
   return { room: serializeRoom(room) };
 }
@@ -6473,6 +6484,7 @@ function serializeRoom(room, options = {}) {
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
     qishuiProxyEnabled: room.qishuiProxyEnabled === true,
+    qishuiProxyPercent: normalizeQishuiProxyPercent(room.qishuiProxyPercent),
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),
@@ -6557,6 +6569,7 @@ export function prepareRoomBroadcast(roomId) {
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
     qishuiProxyEnabled: room.qishuiProxyEnabled === true,
+    qishuiProxyPercent: normalizeQishuiProxyPercent(room.qishuiProxyPercent),
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),

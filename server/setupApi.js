@@ -3,6 +3,7 @@ import path from 'path';
 import { createHash, randomBytes, scrypt as scryptCallback } from 'crypto';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
+import { getRuntimeConfig } from './runtimeConfig.js';
 import {
   migrateLegacyAdminEntryConfig,
   sanitizeAdminEntryPath,
@@ -325,6 +326,18 @@ function getDockerDefaults() {
   return { redisUrl, metingUrl: metingUrl || '' };
 }
 
+export function resolveSetupMetingAuth(sources, submittedAuth) {
+  if (submittedAuth) return sources.map(() => submittedAuth);
+  const dockerUrl = String(process.env.DOCKER_METING_URL || '').trim().replace(/\/+$/, '');
+  if (!getDockerDefaults() || !dockerUrl) return sources.map(() => '');
+  const config = getRuntimeConfig();
+  const urls = config.metingApiUrl.split(',').map(value => value.trim().replace(/\/+$/, ''));
+  const auths = config.metingApiAuth.split(',').map(value => value.trim());
+  const index = urls.indexOf(dockerUrl);
+  const auth = index < 0 ? '' : (auths.length === 1 ? auths[0] : (auths[index] || ''));
+  return sources.map(url => url.replace(/\/+$/, '') === dockerUrl ? auth : '');
+}
+
 function isDockerEnvironment() {
   return Boolean(String(process.env.DOCKER_REDIS_URL || '').trim());
 }
@@ -379,7 +392,6 @@ export function mountSetupApi(app) {
       : [];
     const metingApiAuth = cleanText(req.body?.metingApiAuth, 1024);
     if (metingApiAuth === null) return res.status(400).json({ error: 'Meting 令牌无效' });
-    const metingAuths = metingSources.map(() => metingApiAuth);
 
     const dockerDefs = getDockerDefaults();
     const redisInput = req.body?.redis ?? (dockerDefs ? { mode: 'url', url: dockerDefs.redisUrl } : undefined);
@@ -389,12 +401,13 @@ export function mountSetupApi(app) {
     if (!metingSources.length && dockerDefs?.metingUrl) {
       metingSources.push(dockerDefs.metingUrl);
     }
+    const metingAuths = resolveSetupMetingAuth(metingSources, metingApiAuth);
 
     try {
       const username = generateBootstrapUsername();
       const password = generateBootstrapPassword();
       await createBootstrapCredentials(result.client, username, password, { mustChange: false });
-      const clientSecret = randomBytes(32).toString('hex');
+      const clientSecret = String(process.env.CLIENT_ID_SECRET || '').trim() || randomBytes(32).toString('hex');
       const setupNonce = createHash('sha256').update(randomBytes(32)).digest('hex');
       updateEnvFile({
         ...result.values,

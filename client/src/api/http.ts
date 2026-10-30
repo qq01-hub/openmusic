@@ -4,6 +4,7 @@ import { ensureSessionBootstrap, resetSessionBootstrap } from '../lib/sessionBoo
 import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, hasAnonymousAccess, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, waitForAccountRefresh } from '../lib/accountAccessSession';
 import { detectSiteAccessBlockResponse, isSiteAccessBlocked, markSiteAccessBlocked, getSiteAccessBlockCode } from '../lib/siteAccessGate';
 import { readSoftBlockCodeFromResponse, softBlockMessage, SOFT_BLOCK_CODES } from '../lib/softBlock';
+import { markHumanCheckPending } from '../lib/humanCheckState';
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const PUBLIC_GET_PATHS = new Set(['/api/health', '/api/app-version', '/api/site-seo', '/api/rooms', '/api/site-announcement', '/api/donations']);
@@ -79,10 +80,8 @@ export async function fetchWithTimeout(
 
   try {
     const pathname = sameOriginApi ? new URL(url, window.location.origin).pathname.toLowerCase() : '';
-    const socialRequest = /^\/api\/auth\/social\/(?:wechat_scan|qq_scan)\/(?:start|poll|complete)$/u.test(pathname);
-    const socialComplete = socialRequest && pathname.endsWith('/complete');
-    const wechatBinding = (pathname === '/api/auth/wechat/account' || socialRequest) && typeof initFinal.body === 'string' && JSON.parse(initFinal.body).action === 'bind';
-    if ((['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account'].includes(pathname) || socialComplete) && method === 'POST' && !wechatBinding) { forgetAccountAccess(); setDeviceSession(''); }
+    const wechatBinding = pathname === '/api/auth/wechat/account' && typeof initFinal.body === 'string' && JSON.parse(initFinal.body).action === 'bind';
+    if (['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account'].includes(pathname) && method === 'POST' && !wechatBinding) { forgetAccountAccess(); setDeviceSession(''); }
     const generation = getAccountSessionGeneration();
     const assertCurrent = () => {
       if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
@@ -107,7 +106,7 @@ export async function fetchWithTimeout(
       const headers = new Headers(initFinal.headers || (input instanceof Request ? input.headers : undefined));
       const oauthLogin = ['/api/auth/github/start', '/api/auth/linuxdo/start'].includes(pathname)
         && new URL(url, window.location.origin).searchParams.get('purpose') === 'account-login';
-      const login = oauthLogin || (socialComplete || ['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account', '/api/auth/device-login', '/api/auth/device-migrate'].includes(pathname)) && !wechatBinding;
+      const login = oauthLogin || (['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account', '/api/auth/device-login', '/api/auth/device-migrate'].includes(pathname) && !wechatBinding);
       const authenticatedAuth = pathname === '/api/auth/human-challenge' || wechatBinding || pathname === '/api/auth/nickname' || pathname.includes('/unbind') || pathname.startsWith('/api/auth/wechat-uin/') && method === 'POST' || (pathname.endsWith('/start') && new URL(url, window.location.origin).searchParams.get('purpose') === 'account-bind');
       if ((!hasAnonymousAccess() && ((businessRequest && pathname !== '/api/media-proxy') || authenticatedAuth)) || login) {
         const body = typeof initFinal.body === 'string' ? initFinal.body : input instanceof Request ? await input.clone().text() : '';
@@ -145,7 +144,10 @@ export async function fetchWithTimeout(
     }
     if (sameOriginApi && res.status === 403) {
       const data = await res.clone().json().catch(() => ({})) as { code?: string };
-      if (data.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') window.dispatchEvent(new Event('openmusic:human-check-required'));
+      if (data.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') {
+        markHumanCheckPending();
+        window.dispatchEvent(new Event('openmusic:human-check-required'));
+      }
     }
     if (sameOriginApi && detectSiteAccessBlockResponse(res)) {
       markSiteAccessBlocked(readSoftBlockCodeFromResponse(res) || SOFT_BLOCK_CODES.SITE_BAN);

@@ -55,6 +55,8 @@ test('管道安装保留配置，统一启动服务，配置或引擎失败时�
     { loudness: 'y', configStatus: '0', engineStatus: '1', status: 1 },
     { loudness: 'y', configStatus: '0', engineStatus: '0', networkStatus: '1', status: 1 },
     { loudness: 'y', configStatus: '0', engineStatus: '0', loudnessStatus: '1', status: 1 },
+    { loudness: '', configStatus: '0', engineStatus: '0', tokenStatus: '1', status: 1 },
+    { loudness: '', configStatus: '0', engineStatus: '0', tokenReadStatus: '1', status: 1 },
   ];
   for (const scenario of cases) {
     const fixtureDirectory = mkdtempSync(join(tmpdir(), 'openmusic-installer-'));
@@ -64,7 +66,8 @@ test('管道安装保留配置，统一启动服务，配置或引擎失败时�
       const result = spawnSync(process.env.BASH || 'bash', ['-c', `docker() {
   printf '%s\n' "$*" >> docker.calls
   if [ "$1" = info ]; then return "$ENGINE_STATUS"; fi
-  case "$*" in *"exec -T meting"*) return "$LOUDNESS_STATUS" ;; *"exec -T openmusic"*) return "$NETWORK_STATUS" ;; esac
+  case "$*" in *"exec -T openmusic node configureMeting.js"*) return "$TOKEN_STATUS" ;; *"api_tokens.json"*) return "$TOKEN_READ_STATUS" ;; esac
+  case "$*" in *"meting-api-audio-loudness:3100/healthz"*) return "$LOUDNESS_STATUS" ;; *"exec -T openmusic node -e"*) return "$NETWORK_STATUS" ;; esac
   case "$*" in *"config --quiet"*) return "$CONFIG_STATUS" ;; esac
   return 0
 }
@@ -72,7 +75,7 @@ curl() { cp "$FIXTURE_ROOT/\${4##*/}" "$3"; }
 export -f docker curl
 bash < "$FIXTURE_ROOT/install.sh"`], {
         cwd: fixtureDirectory,
-        env: { ...process.env, FIXTURE_ROOT: fixtureRoot, OPENMUSIC_DEPLOY_DIR: '.', OPENMUSIC_ENABLE_LOUDNESS: scenario.loudness, CONFIG_STATUS: scenario.configStatus, ENGINE_STATUS: scenario.engineStatus, NETWORK_STATUS: scenario.networkStatus || '0', LOUDNESS_STATUS: scenario.loudnessStatus || '0' },
+        env: { ...process.env, FIXTURE_ROOT: fixtureRoot, OPENMUSIC_DEPLOY_DIR: '.', OPENMUSIC_ENABLE_LOUDNESS: scenario.loudness, CONFIG_STATUS: scenario.configStatus, ENGINE_STATUS: scenario.engineStatus, NETWORK_STATUS: scenario.networkStatus || '0', LOUDNESS_STATUS: scenario.loudnessStatus || '0', TOKEN_STATUS: scenario.tokenStatus || '0', TOKEN_READ_STATUS: scenario.tokenReadStatus || '0' },
         encoding: 'utf8',
         timeout: 10000,
       });
@@ -84,12 +87,18 @@ bash < "$FIXTURE_ROOT/install.sh"`], {
         assert.ok(calls.includes('up -d'));
         assert.ok(calls.includes('--wait --wait-timeout 180'));
         assert.ok(calls.includes('exec -T openmusic node -e'));
-        assert.equal(calls.includes('exec -T meting node -e'), scenario.loudness === 'y');
+        assert.ok(calls.includes('exec -T openmusic node configureMeting.js'));
+        assert.ok(calls.includes('restart openmusic'));
+        assert.equal(calls.includes('meting-api-audio-loudness:3100/healthz'), scenario.loudness === 'y');
         assert.equal(calls.includes('docker-compose.loudness.yml'), scenario.loudness === 'y');
         if (scenario.repair) {
           assert.ok(calls.includes('--force-recreate'));
           assert.ok(!calls.includes('--force-recreate openmusic'));
         }
+      } else if (scenario.tokenStatus || scenario.tokenReadStatus) {
+        assert.match(result.stderr, /Meting API Token 自动配置失败/);
+        assert.ok(!calls.includes('restart openmusic'));
+        assert.ok(!result.stdout.includes('部署成功'));
       } else if (!scenario.networkStatus && !scenario.loudnessStatus) {
         assert.ok(!calls.includes(' pull'));
         assert.ok(!calls.includes(' up'));

@@ -287,6 +287,7 @@ export interface RoomState {
   fmModeBeforeOff?: string;
   /** 汽水密文是否经同源代理后仍在浏览器本地解密 */
   qishuiProxyEnabled?: boolean;
+  qishuiProxyPercent?: number;
   /** 队列为空时仅从这些歌单的合并曲库循环取歌；不存在时使用私人漫游 */
   playlistRoaming?: {
     /** 开启后同名歌曲按网易云、QQ、汽水、酷狗顺序保留一个候选 */

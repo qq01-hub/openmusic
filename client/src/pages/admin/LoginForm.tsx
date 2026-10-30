@@ -8,9 +8,6 @@ import {
 import { App, Button, Card, Divider, Form, Input, Layout, Space, Typography } from 'antd';
 import { adminFetch } from './utils';
 import { LinuxDoIcon } from './brandIcons';
-import SocialLoginScan from '../../components/SocialLoginScan';
-import SocialProviderIcon from '../../components/SocialProviderIcon';
-import { emptySocialStatus, socialLabels, socialProviders, type SocialProvider, type SocialStatus } from '../../lib/socialLogin';
 
 const LINUXDO_LOGIN_ERRORS: Record<string, string> = {
   denied: '这个 Linux.do 账号还没有绑定管理员，请先用账号密码登录后在后台绑定',
@@ -31,11 +28,8 @@ export default function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
   const [busy, setBusy] = useState(false);
   const [linuxdoEnabled, setLinuxdoEnabled] = useState(false);
   const [githubEnabled, setGithubEnabled] = useState(false);
-  const [socialStatus, setSocialStatus] = useState<SocialStatus>(emptySocialStatus);
-  const [socialProvider, setSocialProvider] = useState<SocialProvider | null>(null);
 
   useEffect(() => {
-    void adminFetch<SocialStatus>('/api/admin/social/status').then(setSocialStatus).catch(() => setSocialStatus(emptySocialStatus));
     void adminFetch<{ enabled: boolean }>('/api/admin/linuxdo/status')
       .then((status) => setLinuxdoEnabled(Boolean(status.enabled)))
       .catch(() => setLinuxdoEnabled(false));
@@ -93,13 +87,6 @@ export default function LoginForm({ onLoggedIn }: { onLoggedIn: () => void }) {
               </Typography.Title>
             </Space>
             <Typography.Text type="secondary">输入管理员账号密码登录</Typography.Text>
-            {socialProvider ? <>
-              <Typography.Text strong>{socialLabels[socialProvider]}</Typography.Text>
-              <SocialLoginScan provider={socialProvider} audience="admin" action="login" onComplete={onLoggedIn} />
-              <Button block onClick={() => setSocialProvider(null)}>返回登录方式</Button>
-            </> : socialProviders.map(provider => socialStatus[provider]?.enabled && (
-              <Button key={provider} block icon={<SocialProviderIcon provider={provider} />} onClick={() => setSocialProvider(provider)}>{socialLabels[provider]}</Button>
-            ))}
             <Form layout="vertical" onFinish={submit} requiredMark={false}>
               <Form.Item
                 name="username"

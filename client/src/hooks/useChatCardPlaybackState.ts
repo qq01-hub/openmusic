@@ -1,12 +1,18 @@
-import { useCallback, useSyncExternalStore } from 'react';
+import { useEffect, useState } from 'react';
 import {
   getChatCardPlaybackState,
   subscribeChatCardPlayback,
   type ChatCardPlaybackState,
 } from '../lib/chatCardPlayer';
 
-/** 仅活跃卡片接收进度变化，其余卡片复用空闲快照 */
-export function useChatCardPlaybackState(cardKey?: string): ChatCardPlaybackState {
-  const getSnapshot = useCallback(() => getChatCardPlaybackState(cardKey), [cardKey]);
-  return useSyncExternalStore(subscribeChatCardPlayback, getSnapshot, getSnapshot);
+/** 订阅聊天音乐卡片的全局播放状态（卡片状态只在播放/暂停/结束时变化） */
+export function useChatCardPlaybackState(): ChatCardPlaybackState {
+  const [state, setState] = useState<ChatCardPlaybackState>(getChatCardPlaybackState);
+
+  useEffect(() => {
+    setState(getChatCardPlaybackState());
+    return subscribeChatCardPlayback(() => setState(getChatCardPlaybackState()));
+  }, []);
+
+  return state;
 }

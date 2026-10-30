@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { fetchWithTimeout } from '../api/http';
 import HumanVerification from './HumanVerification';
+import { clearHumanCheckPending, markHumanCheckPending } from '../lib/humanCheckState';
 
 type Challenge = { pending: boolean; challengeId: string; siteKey: string; passes: number; dailyLimit: number };
 export default function RiskHumanVerificationGate() {
@@ -30,6 +31,9 @@ export default function RiskHumanVerificationGate() {
       if (mounted.current && revision === identityRevision.current) {
         requiredLoad.current = false; setState(data as Challenge); setError('');
         needsResume.current ||= Boolean(data.pending);
+        if (!data.pending) {
+          clearHumanCheckPending();
+        }
         if (!data.pending && needsResume.current) {
           needsResume.current = false;
           window.dispatchEvent(new Event('openmusic:human-check-passed'));
@@ -44,8 +48,8 @@ export default function RiskHumanVerificationGate() {
   }, []);
   useEffect(() => {
     mounted.current = true;
-    const required = () => { if (!dialog.current) void load(true); };
-    const changed = () => { identityRevision.current++; requiredLoad.current = false; needsResume.current = false; submitting.current = false; setState(null); setToken(''); setBusy(false); setError(''); void load(); };
+    const required = () => { markHumanCheckPending(); if (!dialog.current) void load(true); };
+    const changed = () => { identityRevision.current++; clearHumanCheckPending(); requiredLoad.current = false; needsResume.current = false; submitting.current = false; setState(null); setToken(''); setBusy(false); setError(''); void load(); };
     const focused = () => { if (needsResume.current && !submitting.current) void load(true); };
     window.addEventListener('openmusic:human-check-required', required);
     window.addEventListener('openmusic:account-session-changed', changed);
@@ -74,7 +78,7 @@ export default function RiskHumanVerificationGate() {
         if (['HUMAN_CHECK_CHANGED', 'HUMAN_CHECK_FAILED', 'HUMAN_CHECK_DISABLED'].includes(data.code)) void load(true);
         throw new Error(data.error || '验证未通过，请重试');
       }
-      if (isCurrent()) { needsResume.current = false; setState(null); window.dispatchEvent(new Event('openmusic:human-check-passed')); }
+      if (isCurrent()) { needsResume.current = false; clearHumanCheckPending(); setState(null); window.dispatchEvent(new Event('openmusic:human-check-passed')); }
     } catch (reason) { if (isCurrent()) setError(reason instanceof Error ? reason.message : '验证暂不可用'); }
     finally { if (isCurrent()) { submitting.current = false; setBusy(false); setToken(''); setWidgetRevision(value => value + 1); } }
   };

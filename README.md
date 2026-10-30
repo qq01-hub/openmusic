@@ -70,6 +70,9 @@
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | bash
 ```
 
+> 首次部署可直接通过 `http://<服务器IP>:4000` 完成初始化并登录后台，无需先配置 HTTPS，Docker 默认设置 `ALLOW_INSECURE_COOKIES=1`，允许浏览器通过 HTTP 保存登录 Cookie
+> 后续启用 HTTPS 时，将部署目录 `.env` 中的 `ALLOW_INSECURE_COOKIES` 改为 `0` 并重建 OpenMusic 容器，强制登录 Cookie 使用安全连接，仅重启容器不会更新环境变量
+
 新部署会创建宿主机目录 `/opt/openmusic`，配置和 Meting 数据保存在 `/opt/openmusic/data`，不会因从 `/root` 执行命令而写入 `/root/data`。执行账号需有该目录的写入权限；可通过 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | OPENMUSIC_DEPLOY_DIR=/srv/openmusic bash` 指定其他目录。
 
 已有部署请先进入原部署目录再运行脚本，脚本会沿用原路径，不会自动搬移或清空数据。Redis 仍使用原有命名卷，停止服务不要使用 `down -v`。完整迁移和备份说明见 [部署文档](docs/DEPLOY.md#持久化备份与旧部署迁移)。

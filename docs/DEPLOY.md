@@ -48,6 +48,12 @@ fi
 
 打开 `http://<IP>:4000`，Redis / Meting 已自动填好，只需填站点域名。完成后自动重启。
 
+使用 `install.sh`，或运行 `deploy/deploy.sh docker-full` / `docker-loudness` 及对应更新命令时，脚本会通过 Meting 管理接口创建或复用名为 `OpenMusic joint deployment` 的 API Token，验证 Bearer 与 OpenMusic 签名后，将内置 Meting 地址和令牌写入 OpenMusic 加密运行配置，并重启 OpenMusic 使首次初始化的加密主密钥生效
+
+首次部署会在宿主机 `data/.env` 中生成稳定的 `CLIENT_ID_SECRET`，安装向导继续沿用该密钥及内置音源令牌，其他音源和后台配置保留，重复部署不轮换专用令牌，备份时必须一起保留 `data/.env` 和 `data/runtimeConfig.json`
+
+仅手动启动 Compose 不执行自动配对，需要在两端管理后台配置一致的 API Token；已有 Meting 修改过初始化管理员密码或启用双重验证，且尚无上述专用令牌时，自动创建可能失败，此时通过 Meting 后台创建令牌，再在 OpenMusic 后台填写，脚本不会重置管理员密码、关闭认证或改动 Cookie
+
 Meting 管理后台仅绑定服务器的 `127.0.0.1:${METING_PORT:-3000}`，路径、用户名和首次初始化密码必须在 `.env` 中显式设置。远程管理时执行 `ssh -L 3000:127.0.0.1:3000 user@server`，再从本机浏览器访问；不要直接开放该端口。
 
 > 从旧版全量 Compose 升级时，先按示例补齐根目录 `.env`，否则新版会安全失败而不启动。已有 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 必须原样沿用；Meting 已有数据不会因再次声明初始化变量而被重置。
@@ -163,6 +169,10 @@ proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
 - 配置文件挂载到 Compose 所在目录的宿主机 `./data/`（`.env`、`runtimeConfig.json`、`adminConfig.json`、`setup.lock`、`downloads/`），新镜像一键部署对应 `/opt/openmusic/data/`；Meting 数据在其 `meting/` 子目录，容器重建不丢
 - Docker 环境下向导自动预填 Redis / Meting，完成后自动重启
 - 全量版的 Compose 变量来自仓库根目录 `.env`，应用运行配置仍写入 `./data/.env`，两者用途不同
+- 首次通过 `http://服务器IP:4000` 部署时，标准版、全量版及响度叠加部署默认传入 `ALLOW_INSECURE_COOKIES=1`，允许后台与普通账户使用 HTTP 会话 Cookie，避免登录返回 200 后因浏览器拒收 Secure Cookie 而立刻 401
+- `ALLOW_INSECURE_COOKIES` 属于启动时的 Cookie 传输策略，管理后台不提供修改入口，Docker 部署在 Compose 所读取的根目录 `.env` 中配置，不在 `data/.env` 中配置，否则会被容器环境覆盖
+- HTTPS 上线后将根目录 `.env` 中的 `ALLOW_INSECURE_COOKIES` 改为 `0`，使用原部署的 Compose 参数执行 `up -d --force-recreate openmusic` 后重新登录，不能仅用 `restart` 更新容器环境变量；允许 HTTP 时，服务端识别为 HTTPS 的请求仍签发 Secure Cookie，反代需正确配置可信代理与 `X-Forwarded-Proto`
+- 已部署的旧 Compose 如需立即恢复 HTTP 登录，在 `openmusic.environment` 中加入 `ALLOW_INSECURE_COOKIES: "1"`，使用原 Compose 参数重建 OpenMusic 容器即可，无需更新镜像或修改 Redis 数据；回滚时恢复原 Compose 与环境配置并重建，后台进程内会话会失效，需要重新登录
 - 自定义端口：`OPENMUSIC_PORT=8080 docker compose --env-file .env -f docker-compose.full.yml up -d`
 - 响度增强版：`docker compose --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness && docker compose --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d`；响度服务使用 GHCR `latest` 镜像并仅加入 Docker 内网
 - 更新：`git pull && docker compose --env-file .env -f docker-compose.full.yml up -d --build`
@@ -181,7 +191,7 @@ proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
 
 `meting-api` 和 `meting-api-audio-loudness` 是同一网络中的显式别名，统一使用全称加端口；Compose 服务键仍保留 `meting` 和 `loudness`，原有日志、更新和依赖命令无需改名。旧短名仍兼容，已有后台保存的地址请在后台更新为表中的完整地址。
 
-OpenMusic 请求层仅在启动环境同时提供 `DOCKER_REDIS_URL`，且 `DOCKER_METING_URL` 指向 `http://meting-api:3000` 或兼容的 `http://meting:3000` 时，允许这些可信服务别名使用 HTTP。其他非本机地址仍要求 HTTPS，不放行任意内网 IP、其他端口或响度服务。标准全量 Compose 已提供所需启动参数；业务音源地址和 API Token 仍通过管理后台配置。更新请求层代码需重新构建或更新 OpenMusic 镜像，仅修改 Compose 或后台地址不足以修复旧镜像的拦截。
+OpenMusic 请求层仅在启动环境同时提供 `DOCKER_REDIS_URL`，且 `DOCKER_METING_URL` 指向 `http://meting-api:3000` 或兼容的 `http://meting:3000` 时，允许这些可信服务别名使用 HTTP。其他非本机地址仍要求 HTTPS，不放行任意内网 IP、其他端口或响度服务。标准全量 Compose 已提供所需启动参数；联合部署脚本自动配对内置音源地址和 API Token，后续调整仍优先通过管理后台完成。更新请求层及自动配对代码需重新构建或更新 OpenMusic 镜像，仅修改 Compose 或后台地址不足以修复旧镜像
 
 这些地址只用于容器间调用，不是浏览器播放地址。浏览器通过本站 `/api/meting` 搜索、取歌词和解析媒体；标准内部封面解析链接转换为本站接口，汽水包装链接转换为本站 `/api/qishui-source`。最终音频必须返回可公开访问的 CDN 地址；类似 `http://meting-api:3000/files/song.mp3` 的非标准内部直链会被清空并返回无可用链接，不能把 Docker 内网开放给浏览器，也不会放宽媒体代理的内网防护。自定义 Meting 实现应返回公网媒体直链或标准解析链接。
 
@@ -195,7 +205,7 @@ OpenMusic 请求层仅在启动环境同时提供 `DOCKER_REDIS_URL`，且 `DOCK
 4. 已有后台配置优先于初始化默认值：在 OpenMusic 管理后台将 Meting 音源地址设为 `http://meting-api:3000`，在 Meting 后台“监测设置”将响度地址设为 `http://meting-api-audio-loudness:3100/analyze`。不要使用容器内的 `localhost` 指向其他服务，也不要仅改环境变量后假设旧后台配置已更新。
 5. 用 `docker network inspect <项目名>_openmusic` 检查 `IPAM.Config` 和全部服务的接入状态，再验证搜索、播放和响度分析。若升级失败，恢复备份的 Compose 配置，用原项目名重建旧服务；不要删除 Redis 卷。
 
-安装脚本在拉取镜像和启动前校验 Compose 配置，Docker 引擎不可访问时提前停止；启动使用 `up -d --wait --wait-timeout 180` 等待健康检查，并实际检查 OpenMusic → Meting 的 HTTP 连通性，以及启用响度时 Meting → 响度服务的 `/healthz`。Meting 返回认证状态不代表网络不通，API Token 和音乐源权限仍需在后台验证。连通检查失败不会显示部署成功，不自动删除容器或数据。
+安装脚本在拉取镜像和启动前校验 Compose 配置，Docker 引擎不可访问时提前停止；启动使用 `up -d --wait --wait-timeout 180` 等待健康检查，随后配对并验证 API Token 与服务端签名，再检查 OpenMusic → Meting 的 HTTP 连通性，以及启用响度时 Meting → 响度服务的 `/healthz`。自动配对不能替代真实音乐源权限、Cookie、搜索和播放验收，任一步失败不会显示部署成功，不自动删除容器或数据
 
 线上检查命令（Linux 服务器，在原部署目录执行；保留原 Compose 项目名，若原来用 `-p` 则仍需加入）：
 

@@ -172,6 +172,9 @@ export default defineConfig({
             }
             return;
           }
+          if (id.includes('/echarts/') || id.includes('/zrender/')) {
+            return 'admin-charts';
+          }
           if (id.includes('@ant-design/icons')) {
             return 'antd-icons';
           }

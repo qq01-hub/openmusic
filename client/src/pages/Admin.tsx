@@ -20,6 +20,7 @@ import {
 } from '@ant-design/icons';
 import {
   App,
+  Alert,
   Badge,
   Button,
   Card,
@@ -80,6 +81,7 @@ import {
   type AdminRoomStatusFilter,
 } from './admin/utils';
 import { SOFT_BLOCK_CODE_HELP } from '../lib/softBlock';
+import './admin/AdminShell.css';
 
 const { Header, Sider, Content } = Layout;
 
@@ -261,6 +263,8 @@ function AdminPage() {
   const [bansPage, setBansPage] = useState(1);
   const [reportsPage, setReportsPage] = useState(1);
   const [refreshing, setRefreshing] = useState(false);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<number | null>(null);
+  const [refreshError, setRefreshError] = useState('');
   const annLoadedRef = useRef(false);
   const loadingRef = useRef(false);
   const pendingForceRefreshRef = useRef(false);
@@ -289,6 +293,8 @@ function AdminPage() {
       // 即使请求失败也清本地 UI 状态
     }
     setLoggedIn(false);
+    setLastRefreshedAt(null);
+    setRefreshError('');
     setOverview(null);
     setRooms([]);
     setRiskReturnAccountId('');
@@ -325,6 +331,8 @@ function AdminPage() {
         setRooms(rm.rooms);
         setBans(banRes.bans);
         setErrorReports(reportRes.reports);
+        setLastRefreshedAt(Date.now());
+        setRefreshError('');
         if (ov.entryPath) {
           setEntryPathDraft((draft) => {
             if (savedEntryPathRef.current === null || draft === savedEntryPathRef.current) {
@@ -338,6 +346,7 @@ function AdminPage() {
       } catch (err) {
         if (gen !== refreshGenRef.current) continue;
         const errMessage = err instanceof Error ? err.message : '加载失败';
+        setRefreshError(errMessage);
         message.error(errMessage);
         const status = err && typeof err === 'object' && 'status' in err
           ? Number((err as { status?: number }).status)
@@ -982,7 +991,7 @@ function AdminPage() {
     setMobileMenuOpen(false);
   };
 
-  const menuItems = ADMIN_TABS.map((tab) => ({
+  const tabMenuItems = ADMIN_TABS.map((tab) => ({
     key: tab.id,
     icon: tab.icon,
     label: tab.id === 'reports' && openReportCount > 0
@@ -999,6 +1008,11 @@ function AdminPage() {
         )
         : tab.label,
   }));
+  const menuItems = [
+    { type: 'group' as const, label: '工作台', children: tabMenuItems.filter((item) => ['overview', 'rooms'].includes(item.key)) },
+    { type: 'group' as const, label: '安全与反馈', children: tabMenuItems.filter((item) => ['risk', 'bans', 'reports'].includes(item.key)) },
+    { type: 'group' as const, label: '运营与系统', children: tabMenuItems.filter((item) => ['notify', 'donations', 'settings', 'audit'].includes(item.key)) },
+  ];
 
   useEffect(() => {
     setRoomsPage(1);
@@ -1416,14 +1430,18 @@ function AdminPage() {
       case 'risk':
         return <RiskControlPanel onOpenSecurity={() => { setSettingsIdentityEntry(true); handleTabChange('settings'); }} initialAccountId={riskReturnAccountId} onOpenRoom={(roomId, accountId) => { setRiskReturnAccountId(accountId); setRoomsKeyword(roomId); setRoomsStatusFilter([]); setRoomsPage(1); handleTabChange('rooms'); }} />;
       case 'overview':
+        if (!overview && refreshError) return null;
         return (
           <OverviewDashboard
             overview={overview}
+            rooms={rooms}
             openReportCount={openReportCount}
+            pendingPermanentCount={pendingPermanentCount}
             upstreamBusyUrl={upstreamBusyUrl}
             onResetCooldown={(url) => void resetUpstreamCooldown(url)}
             onToggleDisabled={(up) => void toggleUpstreamDisabled(up)}
-            onGoReports={() => setActiveTab('reports')}
+            onGoReports={() => handleTabChange('reports')}
+            onGoRooms={() => handleTabChange('rooms')}
           />
         );
 
@@ -2181,13 +2199,13 @@ function AdminPage() {
   }
 
   return (
-    <Layout style={{ height: '100vh', overflow: 'hidden' }}>
+    <Layout className="admin-shell" style={{ height: '100dvh', overflow: 'hidden' }}>
       {overview?.setupRequired && (
         <InitialSetupGate overview={overview} onError={(text) => message.error(text)} onUpdated={() => void refresh()} />
       )}
 
       <Sider
-        width={220}
+        width={240}
         breakpoint="md"
         collapsedWidth={0}
         style={{
@@ -2209,11 +2227,12 @@ function AdminPage() {
             minHeight: 0,
           }}
         >
-          <div style={{ padding: '20px 16px 12px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <SafetyCertificateOutlined style={{ fontSize: 20, color: '#1677ff' }} />
-            <Typography.Text strong>OpenMusic管理后台</Typography.Text>
+          <div className="admin-brand">
+            <SafetyCertificateOutlined />
+            <div><strong>OpenMusic</strong><small>管理控制台</small></div>
           </div>
           <Menu
+            className="admin-navigation"
             mode="inline"
             selectedKeys={[activeTab]}
             items={menuItems}
@@ -2240,6 +2259,7 @@ function AdminPage() {
         size={260}
       >
         <Menu
+          className="admin-navigation"
           mode="inline"
           selectedKeys={[activeTab]}
           items={menuItems}
@@ -2289,14 +2309,17 @@ function AdminPage() {
               </Typography.Title>
             </div>
           </Space>
-          <Button
-            icon={<SyncOutlined spin={refreshing} />}
-            onClick={() => void refresh({ force: true })}
-            loading={refreshing}
-            style={{ flexShrink: 0 }}
-          >
-            刷新
-          </Button>
+          <Space size={12}>
+            {activeTab === 'overview' && lastRefreshedAt && <span className="admin-freshness">更新于 {new Date(lastRefreshedAt).toLocaleTimeString('zh-CN', { hour12: false })}</span>}
+            <Button
+              icon={<SyncOutlined spin={refreshing} />}
+              onClick={() => void refresh({ force: true })}
+              loading={refreshing}
+              style={{ flexShrink: 0 }}
+            >
+              刷新
+            </Button>
+          </Space>
         </Header>
 
         <Content
@@ -2312,6 +2335,7 @@ function AdminPage() {
               : null),
           }}
         >
+          {refreshError && <Alert className="admin-refresh-error" type="warning" showIcon title={`数据刷新失败：${refreshError}`} description={lastRefreshedAt ? '当前保留上次成功加载的数据，可点击右上角刷新重试' : '尚未加载到数据，可点击右上角刷新重试'} />}
           {TAB_META[activeTab].description ? (
             <Typography.Paragraph
               type="secondary"

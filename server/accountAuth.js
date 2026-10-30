@@ -47,7 +47,7 @@ const REGISTRATION_EMAIL_DOMAINS = new Set([
   'icloud.com', 'me.com', 'mac.com', 'yahoo.com', 'aol.com',
   'proton.me', 'protonmail.com',
 ]);
-const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat', 'wechat_scan', 'qq_scan']);
+const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat']);
 
 export class AccountAuthError extends Error {
   constructor(code, message, status = 400) {

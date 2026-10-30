@@ -1,152 +1,107 @@
-import type { CSSProperties, ReactNode } from 'react';
-import {
-  CheckCircleFilled,
-  ClockCircleOutlined,
-  CloudServerOutlined,
-  DatabaseOutlined,
-  ExclamationCircleFilled,
-  HddOutlined,
-  PlayCircleOutlined,
-  TeamOutlined,
-  ThunderboltOutlined,
-  WifiOutlined,
-} from '@ant-design/icons';
-import {
-  Badge,
-  Button,
-  Card,
-  Col,
-  Progress,
-  Row,
-  Space,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
+import { useMemo } from 'react';
+import { ApiOutlined, ArrowRightOutlined, PlayCircleOutlined, SoundOutlined, TeamOutlined } from '@ant-design/icons';
+import { Alert, Badge, Button, Card, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { AdminOverview, MetingUpstreamRecentError, MetingUpstreamStatus } from './types';
+import type { EChartsCoreOption } from 'echarts/core';
+import type { AdminOverview, AdminRoom, MetingUpstreamRecentError, MetingUpstreamStatus } from './types';
+import AdminChart from './AdminChart';
 import AdminLoading from './AdminLoading';
 import { formatUptime } from './utils';
+import './OverviewDashboard.css';
 
 type Props = {
   overview: AdminOverview | null;
+  rooms: AdminRoom[];
   openReportCount: number;
+  pendingPermanentCount: number;
   upstreamBusyUrl: string | null;
   onResetCooldown: (url: string) => void;
   onToggleDisabled: (up: MetingUpstreamStatus) => void;
-  onGoReports?: () => void;
+  onGoReports: () => void;
+  onGoRooms: () => void;
 };
 
-const METRIC_ICON_WRAP: CSSProperties = {
-  width: 44,
-  height: 44,
-  borderRadius: 12,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  fontSize: 20,
-  flexShrink: 0,
+const number = (value: number) => value.toLocaleString('zh-CN');
+const axis = {
+  type: 'value' as const, minInterval: 1,
+  axisLabel: { color: '#737b83', fontSize: 11 },
+  splitLine: { lineStyle: { color: '#edf0f2' } },
+};
+const blueGradient = {
+  type: 'linear', x: 0, y: 0, x2: 1, y2: 0,
+  colorStops: [{ offset: 0, color: '#c7ddff' }, { offset: 1, color: '#83b2f5' }],
 };
 
-function MetricCard({
-  title,
-  value,
-  suffix,
-  icon,
-  iconBg,
-  iconColor,
-  hint,
-}: {
-  title: string;
-  value: string | number;
-  suffix?: string;
-  icon: ReactNode;
-  iconBg: string;
-  iconColor: string;
-  hint?: string;
-}) {
-  return (
-    <Card
-      variant="borderless"
-      styles={{ body: { padding: '20px 22px' } }}
-      style={{
-        height: '100%',
-        borderRadius: 14,
-        border: '1px solid rgba(15, 23, 42, 0.06)',
-        background: `linear-gradient(160deg, #fff 60%, ${iconBg} 140%)`,
-        boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.045)',
-        transition: 'transform 0.18s ease, box-shadow 0.18s ease',
-      }}
-      className="admin-metric-card"
-    >
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-        <div style={{ minWidth: 0 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12, letterSpacing: 0.2 }}>
-            {title}
-          </Typography.Text>
-          <div style={{ marginTop: 8, display: 'flex', alignItems: 'baseline', gap: 4 }}>
-            <Typography.Text
-              style={{
-                fontSize: 30,
-                fontWeight: 650,
-                lineHeight: 1.1,
-                color: '#0f172a',
-                letterSpacing: '-0.03em',
-              }}
-            >
-              {value}
-            </Typography.Text>
-            {suffix && (
-              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
-                {suffix}
-              </Typography.Text>
-            )}
-          </div>
-          {hint && (
-            <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              {hint}
-            </Typography.Text>
-          )}
-        </div>
-        <div style={{ ...METRIC_ICON_WRAP, background: iconBg, color: iconColor }}>{icon}</div>
-      </div>
-    </Card>
-  );
+function roomBars(names: string[], values: number[], seriesName: string): EChartsCoreOption {
+  return {
+    grid: { left: 100, right: 38, top: 12, bottom: 28 },
+    tooltip: { trigger: 'axis', renderMode: 'richText', axisPointer: { type: 'shadow' } },
+    xAxis: { ...axis, splitNumber: 3 },
+    yAxis: {
+      type: 'category', inverse: true, data: names,
+      axisTick: { show: false }, axisLine: { show: false },
+      axisLabel: { color: '#525b65', width: 84, overflow: 'truncate', fontSize: 12 },
+    },
+    series: [{
+      type: 'bar', name: seriesName, data: values, barMaxWidth: 18,
+      itemStyle: { color: blueGradient, borderRadius: 9 },
+      label: { show: true, position: 'right', color: '#46566b', fontSize: 12 },
+    }],
+  };
 }
 
 export default function OverviewDashboard({
-  overview,
-  openReportCount,
-  upstreamBusyUrl,
-  onResetCooldown,
-  onToggleDisabled,
-  onGoReports,
+  overview, rooms, openReportCount, pendingPermanentCount, upstreamBusyUrl,
+  onResetCooldown, onToggleDisabled, onGoReports, onGoRooms,
 }: Props) {
-  if (!overview) {
-    return (
-      <Card style={{ borderRadius: 12, minHeight: 240 }}>
-        <AdminLoading tip="加载概览…" minHeight={240} />
-      </Card>
-    );
-  }
+  const topRooms = useMemo(() => [...rooms]
+    .filter((room) => room.userCount > 0)
+    .sort((a, b) => b.userCount - a.userCount || a.id.localeCompare(b.id)).slice(0, 5), [rooms]);
+  const upstreams = overview?.metingUpstreams || [];
+  const topQueues = useMemo(() => [...rooms]
+    .filter((room) => room.queueLength > 0)
+    .sort((a, b) => b.queueLength - a.queueLength || a.id.localeCompare(b.id)).slice(0, 5), [rooms]);
+  const roomStates = useMemo(() => [
+    { name: '正在播放', value: rooms.filter((r) => r.isPlaying).length },
+    { name: '已选曲暂停', value: rooms.filter((r) => !r.isPlaying && r.currentSong).length },
+    { name: '尚未选曲', value: rooms.filter((r) => !r.isPlaying && !r.currentSong).length },
+  ], [rooms]);
+  const roomOption = useMemo(() => roomBars(
+    topRooms.map((r) => r.name), topRooms.map((r) => r.userCount), '在线人数',
+  ), [topRooms]);
+  const queueOption = useMemo(() => roomBars(
+    topQueues.map((r) => r.name), topQueues.map((r) => r.queueLength), '待播歌曲',
+  ), [topQueues]);
+  const stateOption = useMemo(() => roomBars(
+    roomStates.map((s) => s.name), roomStates.map((s) => s.value), '房间数',
+  ), [roomStates]);
+  const upstreamOption = useMemo<EChartsCoreOption>(() => ({
+    grid: { left: 72, right: 16, top: 12, bottom: 28 },
+    tooltip: { trigger: 'axis', renderMode: 'richText', axisPointer: { type: 'shadow' } },
+    xAxis: { ...axis, splitNumber: 3 },
+    yAxis: { type: 'category', inverse: true, data: upstreams.map((_, i) => `上游 ${i + 1}`),
+      axisTick: { show: false }, axisLine: { show: false }, axisLabel: { color: '#525b65', fontSize: 12 } },
+    series: [
+      { name: '成功', color: blueGradient, values: upstreams.map((u) => u.okCount) },
+      { name: '硬失败', color: { ...blueGradient, colorStops: [{ offset: 0, color: '#f9dce2' }, { offset: 1, color: '#efa8b6' }] }, values: upstreams.map((u) => u.failCount) },
+      { name: '软失败', color: { ...blueGradient, colorStops: [{ offset: 0, color: '#e5ecf8' }, { offset: 1, color: '#becfe8' }] }, values: upstreams.map((u) => u.softFailCount || 0) },
+    ].map((s) => ({ name: s.name, type: 'bar', stack: 'requests', barMaxWidth: 18,
+      data: s.values, itemStyle: { color: s.color, borderRadius: 8, borderColor: '#fff', borderWidth: 1 } })),
+  }), [overview?.metingUpstreams]);
 
-  const upstreams = overview.metingUpstreams || [];
+  if (!overview) return <Card><AdminLoading tip="加载概览…" minHeight={240} /></Card>;
+
   const healthyCount = upstreams.filter((u) => u.healthy && !u.disabled).length;
   const unhealthyCount = upstreams.filter((u) => !u.healthy && !u.disabled).length;
-  // 可用率按请求成功率，不因单上游短暂冷却就整表变 0
+  const disabledCount = upstreams.filter((u) => u.disabled).length;
   const totalOk = upstreams.reduce((sum, u) => sum + (u.okCount || 0), 0);
   const totalHardFail = upstreams.reduce((sum, u) => sum + (u.failCount || 0), 0);
+  const totalSoftFail = upstreams.reduce((sum, u) => sum + (u.softFailCount || 0), 0);
   const hardTotal = totalOk + totalHardFail;
-  const healthPct = hardTotal > 0
-    ? Math.round((totalOk / hardTotal) * 100)
-    : (upstreams.length ? 100 : 100);
-  const playPct = overview.roomCount > 0
-    ? Math.round((overview.playingRooms / overview.roomCount) * 100)
-    : 0;
-
-  const systemOk = overview.redisEnabled && unhealthyCount === 0;
-  const systemWarn = !overview.redisEnabled || unhealthyCount > 0 || openReportCount > 0;
-
+  const successRate = hardTotal ? `${(totalOk / hardTotal * 100).toFixed(1)}%` : '—';
+  const emptyRooms = rooms.filter((r) => r.userCount === 0).length;
+  const queueTotal = rooms.reduce((sum, r) => sum + r.queueLength, 0);
+  const attentionCount = openReportCount + pendingPermanentCount + unhealthyCount;
   const upstreamColumns: ColumnsType<MetingUpstreamStatus> = [
     {
       title: '状态',
@@ -154,7 +109,7 @@ export default function OverviewDashboard({
       render: (_, up) => (
         <Badge
           status={up.disabled ? 'default' : up.healthy ? 'success' : 'error'}
-          text={up.disabled ? '已禁用' : up.healthy ? '健康' : '异常'}
+          text={up.disabled ? '已禁用' : up.healthy ? '可用' : '冷却中'}
         />
       ),
     },
@@ -162,8 +117,9 @@ export default function OverviewDashboard({
       title: '上游地址',
       dataIndex: 'url',
       ellipsis: true,
-      render: (url: string) => (
+      render: (url: string, _, index) => (
         <Space size={6} wrap>
+          <Typography.Text type="secondary">上游 {index + 1}</Typography.Text>
           <Typography.Text code style={{ fontSize: 12 }}>{url}</Typography.Text>
         </Space>
       ),
@@ -171,13 +127,14 @@ export default function OverviewDashboard({
     {
       title: '成功 / 失败',
       width: 140,
+      align: 'right',
       render: (_, up) => (
         <Typography.Text style={{ fontSize: 13 }}>
-          <span style={{ color: '#16a34a' }}>{up.okCount}</span>
+          <span>{number(up.okCount)}</span>
           <Typography.Text type="secondary"> / </Typography.Text>
-          <span style={{ color: up.failCount ? '#dc2626' : undefined }}>{up.failCount}</span>
+          <span style={{ color: up.failCount ? '#bd4747' : undefined }}>{number(up.failCount)}</span>
           {up.softFailCount ? (
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
               {' '}(+{up.softFailCount} 软)
             </Typography.Text>
           ) : null}
@@ -222,268 +179,74 @@ export default function OverviewDashboard({
     },
   ];
 
-  const heroOk = systemOk && !systemWarn;
 
   return (
-    <Space orientation="vertical" size={20} style={{ width: '100%' }}>
-      <Card
-        variant="borderless"
-        styles={{ body: { padding: '24px 26px' } }}
-        style={{
-          borderRadius: 16,
-          overflow: 'hidden',
-          background: heroOk
-            ? 'linear-gradient(125deg, #0b1220 0%, #12263f 48%, #0f3d5c 100%)'
-            : 'linear-gradient(125deg, #1c1408 0%, #3a2710 48%, #4a3214 100%)',
-          boxShadow: '0 16px 40px rgba(15, 23, 42, 0.18)',
-          position: 'relative',
-        }}
-      >
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            inset: 0,
-            background:
-              'radial-gradient(ellipse 60% 80% at 100% 0%, rgba(56,189,248,0.18), transparent 55%)',
-            pointerEvents: 'none',
-          }}
-        />
-        <Row gutter={[24, 20]} align="middle" style={{ position: 'relative' }}>
-          <Col xs={24} lg={14}>
-            <Space align="start" size={14}>
-              <div
-                style={{
-                  ...METRIC_ICON_WRAP,
-                  width: 52,
-                  height: 52,
-                  borderRadius: 14,
-                  background: heroOk ? 'rgba(34,197,94,0.18)' : 'rgba(251,191,36,0.2)',
-                  color: heroOk ? '#4ade80' : '#fbbf24',
-                  fontSize: 26,
-                  border: `1px solid ${heroOk ? 'rgba(74,222,128,0.35)' : 'rgba(251,191,36,0.35)'}`,
-                }}
-              >
-                {heroOk ? <CheckCircleFilled /> : <ExclamationCircleFilled />}
-              </div>
-              <div>
-                <Typography.Title
-                  level={4}
-                  style={{ margin: 0, color: '#fff', fontWeight: 650, letterSpacing: '-0.02em' }}
-                >
-                  {heroOk ? '系统运行正常' : '系统需要关注'}
-                </Typography.Title>
-                <Typography.Paragraph style={{ margin: '8px 0 0', fontSize: 13, color: 'rgba(255,255,255,0.65)' }}>
-                  已连续运行 {formatUptime(overview.uptimeSec)}
-                  {overview.adminUsername ? ` · 当前管理员 ${overview.adminUsername}` : ''}
-                </Typography.Paragraph>
-                <Space size={8} wrap style={{ marginTop: 12 }}>
-                  <Tag
-                    icon={<DatabaseOutlined />}
-                    style={{
-                      margin: 0,
-                      border: 'none',
-                      background: overview.redisEnabled ? 'rgba(34,197,94,0.2)' : 'rgba(248,113,113,0.2)',
-                      color: overview.redisEnabled ? '#86efac' : '#fca5a5',
-                    }}
-                  >
-                    Redis {overview.redisEnabled ? '已连接' : '未连接'}
-                  </Tag>
-                  <Tag
-                    icon={<CloudServerOutlined />}
-                    style={{
-                      margin: 0,
-                      border: 'none',
-                      background: 'rgba(255,255,255,0.1)',
-                      color: 'rgba(255,255,255,0.88)',
-                    }}
-                  >
-                    音源健康 {healthyCount}/{upstreams.length || 0}
-                  </Tag>
-                  {openReportCount > 0 ? (
-                    <Tag
-                      style={{
-                        margin: 0,
-                        border: 'none',
-                        background: 'rgba(251,191,36,0.22)',
-                        color: '#fde68a',
-                        cursor: onGoReports ? 'pointer' : undefined,
-                      }}
-                      onClick={onGoReports}
-                    >
-                      待处理上报 {openReportCount}
-                    </Tag>
-                  ) : (
-                    <Tag
-                      style={{
-                        margin: 0,
-                        border: 'none',
-                        background: 'rgba(255,255,255,0.08)',
-                        color: 'rgba(255,255,255,0.55)',
-                      }}
-                    >
-                      无待处理上报
-                    </Tag>
-                  )}
-                </Space>
-              </div>
-            </Space>
-          </Col>
-          <Col xs={24} lg={10}>
-            <div
-              style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 14,
-                padding: '16px 18px',
-              }}
-            >
-              <Row gutter={16}>
-                <Col span={12}>
-                  <Typography.Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
-                    房间播放率
-                  </Typography.Text>
-                  <Progress
-                    percent={playPct}
-                    strokeColor={{ from: '#38bdf8', to: '#2563eb' }}
-                    railColor="rgba(255,255,255,0.12)"
-                    style={{ marginTop: 6, marginBottom: 0 }}
-                    format={(p) => <span style={{ color: '#fff', fontSize: 12 }}>{p}%</span>}
-                  />
-                  <Typography.Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
-                    {overview.playingRooms} / {overview.roomCount} 间在播
-                  </Typography.Text>
-                </Col>
-                <Col span={12}>
-                  <Typography.Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.55)' }}>
-                    音源可用率
-                  </Typography.Text>
-                  <Progress
-                    percent={healthPct}
-                    strokeColor={
-                      healthPct >= 80
-                        ? { from: '#4ade80', to: '#16a34a' }
-                        : { from: '#fbbf24', to: '#d97706' }
-                    }
-                    railColor="rgba(255,255,255,0.12)"
-                    style={{ marginTop: 6, marginBottom: 0 }}
-                    format={(p) => <span style={{ color: '#fff', fontSize: 12 }}>{p}%</span>}
-                  />
-                  <Typography.Text style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)' }}>
-                    {unhealthyCount > 0
-                      ? `${unhealthyCount} 个冷却中 · 成功率 ${healthPct}%`
-                      : `成功 ${totalOk} / 硬失败 ${totalHardFail}`}
-                  </Typography.Text>
-                </Col>
-              </Row>
-            </div>
-          </Col>
-        </Row>
-      </Card>
+    <div className="admin-overview">
+      <div className="overview-title-row">
+        <div>
+          <h1>全站运行概览</h1>
+          <p>{attentionCount ? `${number(attentionCount)} 项待关注，查看下方运营待办` : '当前无待处理上报、常驻申请或冷却中的音源'} · 可见时每 10 秒刷新</p>
+        </div>
+        <Button onClick={onGoRooms} icon={<ArrowRightOutlined />} iconPlacement="end">管理房间</Button>
+      </div>
+      {!overview.redisEnabled && <Alert type="error" showIcon title="存储依赖未就绪，请检查服务端 Redis 连接" />}
 
-      {/* 核心指标 */}
-      <Row gutter={[16, 16]}>
-        <Col xs={12} lg={6}>
-          <MetricCard
-            title="活跃房间"
-            value={overview.roomCount}
-            icon={<ThunderboltOutlined />}
-            iconBg="#eff6ff"
-            iconColor="#2563eb"
-            hint={`${overview.playingRooms} 间正在播放`}
-          />
-        </Col>
-        <Col xs={12} lg={6}>
-          <MetricCard
-            title="在线用户"
-            value={overview.onlineUsers}
-            icon={<TeamOutlined />}
-            iconBg="#f0fdf4"
-            iconColor="#16a34a"
-            hint="当前房内成员合计"
-          />
-        </Col>
-        <Col xs={12} lg={6}>
-          <MetricCard
-            title="播放中"
-            value={overview.playingRooms}
-            icon={<PlayCircleOutlined />}
-            iconBg="#fff7ed"
-            iconColor="#ea580c"
-            hint={overview.roomCount ? `占比 ${playPct}%` : '暂无房间'}
-          />
-        </Col>
-        <Col xs={12} lg={6}>
-          <MetricCard
-            title="Socket 连接"
-            value={overview.connectedSockets}
-            icon={<WifiOutlined />}
-            iconBg="#ecfeff"
-            iconColor="#0891b2"
-            hint="实时长连接数"
-          />
-        </Col>
-      </Row>
+      <div className="overview-metrics">
+        {[
+          { label: '当前房间', icon: <SoundOutlined />, value: overview.roomCount, hint: `${emptyRooms} 间无人在线` },
+          { label: '在线成员', icon: <TeamOutlined />, value: overview.onlineUsers, hint: '各房间在线成员合计' },
+          { label: '正在播放', icon: <PlayCircleOutlined />, value: overview.playingRooms, hint: overview.roomCount ? `占全部房间 ${(overview.playingRooms / overview.roomCount * 100).toFixed(0)}%` : '暂无房间' },
+          { label: '实时连接', icon: <ApiOutlined />, value: overview.connectedSockets, hint: 'Socket 长连接数' },
+        ].map((m) => <div className="overview-metric" key={m.label}>
+          <div className="overview-metric-label"><span>{m.label}</span>{m.icon}</div><strong>{number(m.value)}</strong><small>{m.hint}</small>
+        </div>)}
+      </div>
 
-      {/* 运行环境 */}
-      <Row gutter={[16, 16]}>
-        <Col xs={24} sm={8}>
-          <MetricCard
-            title="运行时长"
-            value={formatUptime(overview.uptimeSec)}
-            icon={<ClockCircleOutlined />}
-            iconBg="#fff7ed"
-            iconColor="#ea580c"
-          />
-        </Col>
-        <Col xs={24} sm={8}>
-          <MetricCard
-            title="进程内存"
-            value={overview.memoryRssMb}
-            suffix="MB"
-            icon={<HddOutlined />}
-            iconBg="#f8fafc"
-            iconColor="#475569"
-            hint="RSS 占用"
-          />
-        </Col>
-        <Col xs={24} sm={8}>
-          <MetricCard
-            title="持久化"
-            value={overview.redisEnabled ? 'Redis' : '内存'}
-            icon={<DatabaseOutlined />}
-            iconBg={overview.redisEnabled ? '#f0fdf4' : '#fef2f2'}
-            iconColor={overview.redisEnabled ? '#16a34a' : '#dc2626'}
-            hint={overview.auditStoredIn === 'redis' ? '审计日志已持久化' : '审计仅内存暂存'}
-          />
-        </Col>
-      </Row>
+      <div className="overview-worklist" aria-label="运营待办">
+        <button onClick={onGoReports}><span>待处理上报</span><strong className={openReportCount ? 'needs-attention' : ''}>{number(openReportCount)}</strong><ArrowRightOutlined /></button>
+        <button onClick={onGoRooms}><span>待审常驻申请</span><strong className={pendingPermanentCount ? 'needs-attention' : ''}>{number(pendingPermanentCount)}</strong><ArrowRightOutlined /></button>
+        <a href="#overview-upstreams"><span>音源冷却中</span><strong className={unhealthyCount ? 'needs-attention' : ''}>{number(unhealthyCount)}</strong><ArrowRightOutlined /></a>
+      </div>
 
-      {/* 音源上游 */}
-      {upstreams.length > 0 && (
-        <Card
-          variant="borderless"
-          title={(
-            <Space size={10}>
-              <CloudServerOutlined style={{ color: '#2563eb' }} />
-              <span>Meting 音源上游</span>
-              <Tag color={healthPct >= 80 ? 'success' : 'warning'}>
-                {healthyCount}/{upstreams.length} 健康
-              </Tag>
-            </Space>
-          )}
-          style={{
-            borderRadius: 12,
-            boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04)',
-          }}
-        >
-          <Table
-            rowKey="url"
-            size="middle"
-            columns={upstreamColumns}
-            dataSource={upstreams}
-            pagination={upstreams.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
-            scroll={{ x: 700 }}
+      {/* 两列共享 16px 间距，首尾与指标、上游表格对齐 */}
+      <div className="overview-charts">
+        <section className="overview-panel">
+          <div className="overview-panel-heading"><div><h2>房间在线分布</h2><p>当前快照 · 在线人数最多的 5 个房间</p></div><span className="overview-unit">人</span></div>
+          {topRooms.length ? <AdminChart option={roomOption} label={topRooms.map((r) => `${r.name}：${r.userCount} 人`).join('；')} />
+            : <div className="overview-chart-empty">当前没有在线成员，房间有人加入后显示分布</div>}
+          <div className="overview-chart-footer"><span>全站待播队列 <b>{number(queueTotal)}</b> 首</span><span>有成员的房间 <b>{number(rooms.length - emptyRooms)}</b> 间</span></div>
+        </section>
+        <section className="overview-panel">
+          <div className="overview-panel-heading"><div><h2>音源请求结果</h2><p>当前进程累计 · 重启后重新计数</p></div><span className="overview-unit">次</span></div>
+          <div className="overview-chart-legend"><span><i />成功 {number(totalOk)}</span><span><i className="legend-error" />硬失败 {number(totalHardFail)}</span><span><i className="legend-soft" />软失败 {number(totalSoftFail)}</span></div>
+          {upstreams.length && (hardTotal + totalSoftFail) > 0 ? <AdminChart option={upstreamOption} label={`音源请求成功 ${totalOk} 次，硬失败 ${totalHardFail} 次，软失败 ${totalSoftFail} 次`} />
+            : <div className="overview-chart-empty">{upstreams.length ? '尚无音源请求样本' : '尚未配置 Meting 音源上游'}</div>}
+          <div className="overview-chart-footer"><span>请求成功率 <b>{successRate}</b></span><span>口径：成功 /（成功 + 硬失败）</span></div>
+        </section>
+      </div>
+
+      <div className="overview-charts overview-charts--secondary">
+        <section className="overview-panel">
+          <div className="overview-panel-heading"><div><h2>房间播放状态</h2><p>当前房间列表快照 · 播放、暂停与未选曲</p></div><span className="overview-unit">间</span></div>
+          {rooms.length ? <AdminChart option={stateOption} label={roomStates.map((s) => `${s.name} ${s.value} 间`).join('；')} />
+            : <div className="overview-chart-empty">还没有房间，创建后显示播放状态分布</div>}
+          <div className="overview-chart-footer"><span>房间总数 <b>{number(rooms.length)}</b> 间</span><span>暂停表示已选曲但未播放</span></div>
+        </section>
+        <section className="overview-panel">
+          <div className="overview-panel-heading"><div><h2>待播队列排行</h2><p>待播歌曲最多的 5 个房间 · 不含当前播放曲目</p></div><span className="overview-unit">首</span></div>
+          {topQueues.length ? <AdminChart option={queueOption} label={topQueues.map((r) => `${r.name}：${r.queueLength} 首待播`).join('；')} />
+            : <div className="overview-chart-empty">所有房间的待播队列均为空</div>}
+          <div className="overview-chart-footer"><span>有待播歌曲的房间 <b>{number(rooms.filter((r) => r.queueLength > 0).length)}</b> 间</span><Button type="link" size="small" onClick={onGoRooms}>查看房间</Button></div>
+        </section>
+      </div>
+
+      <section className="overview-panel overview-upstreams" id="overview-upstreams">
+        <div className="overview-panel-heading"><div><h2>Meting 音源上游</h2><p>按请求反馈显示状态，可展开查看最近失败记录</p></div><span className="overview-upstream-summary">{healthyCount} 可用 · {unhealthyCount} 冷却 · {disabledCount} 禁用</span></div>
+        <Table
+          rowKey="url" size="middle" columns={upstreamColumns} dataSource={upstreams}
+          locale={{ emptyText: '尚未配置音源上游，可在系统设置中维护' }}
+          pagination={upstreams.length > 10 ? { pageSize: 10, showSizeChanger: false } : false}
+          scroll={{ x: 780 }}
             expandable={{
               expandedRowRender: (up) => {
                 const errors: MetingUpstreamRecentError[] = up.recentErrors?.length
@@ -526,9 +289,9 @@ export default function OverviewDashboard({
               },
               rowExpandable: (up) => Boolean(up.lastError || up.recentErrors?.length),
             }}
-          />
-        </Card>
-      )}
-    </Space>
+        />
+      </section>
+      <div className="overview-runtime"><span>服务已运行 {formatUptime(overview.uptimeSec)}</span><span>进程内存 {number(overview.memoryRssMb)} MB RSS</span><span>图表仅展示当前快照与进程累计数据</span></div>
+    </div>
   );
 }

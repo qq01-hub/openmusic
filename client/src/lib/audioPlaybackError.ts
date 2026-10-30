@@ -72,13 +72,7 @@ export function isServiceHttpStatus(status: number): boolean {
   return SERVICE_HTTP_STATUSES.has(status);
 }
 
-type MediaProbeResult = {
-  status: number;
-  contentType: string;
-  contentLength: string;
-  contentRange: string;
-  acceptRanges: string;
-};
+type MediaProbeResult = { status: number; contentType: string };
 
 function isKnownNonAudioContentType(contentType: string): boolean {
   const type = contentType.split(';', 1)[0].trim().toLowerCase();
@@ -124,9 +118,6 @@ async function probeMediaUrl(url: string): Promise<MediaProbeResult | null> {
         const result = {
           status: response.status,
           contentType: response.headers.get('content-type') || '',
-          contentLength: response.headers.get('content-length') || '',
-          contentRange: response.headers.get('content-range') || '',
-          acceptRanges: response.headers.get('accept-ranges') || '',
         };
         try {
           await response.body?.cancel?.();
@@ -183,10 +174,7 @@ export function classifySongUrlFetchError(error: unknown): PlaybackErrorClass {
 }
 
 /** `<audio>` 播放错误分类 */
-export async function classifyMediaPlaybackError(
-  audio: HTMLAudioElement,
-  onProbe?: (probe: MediaProbeResult | null) => void,
-): Promise<PlaybackErrorClass> {
+export async function classifyMediaPlaybackError(audio: HTMLAudioElement): Promise<PlaybackErrorClass> {
   const url = audio.currentSrc || audio.src;
   if (isInvalidPlaybackUrl(url)) return 'service';
 
@@ -197,11 +185,7 @@ export async function classifyMediaPlaybackError(
 
   const mediaError = audio.error;
   if (mediaError?.code === MediaError.MEDIA_ERR_ABORTED) return 'temporary';
-  if (mediaError?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
-    // 后台记录媒体响应信息，不能让诊断请求阻塞当前档位的恢复
-    if (onProbe) void probeMediaUrl(url).then(onProbe).catch(() => onProbe(null));
-    return 'service';
-  }
+  if (mediaError?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) return 'service';
 
   if (
     mediaError?.code === MediaError.MEDIA_ERR_NETWORK
@@ -209,7 +193,6 @@ export async function classifyMediaPlaybackError(
     || mediaError?.code === MediaError.MEDIA_ERR_DECODE
   ) {
     const probe = await probeMediaUrl(url);
-    onProbe?.(probe);
     const hasNonAudioResponse = Boolean(
       probe
       && probe.status >= 200

@@ -1,5 +1,4 @@
 import { validateTurnstileConfig } from './turnstile.js';
-import { socialProviderEnabled } from './socialLogin.js';
 import fs from 'fs';
 import path from 'path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
@@ -135,8 +134,6 @@ function envDefaults() {
     qiniuBucket: envText('QINIU_BUCKET'),
     qiniuDomain: envText('QINIU_DOMAIN'),
     qiniuZone: envText('QINIU_ZONE', 'z0'),
-    apihzWechatEnabled: false,
-    apihzQqEnabled: false,
     apihzBaseUrl: envText('APIHZ_BASE_URL', 'https://cn.apihz.cn/api'),
     apihzId: envText('APIHZ_ID', envText('APIHZ_IMG_ID', envText('APIHZ_MGC_ID'))),
     apihzKey: envText('APIHZ_KEY', envText('APIHZ_IMG_KEY', envText('APIHZ_MGC_KEY'))),
@@ -416,8 +413,6 @@ function normalize(config) {
     qiniuBucket: String(config.qiniuBucket || '').trim(),
     qiniuDomain: trimTrailingSlash(config.qiniuDomain),
     qiniuZone: QINIU_ZONES.has(String(config.qiniuZone || '').trim()) ? String(config.qiniuZone).trim() : 'z0',
-    apihzWechatEnabled: config.apihzWechatEnabled === true,
-    apihzQqEnabled: config.apihzQqEnabled === true,
     apihzBaseUrl: trimTrailingSlash(config.apihzBaseUrl) || 'https://cn.apihz.cn/api',
     apihzId: String(config.apihzId || '').trim(),
     apihzKey: String(config.apihzKey || '').trim(),
@@ -703,10 +698,6 @@ export function setRuntimeConfig(raw = {}) {
   }
 
   const normalized = normalize(next);
-  if ((normalized.apihzWechatEnabled && !socialProviderEnabled('wechat_scan', normalized))
-    || (normalized.apihzQqEnabled && !socialProviderEnabled('qq_scan', normalized))) {
-    return { success: false, error: '启用扫码登录前请配置接口盒子 ID 和密钥，API 地址须为 https://cn.apihz.cn/api 或 https://vip.apihz.cn/api' };
-  }
   if (normalized.turnstileEnabled && !getSecretKey()) return { success: false, error: '启用人机校验前必须具备稳定的服务端加密主密钥 CLIENT_ID_SECRET，避免密钥无法持久保存' };
   if (normalized.riskChallengeEnabled && !normalized.turnstileEnabled) return { success: false, error: '异常访问验证需要先启用并配置 Cloudflare Turnstile' };
   const challengeError = validateTurnstileConfig(normalized);

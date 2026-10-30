@@ -94,6 +94,7 @@ if [ ! -f "$ENV_FILE" ]; then
 OPENMUSIC_PORT=$OPENMUSIC_PORT
 METING_PORT=$METING_PORT
 OPENMUSIC_NETWORK_SUBNET=${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
+ALLOW_INSECURE_COOKIES=${ALLOW_INSECURE_COOKIES:-1}
 METING_ADMIN_PATH=$METING_ADMIN_PATH
 METING_ADMIN_USERNAME=$METING_USERNAME
 METING_ADMIN_PASSWORD=$METING_PASSWORD
@@ -143,6 +144,13 @@ if [ "$config_files_repaired" -eq 1 ]; then
     compose_up_args+=(--force-recreate)
 fi
 if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_args[@]}"; then
+    echo "正在自动配置 Meting API Token..."
+    if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T meting node -e 'const fs = require("node:fs"); const path = require("node:path"); const file = path.join(process.env.DATA_DIR || "/app/data", "api_tokens.json"); const tokens = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; const token = Object.values(tokens).find(t => t.name === "OpenMusic joint deployment" && t.token && (!t.permissions || t.permissions.length === 0)); process.stdout.write(JSON.stringify({token: token?.token || "", username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD}));' |
+        docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T openmusic node configureMeting.js; then
+        echo "错误: Meting API Token 自动配置失败，配置及数据已保留，请检查两端管理后台。" >&2
+        exit 1
+    fi
+    docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" restart openmusic
     echo "正在检查容器间 DNS 和 HTTP 连通性..."
     if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T openmusic node -e 'fetch("http://meting-api:3000", {signal: AbortSignal.timeout(10000), redirect: "manual"}).then(r => { if (r.status >= 500) throw new Error("Meting HTTP " + r.status); console.log("OpenMusic -> meting-api:3000 OK"); }).catch(e => { console.error(e.message); process.exit(1); })'; then
         echo "错误: OpenMusic 无法访问 Meting，请检查服务网络和日志；配置及数据已保留。" >&2

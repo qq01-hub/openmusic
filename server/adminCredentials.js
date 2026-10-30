@@ -67,8 +67,6 @@ function normalizeRecord(parsed) {
     mustChange: parsed.mustChange === true,
     linuxdo: normalizeOAuthBinding(parsed.linuxdo),
     github: normalizeOAuthBinding(parsed.github),
-    wechat_scan: normalizeOAuthBinding(parsed.wechat_scan),
-    qq_scan: normalizeOAuthBinding(parsed.qq_scan),
   };
 }
 
@@ -119,9 +117,12 @@ async function patchAdminRecord(patch, expectedHash) {
       const raw = await client.get(CREDENTIALS_KEY);
       const stored = raw ? JSON.parse(raw) : null;
       if (!normalizeRecord(stored) || expectedHash !== undefined && stored.hash !== expectedHash) return null;
+      const legacyFreeStored = { ...stored };
+      delete legacyFreeStored.wechat_scan;
+      delete legacyFreeStored.qq_scan;
       const result = await evalRedisScript(client,
         "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end; redis.call('SET', KEYS[1], ARGV[2]); return 1",
-        { keys: [CREDENTIALS_KEY], arguments: [raw, JSON.stringify({ ...stored, ...patch })] });
+        { keys: [CREDENTIALS_KEY], arguments: [raw, JSON.stringify({ ...legacyFreeStored, ...patch })] });
       if (result !== 1) continue;
       saved = true;
       // 其他写入可能在确认响应之前已完成，重新读取后再更新凭据快照
@@ -259,20 +260,6 @@ export async function setAdminCredentials({ username, password, currentPassword 
 /** 后台管理员当前绑定的 Linux.do 账号（未绑定为 null） */
 export function getAdminLinuxdoBinding() {
   return current?.linuxdo || null;
-}
-
-export async function getAdminSocialBinding(provider) {
-  if (!['wechat_scan', 'qq_scan'].includes(provider)) return null;
-  const stored = await readFromRedis();
-  return stored?.[provider] || null;
-}
-
-export async function setAdminSocialBinding(provider, identity) {
-  if (!current || !['wechat_scan', 'qq_scan'].includes(provider)) return { success: false, error: '无法更新管理员绑定' };
-  const binding = identity ? normalizeOAuthBinding({ id: identity.subject, username: identity.profile.username, boundAt: Date.now() }) : null;
-  if (identity && !binding) return { success: false, error: '无效的扫码身份' };
-  if (await patchAdminRecord({ [provider]: binding })) return { success: true };
-  return { success: false, error: '管理员绑定保存失败，请重试' };
 }
 
 /** 是否已有管理员账号绑定了这个 Linux.do 账号（用于「Linux.do 一键登录后台」） */

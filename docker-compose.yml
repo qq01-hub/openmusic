@@ -27,6 +27,8 @@ services:
     environment:
       PORT: 4000
       NODE_ENV: production
+      # 首次 IP/HTTP 部署允许 Cookie，HTTPS 上线后设为 0 强制 Secure
+      ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
       DOCKER_REDIS_URL: redis://redis:6379/0
     volumes:
       # 首次部署向导与管理后台写入的配置需要持久化，否则容器重建后清空

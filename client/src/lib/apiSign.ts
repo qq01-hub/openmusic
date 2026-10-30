@@ -4,8 +4,6 @@ const PUBLIC_API_PATHS = new Set([
   '/api/auth/email/login', '/api/auth/logout', '/api/auth/session',
   '/api/auth/providers', '/api/auth/wechat/account', '/api/auth/refresh',
   '/api/auth/device-login', '/api/auth/device-migrate', '/api/auth/wechat/start', '/api/auth/wechat/qr', '/api/auth/wechat/poll',
-  '/api/auth/social/wechat_scan/start', '/api/auth/social/wechat_scan/poll', '/api/auth/social/wechat_scan/complete',
-  '/api/auth/social/qq_scan/start', '/api/auth/social/qq_scan/poll', '/api/auth/social/qq_scan/complete',
 ]);
 
 export function isPublicCoverUrl(url: string, method = 'GET'): boolean {

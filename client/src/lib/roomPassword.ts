@@ -1,29 +1,35 @@
-export function roomPasswordStorageKey(roomId: string): string {
-  return `openmusic:room-password:${roomId.toUpperCase()}`;
+export function roomPasswordStorageKey(roomId: string, accountId?: string): string {
+  const scope = String(accountId || '').trim();
+  return scope
+    ? `openmusic:room-password:${scope}:${roomId.toUpperCase()}`
+    : `openmusic:room-password:${roomId.toUpperCase()}`;
 }
 
-export function getStoredRoomPassword(roomId?: string): string | undefined {
+export function getStoredRoomPassword(roomId?: string, accountId?: string | null): string | undefined {
   if (!roomId) return undefined;
   try {
+    if (accountId) return localStorage.getItem(roomPasswordStorageKey(roomId, accountId)) || undefined;
     return sessionStorage.getItem(roomPasswordStorageKey(roomId)) || undefined;
   } catch {
     return undefined;
   }
 }
 
-export function rememberRoomPassword(roomId: string, password?: string): void {
+export function rememberRoomPassword(roomId: string, password?: string, accountId?: string | null): void {
   if (!password?.trim()) return;
   try {
-    sessionStorage.setItem(roomPasswordStorageKey(roomId), password.trim());
+    if (accountId) localStorage.setItem(roomPasswordStorageKey(roomId, accountId), password.trim());
+    else sessionStorage.setItem(roomPasswordStorageKey(roomId), password.trim());
   } catch {
     // sessionStorage may be unavailable in private browsing.
   }
 }
 
-export function clearStoredRoomPassword(roomId?: string): void {
+export function clearStoredRoomPassword(roomId?: string, accountId?: string | null): void {
   if (!roomId) return;
   try {
-    sessionStorage.removeItem(roomPasswordStorageKey(roomId));
+    if (accountId) localStorage.removeItem(roomPasswordStorageKey(roomId, accountId));
+    else sessionStorage.removeItem(roomPasswordStorageKey(roomId));
   } catch {
     // ignore
   }

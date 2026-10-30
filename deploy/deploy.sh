@@ -152,6 +152,7 @@ update_docker_full() {
   update_git_pull
   info "重新构建并启动容器（含 Meting）..."
   $compose_cmd -f docker-compose.full.yml up -d --build
+  configure_meting "$compose_cmd" -f docker-compose.full.yml
   ok "更新完成（Docker 全量版）"
 }
 
@@ -162,6 +163,7 @@ update_docker_loudness() {
   info "重新构建并启动容器（含 Meting + 响度辅助服务）..."
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build
+  configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
   ok "更新完成（Docker 响度增强版）"
 }
 
@@ -240,6 +242,7 @@ deploy_docker_loudness() {
   info "启动容器（redis + meting + loudness）..."
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build
+  configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
 
   ok "部署完成（全量版，含 Meting + 响度辅助服务）"
   local port="${OPENMUSIC_PORT:-4000}"
@@ -254,6 +257,18 @@ deploy_docker_loudness() {
      $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml logs -f loudness
      $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml down
 EOF
+}
+
+configure_meting() {
+  local compose_cmd="$1"
+  shift
+  info "自动配置 Meting API Token..."
+  if ! $compose_cmd "$@" exec -T meting node -e 'const fs = require("node:fs"); const path = require("node:path"); const file = path.join(process.env.DATA_DIR || "/app/data", "api_tokens.json"); const tokens = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; const token = Object.values(tokens).find(t => t.name === "OpenMusic joint deployment" && t.token && (!t.permissions || t.permissions.length === 0)); process.stdout.write(JSON.stringify({token: token?.token || "", username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD}));' |
+      $compose_cmd "$@" exec -T openmusic node configureMeting.js; then
+    err "Meting API Token 自动配置失败，配置及数据已保留，请检查两端管理后台"
+    exit 1
+  fi
+  $compose_cmd "$@" restart openmusic
 }
 
 prepare_data_dir() {
@@ -325,6 +340,7 @@ deploy_docker_full() {
   else
     $compose_cmd -f docker-compose.full.yml up -d --build
   fi
+  configure_meting "$compose_cmd" -f docker-compose.full.yml
 
   ok "部署完成（全量版，含 Meting）"
   local port="${OPENMUSIC_PORT:-4000}"

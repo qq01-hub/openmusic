@@ -1,0 +1,37 @@
+.ai-pool-manager { --pool-blue: #2563eb; --pool-muted: #64748b; --pool-border: #e2e8f0; min-width: 0; }
+.ai-pool-toolbar { display: grid; grid-template-columns: minmax(120px, 1fr) 120px auto; gap: 10px; }
+.ai-pool-summary { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 14px 0; color: var(--pool-muted); font-size: 12px; }
+.ai-pool-list { border: 1px solid var(--pool-border); border-radius: 12px; overflow: hidden; background: #fff; }
+.ai-pool-row { display: grid; grid-template-columns: minmax(120px, 1fr) auto auto auto; gap: 12px; align-items: center; padding: 14px 16px; border-bottom: 1px solid #edf0f5; }
+.ai-pool-row:last-child { border-bottom: 0; }
+.ai-pool-row:hover { background: #fafbff; }
+.ai-pool-identity { min-width: 0; border: 0; padding: 0; text-align: left; cursor: pointer; background: none; color: #172033; font: inherit; }
+.ai-pool-identity strong, .ai-pool-identity code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-pool-identity strong { font-size: 14px; font-weight: 600; }
+.ai-pool-identity code { margin-top: 5px; color: var(--pool-muted); font-size: 12px; }
+.ai-pool-identity:hover strong { color: var(--pool-blue); }
+.ai-pool-identity:focus-visible { outline: 2px solid var(--pool-blue); outline-offset: 4px; border-radius: 4px; }
+.ai-pool-meta { display: grid; gap: 4px; color: var(--pool-muted); font-size: 12px; }
+.ai-pool-meta .ant-tag { width: fit-content; margin: 0; }
+.ai-pool-actions .ant-btn { padding-inline: 7px; }
+.ai-pool-empty { padding: 48px 24px; color: var(--pool-muted); text-align: center; font-size: 13px; }
+.ai-pool-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0 0; color: var(--pool-muted); font-size: 12px; }
+.ai-pool-hint { margin: 12px 0 0; color: var(--pool-muted); font-size: 12px; line-height: 1.6; }
+.ai-pool-form-section { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 1px solid #e9edf4; }
+.ai-pool-form-section h3 { margin: 0; font-size: 14px; font-weight: 600; color: #172033; }
+.ai-pool-form-section span { color: #64748b; font-size: 12px; }
+.ai-pool-editor .ant-form-item { margin-bottom: 18px; }
+@media (max-width: 760px) {
+  .ai-pool-row { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; padding: 14px; }
+  .ai-pool-meta { display: flex; align-items: center; grid-row: 2; grid-column: 1; }
+  .ai-pool-row > .ant-switch { grid-column: 2; grid-row: 1; justify-self: end; }
+  .ai-pool-actions { grid-column: 2; grid-row: 2; }
+}
+@media (max-width: 480px) {
+  .ai-pool-toolbar { grid-template-columns: minmax(0, 1fr) auto; }
+  .ai-pool-toolbar > .ant-input-affix-wrapper { grid-column: 1 / -1; }
+  .ai-pool-toolbar > .ant-select { min-width: 0; width: 100%; }
+  .ai-pool-meta { align-items: flex-start; flex-direction: column; }
+  .ai-pool-actions .ant-btn { min-height: 36px; padding-inline: 5px; }
+  .ai-pool-editor { max-width: calc(100vw - 20px); top: 10px; padding-bottom: 10px; }
+}

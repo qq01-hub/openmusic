@@ -114,6 +114,229 @@ body {
   text-security: disc;
 }
 
+/* 账户弹框：午夜听音室视觉层次 */
+.account-modal-panel {
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  background: linear-gradient(145deg, #171719 0%, #111114 62%, #0d0d10 100%);
+  box-shadow: 0 26px 90px rgba(0, 0, 0, 0.62), 0 0 0 1px rgba(255, 255, 255, 0.035) inset;
+}
+
+.account-dialog {
+  color: #f7f7fb;
+}
+
+.account-dialog-header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.account-dialog-header h2 {
+  letter-spacing: -0.02em;
+}
+
+.account-icon-button {
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.account-icon-button:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+
+.account-welcome-orb {
+  background: radial-gradient(circle at 34% 28%, rgba(255, 255, 255, 0.35), transparent 9%), linear-gradient(145deg, #3b3b42, #171719 68%, #0d0d10);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.32), 0 0 0 7px rgba(255, 255, 255, 0.035);
+}
+
+.account-welcome {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(330px, 1.1fr);
+  align-items: center;
+  gap: 2.5rem;
+}
+
+.account-welcome-copy {
+  min-width: 0;
+}
+
+.account-welcome-actions {
+  min-width: 0;
+  padding: 1.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 1.25rem;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.account-welcome-benefits span {
+  justify-content: center;
+  min-width: 0;
+  min-height: 2.75rem;
+  white-space: nowrap;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+  color: #b4b4bb;
+}
+
+.account-welcome-benefits {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+
+.account-status-note {
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.account-welcome-benefits svg {
+  color: #ff8d94;
+}
+
+.account-primary-button {
+  background: linear-gradient(135deg, #ff5b63 0%, #e9434b 100%);
+  box-shadow: 0 12px 28px rgba(224, 62, 70, 0.24);
+}
+
+.account-primary-button:hover {
+  filter: brightness(1.08) saturate(1.06);
+  transform: translateY(-1px);
+}
+
+.account-method-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.account-method-card:hover {
+  border-color: rgba(255, 97, 106, 0.48);
+  background: rgba(255, 77, 85, 0.1);
+  transform: translateY(-1px);
+}
+
+.account-method-card > span:nth-child(2) {
+  min-width: 0;
+}
+
+.account-method-card > span:nth-child(2) > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-method-grid > p {
+  grid-column: 1 / -1;
+}
+
+.account-method-card > span:first-child,
+.account-provider-icon {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.account-provider-icon-email {
+  background: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+}
+
+.account-dialog .home-modal-input {
+  border-color: rgba(255, 255, 255, 0.13);
+  background: rgba(4, 7, 19, 0.42);
+}
+
+.account-dialog .home-modal-input:focus {
+  border-color: rgba(255, 111, 124, 0.75);
+  box-shadow: 0 0 0 3px rgba(255, 92, 103, 0.12);
+}
+
+.account-profile-card {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(120deg, rgba(255, 77, 85, 0.11), rgba(255, 255, 255, 0.045));
+}
+
+.account-manage-layout > .account-profile-card {
+  grid-column: 1 / -1;
+}
+
+.account-manage-layout {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.account-manage-sections {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.account-manage-sections > * {
+  min-width: 0;
+}
+
+.account-profile-icon {
+  background: #fff;
+  color: #171719;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.25);
+}
+
+.account-section-card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.account-row {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(3, 6, 18, 0.28);
+}
+
+.account-row:hover {
+  border-color: rgba(255, 126, 139, 0.36);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.account-section-card button:not([role="switch"]) {
+  border-color: rgba(181, 185, 255, 0.2);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.account-section-card button:not([role="switch"]):hover {
+  border-color: rgba(255, 126, 139, 0.42);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.account-logout-button {
+  border: 1px solid rgba(255, 111, 124, 0.24);
+  background: rgba(255, 77, 85, 0.08);
+  color: #ffafb5;
+}
+
+.account-logout-button:hover {
+  border-color: rgba(255, 111, 124, 0.55);
+  background: rgba(255, 77, 85, 0.16);
+  color: #fff;
+}
+
+@media (max-width: 480px) {
+  .account-modal-panel {
+    border-radius: 24px;
+    padding: 1rem;
+  }
+
+  .account-welcome h3 {
+    font-size: 1.65rem;
+  }
+
+  .account-welcome {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+
+  .account-manage-sections {
+    grid-template-columns: 1fr;
+  }
+
+  .account-method-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;

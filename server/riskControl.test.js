@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRiskControl, latestRiskIp } from './riskControl.js';
+import { createRiskControl, evaluateRisk, latestRiskIp } from './riskControl.js';
 
 test('latestRiskIp returns the most recently used IP when an account has multiple IPs', () => {
   assert.equal(latestRiskIp([
@@ -16,6 +16,17 @@ test('latestRiskIp ignores unknown and malformed entries', () => {
     { ip: '', lastSeenAt: 800 },
     { ip: '192.0.2.4', lastSeenAt: 700 },
   ]), '192.0.2.4');
+});
+
+test('new accounts reaching 500 music requests do not receive the removed burst score', () => {
+  const result = evaluateRisk({
+    accountAge: 60 * 60 * 1000,
+    musicRequests: 500,
+    requests: 500,
+    operations: { url: 500 },
+  });
+  assert.equal(result.factors.some((factor) => factor.id === 'newAccountBurst'), false);
+  assert.equal(result.reasons.includes('注册不足 24 小时且当日音乐请求达到 500'), false);
 });
 
 test('resetRisk resets one account and returns the retained latest IP', async () => {

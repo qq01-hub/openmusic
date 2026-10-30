@@ -399,6 +399,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   const contributionEnabled = sharedMembershipEnabled && contributionPlatforms.length > 0;
   const navigate = useNavigate();
   const nickname = useRoomStore((s) => s.nickname);
+  const accountId = useRoomStore((s) => s.nicknameAccountId);
   const setNickname = useRoomStore((s) => s.setNicknameDraft);
   const { leaveRoom } = useSocket();
 
@@ -681,13 +682,13 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
     if (!await requireHomeAccount()) return;
     setError('');
     setMatchError('');
-    const storedPassword = getStoredRoomPassword(room.id);
+    const storedPassword = getStoredRoomPassword(room.id, accountId);
     if (room.hasPassword && !storedPassword) {
       navigate(`/room/${room.id}`, { state: { hasPassword: true } });
       return;
     }
     goToRoom(room.id, storedPassword);
-  }, [navigate, requireHomeAccount]);
+  }, [accountId, navigate, requireHomeAccount]);
 
   const { recent: recentRooms, others: otherRooms } = useMemo(() => {
     const { recent, others } = partitionRoomsByRecent(rooms);

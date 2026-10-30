@@ -5,7 +5,7 @@ import { useRoomStore } from '../stores/roomStore';
 import { requireSessionBootstrap } from './sessionBootstrap';
 import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, migrateAccountDevice, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 
-export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat' | 'wechat_scan' | 'qq_scan';
+export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat';
 
 export interface AccountIdentity {
   provider: AccountIdentityProvider;
@@ -30,8 +30,6 @@ export interface AccountProviderStatus {
   linuxdo: boolean;
   github: boolean;
   wechat: boolean;
-  wechat_scan: boolean;
-  qq_scan: boolean;
 }
 
 type AccountResponse = { ok?: boolean; account?: AccountProfile; error?: string; code?: string };
@@ -40,7 +38,7 @@ function homepageNickname(account: AccountProfile): string {
   const saved = String(account.nickname || '').trim();
   if (saved) return saved;
   if (useRoomStore.getState().nickname.trim()) return '';
-  return String(account.identities.find((identity) => ['wechat_scan', 'qq_scan', 'wechat'].includes(identity.provider))?.username || '').trim();
+  return String(account.identities.find((identity) => identity.provider === 'wechat')?.username || '').trim();
 }
 
 export function acceptAccountProfile(account: AccountProfile): AccountProfile {
@@ -192,8 +190,6 @@ export async function fetchAccountProviders(): Promise<AccountProviderStatus> {
     linuxdo: Boolean(data.linuxdo),
     github: Boolean(data.github),
     wechat: Boolean(data.wechat),
-    wechat_scan: data.wechat_scan === true,
-    qq_scan: data.qq_scan === true,
   };
 }
 

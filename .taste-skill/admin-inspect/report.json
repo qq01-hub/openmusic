@@ -1,0 +1,1994 @@
+{
+ "url": "http://127.0.0.1:5187/__admin_design_preview.html",
+ "at": "2026-10-30T08:23:44.340Z",
+ "allow": [],
+ "viewports": [
+  {
+   "width": 1440,
+   "height": 900,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    0.97
+   ],
+   "motion": {
+    "elements": 0,
+    "css": 0,
+    "transitions": 0,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "page": {
+     "height": 900,
+     "screens": 1,
+     "words": 149,
+     "img": 0,
+     "video": 0,
+     "canvas": 2,
+     "svg": 17,
+     "sections": 3,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 0,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 24,
+     "vw": 1.7,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 77,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "全站运行概览",
+     "words": 1,
+     "lines": 1,
+     "size": 24,
+     "font": "-apple-system"
+    },
+    "headings": [
+     {
+      "text": "6",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 30,
+      "vw": 2.1,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.18,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "43",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 30,
+      "vw": 2.1,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "center",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "4",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 30,
+      "vw": 2.1,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "51",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 30,
+      "vw": 2.1,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 4,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "-apple-system",
+       "share": 0.85,
+       "mono": false
+      },
+      {
+       "family": "SFMono-Regular",
+       "share": 0.15,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      17,
+      18,
+      24,
+      30
+     ],
+     "sizeCount": 10,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 30,
+      "vw": 2.1,
+      "font": "-apple-system",
+      "text": "6"
+     },
+     "monoShare": 0.15,
+     "monoProseShare": 0,
+     "monoFamilies": [
+      "SFMono-Regular"
+     ],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.02,
+     "centerShare": 0.08,
+     "smallText": 9
+    },
+    "eyebrows": [
+     {
+      "text": "当前房间",
+      "above": "6",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "在线成员",
+      "above": "43",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "正在播放",
+      "above": "4",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "实时连接",
+      "above": "51",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     }
+    ],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#09090b",
+     "bodyBgHsl": {
+      "h": 240,
+      "s": 0.1,
+      "l": 0.04
+     },
+     "dark": true,
+     "sectionBgs": [
+      {
+       "color": "#f3f6f8",
+       "top": 0,
+       "hsl": {
+        "h": 204,
+        "s": 0.26,
+        "l": 0.96
+       }
+      },
+      {
+       "color": "#ffffff",
+       "top": 56,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#68727c",
+       "share": 0.41
+      },
+      {
+       "color": "#000000",
+       "share": 0.34
+      },
+      {
+       "color": "#58636d",
+       "share": 0.07
+      },
+      {
+       "color": "#20282e",
+       "share": 0.06
+      },
+      {
+       "color": "#525e68",
+       "share": 0.03
+      }
+     ],
+     "button": {
+      "bg": "#f9fbfc",
+      "hsl": {
+       "h": 200,
+       "s": 0.33,
+       "l": 0.98
+      },
+      "fg": "#525e68"
+     },
+     "lowContrast": [
+      {
+       "text": "退出登录",
+       "ratio": 3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#f3f6f8"
+      },
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      },
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      },
+      {
+       "text": "安全与反馈",
+       "ratio": 3.7,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#73808a",
+       "bg": "#f3f6f8"
+      },
+      {
+       "text": "运营与系统",
+       "ratio": 3.7,
+       "need": 4.5,
+       "size": 11,
+       "fg": "#73808a",
+       "bg": "#f3f6f8"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 6,
+     "inHero": 6,
+     "radius": 8,
+     "height": 32,
+     "withShadow": 2,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "退出登录",
+      "刷新",
+      "管理房间",
+      "待处理上报 1",
+      "待审常驻申请 1"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 2,
+     "shadowOverlay": 0,
+     "shadowSamples": [
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px",
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px"
+     ],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 3,
+     "hairlineSamples": [
+      "div.overview-metrics 1158px",
+      "div.overview-chart-footer 569px",
+      "div.overview-chart-footer 569px"
+     ],
+     "outlinedBoxes": 4,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 5,
+     "boxRadius": 8,
+     "squareMedia": 0,
+     "roundedMedia": 2,
+     "mediaRadius": 8,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [
+     {
+      "type": "canvas",
+      "ratio": 0.09
+     },
+     {
+      "type": "canvas",
+      "ratio": 0.09
+     }
+    ],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 56,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "pageH": 900,
+    "margins": {
+     "left": 24,
+     "right": 37
+    },
+    "sections": [
+     {
+      "sel": "div.overview-metrics",
+      "tag": "div",
+      "top": 160,
+      "height": 132,
+      "words": 13,
+      "media": 0,
+      "middle": 245,
+      "heading": {
+       "text": "43",
+       "size": 30,
+       "tag": "strong"
+      },
+      "left": 245,
+      "right": 215,
+      "textLeft": 245,
+      "textRight": 215,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div.overview-charts",
+      "tag": "div",
+      "top": 386,
+      "height": 341,
+      "words": 25,
+      "media": 2,
+      "middle": 18,
+      "heading": {
+       "text": "房间在线分布",
+       "size": 15,
+       "tag": "h2"
+      },
+      "left": 246,
+      "right": 38,
+      "textLeft": 266,
+      "textRight": 58,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#overview-upstreams.overview-panel.overview-upstreams",
+      "tag": "section",
+      "top": 748,
+      "height": 276,
+      "words": 15,
+      "media": 0,
+      "middle": 508,
+      "heading": {
+       "text": "Meting 音源上游",
+       "size": 15,
+       "tag": "h2"
+      },
+      "left": 266,
+      "right": 58,
+      "textLeft": 266,
+      "textRight": 58,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "全站运行概览",
+      "size": 24,
+      "top": 77,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 266,
+      "n": 2
+     },
+     {
+      "x": 245,
+      "n": 1
+     },
+     {
+      "x": 853,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 4,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0.07,
+    "voidBox": {
+     "x": 120,
+     "y": 120,
+     "w": 120,
+     "h": 720
+    }
+   },
+   "app": {
+    "viewport": {
+     "w": 1440,
+     "h": 900
+    },
+    "dark": true,
+    "ground": "#09090b",
+    "sidebar": null,
+    "topbar": null,
+    "canvas": {
+     "left": 24,
+     "right": 38
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 24,
+     "vw": 1.7,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 77,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 2,
+    "layout": {
+     "panels": 1,
+     "firstScreen": 1,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 5,
+     "radii": [
+      [
+       8,
+       3
+      ],
+      [
+       14,
+       1
+      ],
+      [
+       0,
+       1
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 1,
+     "leftAligned": 1,
+     "figures": 10,
+     "tabularShare": 1,
+     "kpiMax": 30
+    },
+    "rows": {
+     "count": 3,
+     "median": 49
+    },
+    "chartHues": 0,
+    "placeholders": [
+     "example.com"
+    ],
+    "type": {
+     "under13": 0.67,
+     "tiny": 3,
+     "tinySamples": [
+      "https://music-a.example. 10px",
+      "https://music-b.example. 10px",
+      "https://music-c.example. 10px"
+     ],
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      17,
+      24,
+      30
+     ]
+    },
+    "title": {
+     "text": "全站运行概览",
+     "size": 24,
+     "top": 77
+    },
+    "colourShare": 0.014
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 768,
+   "height": 1024,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    1
+   ],
+   "motion": {
+    "elements": 6,
+    "css": 2,
+    "transitions": 4,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "page": {
+     "height": 1024,
+     "screens": 1,
+     "words": 132,
+     "img": 0,
+     "video": 0,
+     "canvas": 2,
+     "svg": 17,
+     "sections": 3,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 1,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 24,
+     "vw": 3.1,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 77,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "全站运行概览",
+     "words": 1,
+     "lines": 1,
+     "size": 24,
+     "font": "-apple-system"
+    },
+    "headings": [
+     {
+      "text": "6",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 30,
+      "vw": 3.9,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.2,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "43",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 30,
+      "vw": 3.9,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "4",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 30,
+      "vw": 3.9,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "51",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 30,
+      "vw": 3.9,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.02,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.17,
+      "top": 207,
+      "tag": "strong",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 4,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": null,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "-apple-system",
+       "share": 0.83,
+       "mono": false
+      },
+      {
+       "family": "SFMono-Regular",
+       "share": 0.17,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      10,
+      12,
+      13,
+      14,
+      15,
+      18,
+      24,
+      30
+     ],
+     "sizeCount": 8,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 30,
+      "vw": 3.9,
+      "font": "-apple-system",
+      "text": "6"
+     },
+     "monoShare": 0.17,
+     "monoProseShare": 0,
+     "monoFamilies": [
+      "SFMono-Regular"
+     ],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.03,
+     "centerShare": 0.08,
+     "smallText": 9
+    },
+    "eyebrows": [
+     {
+      "text": "当前房间",
+      "above": "6",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "在线成员",
+      "above": "43",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "正在播放",
+      "above": "4",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     },
+     {
+      "text": "实时连接",
+      "above": "51",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 181
+     }
+    ],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#09090b",
+     "bodyBgHsl": {
+      "h": 240,
+      "s": 0.1,
+      "l": 0.04
+     },
+     "dark": true,
+     "sectionBgs": [
+      {
+       "color": "#f3f6f8",
+       "top": 0,
+       "hsl": {
+        "h": 204,
+        "s": 0.26,
+        "l": 0.96
+       }
+      },
+      {
+       "color": "#ffffff",
+       "top": 56,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#68727c",
+       "share": 0.46
+      },
+      {
+       "color": "#000000",
+       "share": 0.31
+      },
+      {
+       "color": "#58636d",
+       "share": 0.07
+      },
+      {
+       "color": "#20282e",
+       "share": 0.06
+      },
+      {
+       "color": "#525e68",
+       "share": 0.03
+      }
+     ],
+     "button": {
+      "bg": "#f9fbfc",
+      "hsl": {
+       "h": 200,
+       "s": 0.33,
+       "l": 0.98
+      },
+      "fg": "#525e68"
+     },
+     "lowContrast": [
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      },
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 5,
+     "inHero": 5,
+     "radius": 8,
+     "height": 54,
+     "withShadow": 2,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "刷新",
+      "管理房间",
+      "待处理上报 1",
+      "待审常驻申请 1",
+      "音源冷却中 1"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 2,
+     "shadowOverlay": 0,
+     "shadowSamples": [
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px",
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px"
+     ],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 3,
+     "hairlineSamples": [
+      "div.overview-metrics 706px",
+      "div.overview-chart-footer 704px",
+      "div.overview-chart-footer 704px"
+     ],
+     "outlinedBoxes": 4,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 5,
+     "boxRadius": 8,
+     "squareMedia": 0,
+     "roundedMedia": 2,
+     "mediaRadius": 8,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [
+     {
+      "type": "canvas",
+      "ratio": 0.18
+     },
+     {
+      "type": "canvas",
+      "ratio": 0.17
+     }
+    ],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 56,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "pageH": 1024,
+    "margins": {
+     "left": 25,
+     "right": 37
+    },
+    "sections": [
+     {
+      "sel": "div.overview-metrics",
+      "tag": "div",
+      "top": 160,
+      "height": 132,
+      "words": 13,
+      "media": 0,
+      "middle": 132,
+      "heading": {
+       "text": "43",
+       "size": 30,
+       "tag": "strong"
+      },
+      "left": 25,
+      "right": 102,
+      "textLeft": 25,
+      "textRight": 102,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div.overview-charts",
+      "tag": "div",
+      "top": 386,
+      "height": 698,
+      "words": 19,
+      "media": 2,
+      "middle": 0,
+      "heading": {
+       "text": "房间在线分布",
+       "size": 15,
+       "tag": "h2"
+      },
+      "left": 26,
+      "right": 38,
+      "textLeft": 46,
+      "textRight": 80,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#overview-upstreams.overview-panel.overview-upstreams",
+      "tag": "section",
+      "top": 1104,
+      "height": 354,
+      "words": 0,
+      "media": 0,
+      "middle": 8,
+      "heading": null,
+      "left": 518,
+      "right": 98,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "全站运行概览",
+      "size": 24,
+      "top": 77,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 46,
+      "n": 2
+     },
+     {
+      "x": 25,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 3,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0,
+    "voidBox": null
+   },
+   "app": {
+    "viewport": {
+     "w": 768,
+     "h": 1024
+    },
+    "dark": true,
+    "ground": "#09090b",
+    "sidebar": null,
+    "topbar": {
+     "h": 56
+    },
+    "canvas": {
+     "left": 25,
+     "right": 37
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 24,
+     "vw": 3.1,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 77,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 2,
+    "layout": {
+     "panels": 4,
+     "firstScreen": 3,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 4,
+     "radii": [
+      [
+       8,
+       3
+      ],
+      [
+       0,
+       1
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 1,
+     "leftAligned": 1,
+     "figures": 10,
+     "tabularShare": 1,
+     "kpiMax": 30
+    },
+    "rows": {
+     "count": 3,
+     "median": 75
+    },
+    "chartHues": 0,
+    "placeholders": [
+     "example.com"
+    ],
+    "type": {
+     "under13": 0.67,
+     "tiny": 3,
+     "tinySamples": [
+      "https://music-a.example. 10px",
+      "https://music-b.example. 10px",
+      "https://music-c.example. 10px"
+     ],
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      17,
+      24,
+      30
+     ]
+    },
+    "title": {
+     "text": "全站运行概览",
+     "size": 24,
+     "top": 77
+    },
+    "colourShare": 0.039
+   },
+   "consoleErrors": []
+  },
+  {
+   "width": 390,
+   "height": 844,
+   "load": "load",
+   "screens": 1,
+   "filled": [
+    1
+   ],
+   "motion": {
+    "elements": 4,
+    "css": 0,
+    "transitions": 4,
+    "scripted": 0,
+    "videos": 0,
+    "playingVideos": 0
+   },
+   "metrics": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "page": {
+     "height": 844,
+     "screens": 1,
+     "words": 130,
+     "img": 0,
+     "video": 0,
+     "canvas": 2,
+     "svg": 18,
+     "sections": 3,
+     "horizontalOverflow": 0,
+     "overflowCulprits": [],
+     "uiFragments": 0,
+     "uiAbuse": false,
+     "realPictures": 0,
+     "videoCount": 0,
+     "uiPictures": 0,
+     "pictureSamples": [],
+     "blendText": 0,
+     "sideScrollers": 1,
+     "brokenImages": [],
+     "emoji": [],
+     "videosNoPoster": 0
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 22,
+     "vw": 5.6,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 76,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "h1": {
+     "text": "全站运行概览",
+     "words": 1,
+     "lines": 1,
+     "size": 22,
+     "font": "-apple-system"
+    },
+    "headings": [
+     {
+      "text": "全站运行概览",
+      "words": 1,
+      "chars": 6,
+      "lines": 1,
+      "size": 22,
+      "vw": 5.6,
+      "font": "-apple-system",
+      "weight": 600,
+      "tracking": -0.023,
+      "leading": 1.57,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.71,
+      "top": 76,
+      "tag": "h1",
+      "kind": "heading"
+     },
+     {
+      "text": "6",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 28,
+      "vw": 7.2,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.021,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.38,
+      "top": 239,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "43",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 28,
+      "vw": 7.2,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.021,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.37,
+      "top": 239,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "4",
+      "words": 1,
+      "chars": 1,
+      "lines": 1,
+      "size": 28,
+      "vw": 7.2,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.021,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "left",
+      "widthRatio": 0.38,
+      "top": 360,
+      "tag": "strong",
+      "kind": "heading"
+     },
+     {
+      "text": "51",
+      "words": 1,
+      "chars": 2,
+      "lines": 1,
+      "size": 28,
+      "vw": 7.2,
+      "font": "-apple-system",
+      "weight": 550,
+      "tracking": -0.021,
+      "leading": 1.3,
+      "upper": false,
+      "italic": false,
+      "mono": false,
+      "align": "left",
+      "position": "right",
+      "widthRatio": 0.37,
+      "top": 360,
+      "tag": "strong",
+      "kind": "heading"
+     }
+    ],
+    "headingSummary": {
+     "count": 5,
+     "maxLines": 1,
+     "over2Lines": 0,
+     "statements": 0,
+     "centered": 0,
+     "medianWords": 1,
+     "mixedFontHeadings": 0
+    },
+    "type": {
+     "families": [
+      {
+       "family": "-apple-system",
+       "share": 0.82,
+       "mono": false
+      },
+      {
+       "family": "SFMono-Regular",
+       "share": 0.18,
+       "mono": false
+      }
+     ],
+     "familyCount": 2,
+     "sizes": [
+      10,
+      12,
+      13,
+      14,
+      15,
+      18,
+      22,
+      28
+     ],
+     "sizeCount": 8,
+     "notLoaded": [],
+     "body": null,
+     "measureChars": null,
+     "max": {
+      "size": 28,
+      "vw": 7.2,
+      "font": "-apple-system",
+      "text": "6"
+     },
+     "monoShare": 0.18,
+     "monoProseShare": 0,
+     "monoFamilies": [
+      "SFMono-Regular"
+     ],
+     "monoSamples": [],
+     "microLabels": 0,
+     "microLabelShare": 0,
+     "microSamples": [],
+     "upperShare": 0.03,
+     "centerShare": 0.08,
+     "smallText": 8
+    },
+    "eyebrows": [
+     {
+      "text": "当前房间",
+      "above": "6",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 213
+     },
+     {
+      "text": "在线成员",
+      "above": "43",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 213
+     },
+     {
+      "text": "正在播放",
+      "above": "4",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 333
+     },
+     {
+      "text": "实时连接",
+      "above": "51",
+      "upper": false,
+      "tracked": false,
+      "mono": false,
+      "pill": false,
+      "size": 13,
+      "top": 333
+     }
+    ],
+    "numbered": [],
+    "color": {
+     "bodyBg": "#09090b",
+     "bodyBgHsl": {
+      "h": 240,
+      "s": 0.1,
+      "l": 0.04
+     },
+     "dark": true,
+     "sectionBgs": [
+      {
+       "color": "#f3f6f8",
+       "top": 0,
+       "hsl": {
+        "h": 204,
+        "s": 0.26,
+        "l": 0.96
+       }
+      },
+      {
+       "color": "#ffffff",
+       "top": 56,
+       "hsl": {
+        "h": 0,
+        "s": 0,
+        "l": 1
+       }
+      }
+     ],
+     "textColors": [
+      {
+       "color": "#68727c",
+       "share": 0.45
+      },
+      {
+       "color": "#000000",
+       "share": 0.31
+      },
+      {
+       "color": "#58636d",
+       "share": 0.08
+      },
+      {
+       "color": "#20282e",
+       "share": 0.07
+      },
+      {
+       "color": "#525e68",
+       "share": 0.03
+      }
+     ],
+     "button": {
+      "bg": "#f9fbfc",
+      "hsl": {
+       "h": 200,
+       "s": 0.33,
+       "l": 0.98
+      },
+      "fg": "#525e68"
+     },
+     "lowContrast": [
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      },
+      {
+       "text": "临时禁用",
+       "ratio": 3.3,
+       "need": 4.5,
+       "size": 14,
+       "fg": "#ff4d4f",
+       "bg": "#ffffff"
+      }
+     ]
+    },
+    "buttons": {
+     "count": 5,
+     "inHero": 5,
+     "radius": 8,
+     "height": 54,
+     "withShadow": 2,
+     "withGradient": 0,
+     "mono": 0,
+     "upper": 0,
+     "heroLabels": [
+      "刷新",
+      "管理房间",
+      "待处理上报 1",
+      "待审常驻申请 1",
+      "音源冷却中 1"
+     ]
+    },
+    "surfaces": {
+     "shadowStatic": 2,
+     "shadowOverlay": 0,
+     "shadowSamples": [
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px",
+      "button.ant-btn.css-dev-only-do-not-override-ry7cab → rgba(0, 0, 0, 0.02) 0px 2px 0px 0px"
+     ],
+     "gradients": 0,
+     "scrims": 0,
+     "gradientSamples": [],
+     "gradientText": 0,
+     "hairlines": 3,
+     "hairlineSamples": [
+      "div.overview-metrics 358px",
+      "div.overview-chart-footer 356px",
+      "div.overview-chart-footer 356px"
+     ],
+     "outlinedBoxes": 3,
+     "dashed": 0,
+     "blurred": 0,
+     "roundedBoxes": 4,
+     "boxRadius": 8,
+     "squareMedia": 0,
+     "roundedMedia": 2,
+     "mediaRadius": 8,
+     "textShadow": 0,
+     "cardRows": []
+    },
+    "heroMedia": [
+     {
+      "type": "canvas",
+      "ratio": 0.11
+     }
+    ],
+    "nav": {
+     "links": 0,
+     "fixed": false,
+     "height": 56,
+     "floatingPill": false,
+     "blur": false
+    },
+    "fontsLoaded": []
+   },
+   "layout": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "pageH": 844,
+    "margins": {
+     "left": 16,
+     "right": 16
+    },
+    "sections": [
+     {
+      "sel": "div.overview-metrics",
+      "tag": "div",
+      "top": 196,
+      "height": 242,
+      "words": 13,
+      "media": 0,
+      "middle": 94,
+      "heading": {
+       "text": "43",
+       "size": 28,
+       "tag": "strong"
+      },
+      "left": 32,
+      "right": 70,
+      "textLeft": 32,
+      "textRight": 70,
+      "fullBleed": false,
+      "footer": false,
+      "hero": true,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div.overview-worklist",
+      "tag": "div",
+      "top": 454,
+      "height": 179,
+      "words": 3,
+      "media": 0,
+      "middle": 0,
+      "heading": null,
+      "left": 16,
+      "right": 16,
+      "textLeft": 33,
+      "textRight": 279,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "div.overview-charts",
+      "tag": "div",
+      "top": 649,
+      "height": 694,
+      "words": 6,
+      "media": 2,
+      "middle": 0,
+      "heading": {
+       "text": "房间在线分布",
+       "size": 15,
+       "tag": "h2"
+      },
+      "left": 17,
+      "right": 17,
+      "textLeft": 33,
+      "textRight": 167,
+      "fullBleed": false,
+      "footer": false,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     },
+     {
+      "sel": "section#overview-upstreams.overview-panel.overview-upstreams",
+      "tag": "section",
+      "top": 1359,
+      "height": 388,
+      "words": 0,
+      "media": 0,
+      "middle": 8,
+      "heading": null,
+      "left": 161,
+      "right": 77,
+      "textLeft": null,
+      "textRight": null,
+      "fullBleed": false,
+      "footer": true,
+      "hero": false,
+      "continues": false,
+      "pinned": false
+     }
+    ],
+    "gaps": [],
+    "h1s": [
+     {
+      "text": "全站运行概览",
+      "size": 22,
+      "top": 76,
+      "firstScreen": true
+     }
+    ],
+    "edgeText": [],
+    "edges": [
+     {
+      "x": 16,
+      "n": 1
+     },
+     {
+      "x": 33,
+      "n": 1
+     }
+    ],
+    "leftBlocks": 2,
+    "bodySize": 16,
+    "stage": false,
+    "explains": false,
+    "slivers": [],
+    "voidShare": 0,
+    "voidBox": null
+   },
+   "app": {
+    "viewport": {
+     "w": 390,
+     "h": 844
+    },
+    "dark": true,
+    "ground": "#09090b",
+    "sidebar": null,
+    "topbar": {
+     "h": 56
+    },
+    "canvas": {
+     "left": 16,
+     "right": -135
+    },
+    "hero": {
+     "text": "全站运行概览",
+     "words": 1,
+     "chars": 6,
+     "lines": 1,
+     "size": 22,
+     "vw": 5.6,
+     "font": "-apple-system",
+     "weight": 600,
+     "tracking": -0.02,
+     "leading": 1.57,
+     "top": 76,
+     "tag": "h1",
+     "kind": "heading",
+     "align": "left",
+     "position": "left"
+    },
+    "charts": 2,
+    "layout": {
+     "panels": 4,
+     "firstScreen": 2,
+     "ragged": [],
+     "voids": []
+    },
+    "tiles": 0,
+    "panels": {
+     "count": 6,
+     "radii": [
+      [
+       0,
+       3
+      ],
+      [
+       8,
+       3
+      ]
+     ],
+     "heavyBorders": 0,
+     "borderSamples": [],
+     "heavyShadows": 0,
+     "softShadows": 0,
+     "shadowSamples": [],
+     "glass": 0
+    },
+    "chips": {
+     "count": 0,
+     "hues": 0,
+     "samples": []
+    },
+    "numbers": {
+     "cells": 1,
+     "leftAligned": 1,
+     "figures": 10,
+     "tabularShare": 1,
+     "kpiMax": 28
+    },
+    "rows": {
+     "count": 3,
+     "median": 75
+    },
+    "chartHues": 0,
+    "placeholders": [
+     "example.com"
+    ],
+    "type": {
+     "under13": 0.66,
+     "tiny": 3,
+     "tinySamples": [
+      "https://music-a.example. 10px",
+      "https://music-b.example. 10px",
+      "https://music-c.example. 10px"
+     ],
+     "sizes": [
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      17,
+      22,
+      28
+     ]
+    },
+    "title": {
+     "text": "全站运行概览",
+     "size": 22,
+     "top": 76
+    },
+    "colourShare": 0.017
+   },
+   "consoleErrors": []
+  }
+ ],
+ "findings": [
+  {
+   "level": "FAIL",
+   "id": "button-fx",
+   "width": 1440,
+   "message": "Buttons with shadow/glow.",
+   "fix": "Flat fill, one colour.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "contrast",
+   "width": 1440,
+   "message": "Low-contrast text: \"退出登录\" 3:1 needs 4.5:1; \"临时禁用\" 3.3:1 needs 4.5:1; \"临时禁用\" 3.3:1 needs 4.5:1; \"安全与反馈\" 3.7:1 needs 4.5:1",
+   "fix": "Darken or lighten the text colour.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "WARN",
+   "id": "dev-server",
+   "width": 1440,
+   "message": "This page is served by a development server (Vite, webpack or Next in dev mode).",
+   "fix": "Run the last gate on the production build too (vite build && vite preview, next build && next start, or the built index.html): minifiers and bundlers change the CSS a visitor receives.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "placeholder-data",
+   "width": 1440,
+   "message": "Placeholder data on screen: example.com.",
+   "fix": "Use believable data for this product: real-looking names, amounts that add up, dates in order, units on every figure.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  },
+  {
+   "level": "FAIL",
+   "id": "tiny-text",
+   "width": 1440,
+   "message": "3 text blocks under 11px: https://music-a.example. 10px, https://music-b.example. 10px, https://music-c.example. 10px.",
+   "fix": "Nothing below 11px; secondary text 12px, data 13–14px.",
+   "alsoAt": [
+    768,
+    390
+   ]
+  }
+ ],
+ "images": [
+  {
+   "viewport": "desktop",
+   "width": 1440,
+   "fold": "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\desktop-fold.jpg",
+   "pages": [
+    "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\desktop-page-01.jpg"
+   ],
+   "film": []
+  },
+  {
+   "viewport": "tablet",
+   "width": 768,
+   "fold": "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\tablet-fold.jpg",
+   "pages": [
+    "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\tablet-page-01.jpg"
+   ],
+   "film": []
+  },
+  {
+   "viewport": "mobile",
+   "width": 390,
+   "fold": "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\mobile-fold.jpg",
+   "pages": [
+    "E:\\python\\openmusic\\.taste-skill\\admin-inspect\\mobile-page-01.jpg"
+   ],
+   "film": []
+  }
+ ]
+}

@@ -1,0 +1,53 @@
+.admin-overview { display: grid; gap: 16px; color: #20282e; }
+.overview-title-row { display: flex; justify-content: space-between; align-items: center; gap: 20px; }
+.overview-title-row h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -.5px; }
+.overview-title-row p, .overview-panel-heading p { margin: 6px 0 0; color: #68727c; font-size: 12px; line-height: 1.6; }
+.overview-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
+.overview-metric { display: grid; gap: 6px; padding: 18px 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #fff; box-shadow: 0 2px 6px #17203303; }
+.overview-metric-label { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: #64748b; }
+.overview-metric-label .anticon { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 9px; font-size: 16px; background: #eff6ff; color: #3b82f6; }
+.overview-metric strong { font-size: 30px; font-weight: 550; line-height: 1.3; font-variant-numeric: tabular-nums; letter-spacing: -.6px; }
+.overview-metric small { color: #68727c; font-size: 12px; }
+.overview-worklist { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.overview-worklist > button, .overview-worklist > a { appearance: none; display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid #e5e7eb; border-radius: 12px; background: #fff; color: #475569; font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; }
+.overview-worklist > :hover { background: #f4f8ff; border-color: #bfdbfe; color: #2563eb; }
+.overview-worklist > :focus-visible { outline: 2px solid #2463d4; outline-offset: 3px; }
+.overview-worklist strong { margin-left: auto; color: #20282e; font-size: 18px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.overview-worklist .needs-attention { color: #ad5e0c; }
+.overview-charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.overview-panel { min-width: 0; border: 1px solid #e5e7eb; border-radius: 14px; overflow: hidden; background: #fff; box-shadow: 0 2px 6px #17203303; }
+.overview-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 18px 20px 0; }
+.overview-panel-heading h2 { margin: 0; font-size: 16px; font-weight: 600; }
+.overview-unit, .overview-upstream-summary { font-size: 12px; color: #68727c; line-height: 24px; }
+.overview-chart-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 20px 0; color: #58636d; font-size: 12px; }
+.overview-chart-legend span { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.overview-chart-legend i { width: 8px; height: 8px; background: #83b2f5; border-radius: 3px; }
+.overview-chart-legend .legend-error { background: #efa8b6; }
+.overview-chart-legend .legend-soft { background: #becfe8; }
+.admin-chart { width: 100%; height: 174px; }
+.overview-charts > :first-child .admin-chart, .overview-charts > :first-child .overview-chart-empty { margin-top: 26px; }
+.overview-charts--secondary > :first-child .admin-chart, .overview-charts--secondary > :first-child .overview-chart-empty { margin-top: 0; }
+.overview-chart-empty { height: 174px; padding: 24px; display: flex; align-items: center; justify-content: center; color: #68727c; font-size: 13px; text-align: center; position: relative; }
+.overview-chart-empty::after { content: ''; position: absolute; bottom: 28px; left: 20px; right: 20px; border-bottom: 1px solid #edf0f2; }
+.overview-chart-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; min-height: 48px; box-sizing: border-box; gap: 6px 12px; padding: 12px 20px; border-top: 1px solid #edf0f2; color: #68727c; font-size: 12px; }
+.overview-chart-footer b { color: #303941; font-weight: 500; font-variant-numeric: tabular-nums; }
+.overview-upstreams { scroll-margin-top: 20px; }
+.overview-upstreams .overview-panel-heading { padding-bottom: 16px; }
+.overview-upstreams .ant-typography code { font-size: 12px; }
+.overview-runtime { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; color: #68727c; }
+@media (max-width: 1100px) {
+  .overview-charts { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .admin-overview { gap: 16px; }
+  .overview-title-row { align-items: flex-start; flex-direction: column; gap: 12px; }
+  .overview-title-row h1 { font-size: 22px; }
+  .overview-metrics { grid-template-columns: 1fr 1fr; gap: 12px; }
+  .overview-metric { padding: 16px; }
+  .overview-metric strong { font-size: 28px; }
+  .overview-worklist { grid-template-columns: 1fr; gap: 8px; }
+  .overview-worklist > button, .overview-worklist > a { min-height: 44px; }
+  .overview-panel-heading { padding: 16px 16px 0; flex-wrap: wrap; }
+  .overview-chart-footer { padding: 12px 16px; }
+  .overview-runtime { gap: 8px 16px; }
+}

@@ -1,4 +1,4 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, type ReactNode } from 'react';
 import { Plus, Minus, Loader2, Play, Pause, Share2, UserRound, Zap } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
@@ -26,6 +26,8 @@ interface Props {
   /** 分享到当前房间聊天（音乐卡片） */
   onShare?: (song: SearchResult) => void;
   onArtistClick?: (artist: string) => void;
+  extraActions?: ReactNode;
+  onFavoriteChange?: (favorited: boolean) => void;
 }
 
 function SongResultRow({
@@ -42,6 +44,8 @@ function SongResultRow({
   onAddNext,
   onShare,
   onArtistClick,
+  extraActions,
+  onFavoriteChange,
 }: Props) {
   const key = songKey(song);
   const artistLine = `${song.artist}${song.album ? ` · ${song.album}` : ''}`;
@@ -98,7 +102,9 @@ function SongResultRow({
         showOnHover={!alwaysShowActions}
         className="h-7 w-7 text-netease-muted hover:text-rose-300"
         iconClassName="h-3.5 w-3.5"
+        onToggleResult={onFavoriteChange}
       />
+      {extraActions}
       {onArtistClick && (
         <Tooltip content={`查找 ${song.artist} 的其他歌曲`}>
           <button
@@ -191,6 +197,8 @@ export default memo(SongResultRow, (prev, next) => (
   && prev.onRemove === next.onRemove
   && prev.cancelDisabledReason === next.cancelDisabledReason
   && prev.onArtistClick === next.onArtistClick
+  && prev.extraActions === next.extraActions
+  && prev.onFavoriteChange === next.onFavoriteChange
   && songKey(prev.song) === songKey(next.song)
   && prev.song.name === next.song.name
   && prev.song.artist === next.song.artist

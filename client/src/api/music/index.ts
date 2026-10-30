@@ -7,6 +7,7 @@ import { hasValidLrc } from './lrcFallback';
 import { fetchWithTimeout } from '../http';
 import { toProxiedMediaUrl, toLocalMetingPicUrl, shouldProxyPlaybackUrl } from '../../lib/mediaProxyUrl';
 import { shouldProxySongPlaybackUrl } from '../../lib/roomVisualPreset';
+import { isIOS } from '../../lib/audioUnlock';
 import { getUserPlaybackQuality } from './quality';
 import { resizeCoverUrl, type CoverSize } from '../../lib/coverUrl';
 import { requireSessionBootstrap } from '../../lib/sessionBootstrap';
@@ -144,7 +145,10 @@ export async function getSongUrlInfo(
     };
   }
   // 调用方可选择视觉代理，iOS 增益输出和 HTTPS 混合内容仍按平台规则处理
-  const wantsProxy = shouldProxyPlaybackUrl(playbackUrl, options?.proxy ?? shouldProxySongPlaybackUrl());
+  const wantsProxy = shouldProxyPlaybackUrl(
+    playbackUrl,
+    options?.proxy ?? (shouldProxySongPlaybackUrl() || (isIOS() && source === 'kugou')),
+  );
   let resolved = wantsProxy ? toProxiedMediaUrl(playbackUrl) : playbackUrl;
   if (resolved.startsWith('/api/')) {
     resolved = await signApiUrl(resolved);

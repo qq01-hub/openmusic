@@ -1,0 +1,177 @@
+{
+ "version": 1,
+ "kind": "app",
+ "at": "2026-10-30T08:14:22.292Z",
+ "seed": 1325707384,
+ "input": {
+  "kind": "devtools",
+  "brief": "OpenMusic 实时点歌后台，需要带文字的分组导航和浅色 Ant Design 管理工作台",
+  "theme": "light",
+  "screens": [
+   "overview",
+   "settings"
+  ],
+  "keep": [
+   "palette",
+   "type"
+  ],
+  "style": "framed-sheet"
+ },
+ "style": {
+  "id": "framed-sheet",
+  "name": "Framed sheet",
+  "theme": "light",
+  "basis": "6 screens: a developer platform overview, an analytics overview, an events analytics tab, a list detail, a reports dashboard, a flow builder",
+  "suits": [
+   "analytics",
+   "devtools",
+   "builder",
+   "smb-admin",
+   "support",
+   "commerce",
+   "report"
+  ],
+  "idea": "The app chrome is one tinted L-shaped frame; the work sits on a white sheet with a hairline edge and soft corners, so depth comes from a single tone step and no shadow.",
+  "colourBudget": "under 3%; the brand shrinks to the logo and a 2px tab underline, the data carries the chroma",
+  "tokens": {
+   "ground": "#f9fbfc",
+   "surface": "#ffffff",
+   "raised": "#f4f6f8",
+   "active": "#ebedee",
+   "border": "#e8eaec",
+   "rule": "#f0f1f2",
+   "control": "#cdced1",
+   "text": "#131416",
+   "muted": "#5d5f60",
+   "accent": "#1b6c80",
+   "positive": "#1e7b4f",
+   "negative": "#c4242a",
+   "warning": "#92400e",
+   "chart": [
+    "#1b6c80",
+    "#2f70bb",
+    "#a86f0c"
+   ],
+   "pills": {
+    "positive": [
+     "#dcfae5",
+     "#04250e"
+    ],
+    "negative": [
+     "#ffedea",
+     "#831c1e"
+    ],
+    "warning": [
+     "#fffbeb",
+     "#92400e"
+    ],
+    "neutral": [
+     "#ebedee",
+     "#353736"
+    ]
+   },
+   "radius": {
+    "card": 8,
+    "control": 6,
+    "sheet": 16
+   },
+   "sheetInset": 8,
+   "font": {
+    "family": "IBM Plex Sans",
+    "second": "IBM Plex Mono, for IDs and keys only",
+    "fallback": "Inter, system-ui, sans-serif",
+    "sizes": {
+     "title": 22,
+     "section": 16,
+     "kpi": 28,
+     "body": 14,
+     "small": 12
+    },
+    "weights": [
+     400,
+     500,
+     600
+    ],
+    "note": "KPI values at 400; the semibold goes on the label and the active tab."
+   },
+   "density": "medium",
+   "rowHeight": 48,
+   "sidebarWidth": 228,
+   "gap": 24,
+   "pad": 24,
+   "controlHeight": 32
+  },
+  "shell": "framed-sheet",
+  "shellAlternatives": [],
+  "signature": "One tinted frame holds the sidebar and the 48px top bar with no rule between them; the page is a white sheet inset 8px from the window's right and bottom edges, with a 1px edge, 16px corners and no shadow. The active tab is a 2px underline in ink or the accent; everything else in the chrome is grey.",
+  "identity": [
+   "The frame tinted from the product's colour in place of #f9fbfc: one low-chroma step of its hue (a green-grey for a climate or farm tool, a blue-grey for an observability tool, a stone for a print shop). The sheet stays white.",
+   "The brand's own hue from the brief as --chart-1 in place of the dealt teal, on the main series and the one selected state, at 3:1 or more on white, never violet or indigo.",
+   "IBM Plex Mono for IDs, keys and the figures in tables (one job): its figures have their own drawing, and a developer reads them as the product's."
+  ],
+  "avoid": [
+   "a border between the sidebar and the top bar",
+   "a shadow under the sheet",
+   "cards whose border is heavier than the sheet's (#cdcfcf on cards read as heavy in the study)",
+   "a fourth nesting level: frame, sheet and card are enough",
+   "different gutters for the KPI row and the chart row (20 against 24 was flagged)"
+  ],
+  "notes": "The study's second data hue in this style was an orange (#e88e46) that falls inside the house terracotta range; the third chart colour here is an amber moved out of that range and darkened to 3:1 on white."
+ },
+ "shell": {
+  "id": "framed-sheet",
+  "name": "Tinted frame, white sheet",
+  "basis": "8 of 23 screens, in three variants",
+  "suits": [
+   "analytics",
+   "devtools",
+   "builder",
+   "smb-admin",
+   "support"
+  ],
+  "numbers": {
+   "chrome": "#f6f6f6-#f9fbfc (a warm #f7f6f2 once)",
+   "sheetInset": "8px from the window's right and bottom edges (12 and 16 once each)",
+   "sheetRadius": "10-16, median 16",
+   "sheetEdge": "1px #eaeaea-#ededed, no shadow",
+   "sidebarWidth": "220-263 (228 on two screens)",
+   "topBar": "48px on the chrome ground with no rule; search 548x32 centred on the window with a shortcut hint",
+   "contentPadding": 24,
+   "floatingVariant": "both panels inset 12px with a 12px gutter, radius 10"
+  },
+  "blueprint": "Sidebar and top bar share one tinted ground with no rule between them, forming an L; the page lives on a white sheet. Variant one: the sheet butts against the sidebar and the top bar and is inset 8px from the right and bottom edges, 16px radius, 1px edge. Variant two: a flush L-frame with no inset, the frame marked by one rule. Variant three: sidebar and content are two floating panels inset 12px from every edge with a 12px gutter. The top bar, when present, is 48px and holds a centred search, the account button and a help or AI icon. Inside the sheet the content has 24px padding and starts with the breadcrumb or title row.",
+  "phone": "The frame disappears: the sheet becomes the screen, with a 48px top bar (menu button, title, one action) on the chrome tint. The search moves into the menu sheet or behind an icon."
+ },
+ "screens": [
+  {
+   "name": "overview",
+   "pattern": {
+    "id": "deploy-health-lead",
+    "name": "Current deploy and health lead",
+    "screen": "overview",
+    "kinds": [
+     "devtools"
+    ],
+    "basis": "house pattern from testing: built after a flat 24-hour chart filled a whole first screen and lost to a richer layout",
+    "blueprint": "Title row: the project's name as the h1 with a status pill (Healthy, Degraded) and a breadcrumb of team and product above it; repository, branch and a freshness stamp in a 14px grey line under it; the one primary action (Redeploy, or View logs when the latest deploy failed) on the right. Then a full-width card for what is live now: the production deployment's commit message at 16/600, its branch, short SHA in mono, author and age on the left, and three or four facts in divided cells on the right (domain, live since, build time, regions). Then the health strip: three or four KPIs in one divided container, each with its change in words and in the polarity colour when it moved the wrong way. Then a two-column row: the 24-hour chart at two-thirds (deploy markers as 1px ticks with their short SHA, the budget or SLO as a dashed reference line) and, at one-third, the block that explains the worst number (the spike and what reverted it, the status codes behind the error rate). Then the deployments table capped at 6 rows, a failed row carrying its failing step and a View logs action, a building row its elapsed time.",
+    "phone": "The live deployment card becomes a stack of label-value rows; the KPIs a 2x2 grid; the chart full width with its markers; the explanation under it; deployments as two-line rows with region and duration on line 2."
+   }
+  },
+  {
+   "name": "settings",
+   "pattern": {
+    "id": "settings-with-usage",
+    "name": "Settings with usage on top",
+    "screen": "settings",
+    "kinds": [
+     "devtools",
+     "smb-admin",
+     "support"
+    ],
+    "basis": "one settings page",
+    "blueprint": "Use this only when usage is the question of the view (a plan, billing or quota view), and show only numbers no section below repeats, at a size below the h1. When a settings screen also reports usage, put 3-4 usage numbers in one row on top (a 14px grey label, a 30px regular value, a 12px change pinned to the card bottom with its window in words, a grey dash where there is no comparison) and link out to the analytics screen ('View more') instead of drawing a chart. Below, the two-column settings rows. One dark primary per screen. Keep upsell to one surface: the studied settings page carried three nags (a top banner, a setup button and a gated strip) and was flagged for it.",
+    "phone": "The usage row becomes a 2-column grid of label-value pairs; settings rows stack."
+   }
+  }
+ ]
+}

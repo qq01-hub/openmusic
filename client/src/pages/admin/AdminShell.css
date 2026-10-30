@@ -1,0 +1,50 @@
+.admin-shell.ant-layout { --admin-blue: #2563eb; --admin-text: #172033; --admin-muted: #64748b; --admin-border: #e5e7eb; background: #f5f6f8; }
+.admin-shell .admin-desktop-sider.ant-layout-sider { background: #fff !important; border-right: 1px solid var(--admin-border) !important; }
+.admin-brand { display: flex; align-items: center; gap: 12px; padding: 26px 24px; }
+.admin-brand > .anticon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; font-size: 23px; color: var(--admin-blue); background: #eff6ff; }
+.admin-brand strong { display: block; font-size: 18px; font-weight: 700; letter-spacing: -.5px; color: var(--admin-text); }
+.admin-brand small { display: block; font-size: 12px; margin-top: 3px; color: var(--admin-muted); }
+.admin-shell .ant-menu-light { background: transparent; }
+.admin-shell .ant-menu-item { margin-inline: 14px; width: calc(100% - 28px); height: 44px; line-height: 44px; font-size: 14px; border-radius: 10px; }
+.admin-shell .ant-menu-item-group-title { padding: 22px 26px 8px; color: var(--admin-muted); font-size: 12px; }
+.admin-shell .ant-menu-item-group-list { margin: 0; }
+.admin-shell .ant-menu-item-selected { font-weight: 600; background: linear-gradient(100deg, #3b82f6, #2563eb) !important; box-shadow: 0 4px 12px #2563eb26; }
+.admin-navigation.ant-menu .ant-menu-item { transition-property: border-color, padding; }
+.admin-navigation.ant-menu .ant-menu-item .ant-menu-title-content,
+.admin-navigation.ant-menu .ant-menu-item .anticon { transition-property: opacity, margin, font-size; }
+.admin-shell .admin-page-header.ant-layout-header { height: 64px !important; line-height: 64px !important; background: #fff !important; border-bottom: 1px solid var(--admin-border) !important; }
+.admin-shell .admin-page-header .ant-typography { color: var(--admin-text); font-size: 16px; font-weight: 600; }
+.admin-shell .admin-content { background: #f5f6f8 !important; border: 0; border-radius: 0; margin: 0; }
+.admin-shell .admin-content > div { min-width: 0; }
+.admin-shell .admin-content .ant-card { border-color: var(--admin-border); }
+.admin-shell .admin-content .ant-card-head { padding: 0 20px; }
+.admin-shell .ant-table-thead > tr > th { color: #64748b; font-weight: 500; font-size: 13px; background: #fafbfc; }
+.admin-shell .ant-table-cell { font-variant-numeric: tabular-nums; }
+.admin-shell .ant-btn-primary:not(.ant-btn-dangerous) { box-shadow: none; }
+.admin-shell .admin-settings-card { border: 0; }
+.admin-shell .admin-content--settings { padding: 0 !important; scroll-padding-top: 64px; background: #fff !important; }
+.admin-shell .admin-settings-card .ant-card-body { padding: 0 24px !important; }
+.admin-shell .runtime-config-tabs > .ant-tabs-nav {
+  margin: 0 -24px;
+  padding: 0 24px;
+  top: 0;
+  z-index: 20;
+  background: #fff;
+  backdrop-filter: none;
+}
+.admin-shell .runtime-config-savebar { margin-inline: -24px; padding-inline: 24px; }
+.admin-freshness { color: var(--admin-muted); font-size: 12px; white-space: nowrap; }
+.admin-refresh-error { margin-bottom: 16px; }
+@media (max-width: 1100px) {
+  .admin-shell .admin-desktop-sider { display: none !important; }
+  .admin-shell .admin-mobile-menu-btn { display: inline-flex !important; }
+}
+@media (max-width: 600px) {
+  .admin-freshness { display: none; }
+  .admin-shell .admin-page-header { padding-inline: 12px !important; }
+  .admin-shell .admin-content { padding: 20px 16px 24px !important; border: 0; border-radius: 0; margin: 0; }
+  .admin-shell .admin-content--settings { padding: 0 !important; }
+  .admin-shell .admin-settings-card .ant-card-body { padding-inline: 16px !important; }
+  .admin-shell .runtime-config-tabs > .ant-tabs-nav { margin-inline: -16px; padding-inline: 16px; }
+  .admin-shell .runtime-config-savebar { margin-inline: -16px; padding-inline: 16px; }
+}

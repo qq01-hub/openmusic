@@ -13,8 +13,6 @@ const PUBLIC_POST = new Set([
   '/api/auth/logout', '/api/auth/human-challenge',
   '/api/auth/refresh', '/api/auth/device-login', '/api/auth/device-migrate',
   '/api/auth/wechat/start', '/api/auth/wechat/poll', '/api/auth/wechat/account',
-  '/api/auth/social/wechat_scan/start', '/api/auth/social/wechat_scan/poll', '/api/auth/social/wechat_scan/complete',
-  '/api/auth/social/qq_scan/start', '/api/auth/social/qq_scan/poll', '/api/auth/social/qq_scan/complete',
 ]);
 
 export function isAccountPublicPath(path, method) {

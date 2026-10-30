@@ -1,6 +1,5 @@
 import { listAccountSessions, revokeAccountSessionById } from './accountAuth.js';
 import { trimExpiredListTail } from './redisListRetention.js';
-import { createSocialLogin, mountSocialLoginRoutes, SOCIAL_PROVIDERS, SocialLoginError, socialProviderEnabled } from './socialLogin.js';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import {
   listRoomsForAdmin,
@@ -74,8 +73,6 @@ import {
   isGithubIdBoundToAdmin,
   bindAdminGithub,
   unbindAdminGithub,
-  getAdminSocialBinding,
-  setAdminSocialBinding,
 } from './adminCredentials.js';
 import {
   isLinuxdoConfigured,
@@ -663,65 +660,6 @@ export function mountAdminApi(app, {
     clearAdminSessionCookie(res);
     res.json({ ok: true });
   });
-
-  // 所有扫码写操作复用后台 Origin 检查，绑定要求同一个有效管理员会话
-  app.use('/api/admin/social', requireAdminOrigin);
-  const socialService = createSocialLogin({ getStore: getRedisClient, getConfig: getRuntimeConfig });
-  mountSocialLoginRoutes(app, {
-    basePath: '/api/admin/social',
-    service: socialService,
-    metric: (action, outcome) => {
-      if (outcome !== 'success') audit('social_fail', { via: action, code: outcome });
-    },
-    contextFor: async (req, _res, action) => {
-      const ip = getClientIp?.(req) || req.ip || '';
-      const session = verifySession(req);
-      if (action === 'bind' && (!isAdminEnabled() || !session)) throw new SocialLoginError('ADMIN_AUTH_REQUIRED', '未登录或登录已过期');
-      if (action === 'login') {
-        const block = getLoginBlock(ip);
-        if (block.blocked) throw new SocialLoginError('SOCIAL_LOGIN_RATE_LIMITED', '登录尝试过于频繁，请稍后再试', 429);
-      }
-      return { audience: 'admin', principal: getSessionIdFromRequest(req), ip };
-    },
-    complete: async (req, res, context, identity) => {
-      if (context.action === 'bind') {
-        if (!isAdminEnabled() || !verifySession(req)) throw new SocialLoginError('ADMIN_AUTH_REQUIRED', '未登录或登录已过期');
-        const saved = await setAdminSocialBinding(identity.provider, identity);
-        if (!saved.success) throw new SocialLoginError('SOCIAL_BIND_FAILED', saved.error, 503);
-        audit('social_bind', { via: identity.provider }, context.ip);
-        return { ok: true };
-      }
-      noteLoginAttempt(context.ip);
-      const binding = await getAdminSocialBinding(identity.provider);
-      if (!isAdminEnabled() || !binding || binding.id !== identity.subject) {
-        noteLoginFailure(context.ip);
-        audit('login_fail', { via: identity.provider }, context.ip);
-        throw new SocialLoginError('SOCIAL_ADMIN_DENIED', '无法使用此身份登录，请使用管理员账号密码');
-      }
-      noteLoginSuccess(context.ip);
-      const { sid } = createSession();
-      setAdminSessionCookie(res, sid);
-      audit('login_ok', { via: identity.provider }, context.ip);
-      return { ok: true };
-    },
-  });
-  app.get('/api/admin/social/status', async (req, res) => {
-    const authenticated = isAdminEnabled() && Boolean(verifySession(req));
-    const result = {};
-    for (const provider of SOCIAL_PROVIDERS) {
-      const binding = authenticated ? await getAdminSocialBinding(provider) : null;
-      result[provider] = { enabled: socialProviderEnabled(provider, getRuntimeConfig()), bound: binding ? { username: binding.username, boundAt: binding.boundAt } : null };
-    }
-    res.json(result);
-  });
-  for (const provider of SOCIAL_PROVIDERS) {
-    app.post(`/api/admin/social/${provider}/unbind`, requireAdmin, async (req, res) => {
-      const saved = await setAdminSocialBinding(provider, null);
-      if (!saved.success) return res.status(503).json({ error: saved.error });
-      audit('social_unbind', { via: provider }, getClientIp?.(req) || req.ip || '');
-      return res.json({ ok: true });
-    });
-  }
 
   async function startAdminOAuth(req, res, provider, signState, buildAuthorizeUrl, purpose) {
     try {

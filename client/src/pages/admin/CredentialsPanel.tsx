@@ -3,9 +3,6 @@ import { GithubOutlined, KeyOutlined } from '@ant-design/icons';
 import { App, Button, Card, Col, Divider, Input, Row, Space, Tag, Typography } from 'antd';
 import { adminFetch } from './utils';
 import { LinuxDoIcon } from './brandIcons';
-import SocialLoginScan from '../../components/SocialLoginScan';
-import SocialProviderIcon from '../../components/SocialProviderIcon';
-import { emptySocialStatus, socialLabels, socialProviders, type SocialProvider, type SocialStatus } from '../../lib/socialLogin';
 
 interface LinuxdoAdminBinding {
   id: string;
@@ -44,14 +41,7 @@ export default function CredentialsPanel({
   const [githubEnabled, setGithubEnabled] = useState(false);
   const [githubBound, setGithubBound] = useState<GithubAdminBinding | null>(null);
   const [githubUnbinding, setGithubUnbinding] = useState(false);
-  const [socialStatus, setSocialStatus] = useState<SocialStatus>(emptySocialStatus);
-  const [socialProvider, setSocialProvider] = useState<SocialProvider | null>(null);
-  const [socialBusy, setSocialBusy] = useState(false);
-
-  const loadSocialStatus = () => adminFetch<SocialStatus>('/api/admin/social/status').then(setSocialStatus);
-
   useEffect(() => {
-    void loadSocialStatus().catch(() => setSocialStatus(emptySocialStatus));
     if (!touchedRef.current) setUsername(adminUsername);
   }, [adminUsername]);
 
@@ -204,33 +194,6 @@ export default function CredentialsPanel({
 
   const oauthSections = (
     <>
-      {socialProviders.map(provider => {
-        const status = socialStatus[provider];
-        if (!status?.enabled && !status?.bound) return null;
-        return <div key={provider}>
-          <Divider style={{ margin: '20px 0 16px' }} />
-          <Typography.Text strong>{socialLabels[provider]}</Typography.Text>
-          <Typography.Paragraph type="secondary">绑定后可用该身份登录后台，前台用户绑定不会获得管理员权限</Typography.Paragraph>
-          {status.bound ? <Space wrap>
-            <span>已绑定：{status.bound.username || '扫码身份'} · {new Date(status.bound.boundAt).toLocaleString()}</span>
-            <Button danger loading={socialBusy} onClick={() => {
-              setSocialBusy(true);
-              void adminFetch(`/api/admin/social/${provider}/unbind`, { method: 'POST' })
-                .then(() => loadSocialStatus()).then(() => { message.success('扫码身份已解绑'); })
-                .catch(reason => onError(reason instanceof Error ? reason.message : '解绑失败'))
-                .finally(() => setSocialBusy(false));
-            }}>解绑</Button>
-          </Space> : status.enabled && <Button icon={<SocialProviderIcon provider={provider} />} onClick={() => setSocialProvider(provider)}>绑定{socialLabels[provider]}</Button>}
-          {socialProvider === provider && <>
-            <SocialLoginScan provider={provider} action="bind" audience="admin" onComplete={() => {
-              setSocialProvider(null);
-              message.success('管理员扫码身份已绑定');
-              void loadSocialStatus().catch(() => onError('绑定已完成，状态读取失败，请刷新'));
-            }} />
-            <Button onClick={() => setSocialProvider(null)}>取消绑定</Button>
-          </>}
-        </div>;
-      })}
       {linuxdoEnabled && (
         <>
           <Divider style={{ margin: '20px 0 16px' }} />

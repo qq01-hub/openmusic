@@ -15,6 +15,7 @@ interface Props {
   favorited?: boolean;
   /** 双击时执行分类收藏，提供后会延迟单击以区分双击 */
   onDoubleClick?: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  onToggleResult?: (favorited: boolean) => void;
 }
 
 export default function FavoriteButton({
@@ -25,6 +26,7 @@ export default function FavoriteButton({
   showOnHover = false,
   favorited: favoritedProp,
   onDoubleClick,
+  onToggleResult,
 }: Props) {
   const { isFavorite, toggleFavorite } = useFavorites();
   const [loading, setLoading] = useState(false);
@@ -40,6 +42,7 @@ export default function FavoriteButton({
     setError('');
     const res = await toggleFavorite(song);
     setLoading(false);
+    if (res.success) onToggleResult?.(favorited);
     if (!res.success) {
       setError(res.error || '收藏失败');
     }

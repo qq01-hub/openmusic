@@ -143,8 +143,6 @@ export interface RuntimeConfig {
   apihzBaseUrl: string;
   apihzId: string;
   apihzKey: string;
-  apihzWechatEnabled: boolean;
-  apihzQqEnabled: boolean;
   /** 硅基流动 API Key（密钥字段，回显掩码） */
   aiApiKey: string;
   /** AI 服务 Base URL，例如 https://api.siliconflow.cn/v1 */

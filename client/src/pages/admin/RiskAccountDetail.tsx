@@ -50,23 +50,23 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   const identityTab = <div className="risk-tab-content">
     <div className="risk-detail-grid">
       <RiskSection title="账户身份" description="来自服务端账户记录，绑定状态变化后重新读取">
-        <Descriptions column={1} size="small" items={[
+        <Descriptions column={{ xs: 1, sm: 2 }} size="middle" items={[
           { key: 'id', label: '账户 ID', children: <code className="risk-wrap">{detail.id}</code> },
           { key: 'name', label: '账户名称', children: detail.displayName || '未记录' },
           { key: 'nickname', label: '最近房间昵称', children: detail.nickname || '未记录' },
           { key: 'email', label: '绑定邮箱', children: <span className="risk-wrap">{detail.email || '未绑定'}</span> },
-          { key: 'verified', label: '邮箱验证', children: detail.email ? (detail.emailVerified ? '已验证' : '待确认') : '无绑定邮箱' },
-          { key: 'password', label: '密码登录', children: detail.identityAvailable ? (detail.hasPassword ? '已设置' : '未设置') : '历史记录待补全' },
+          { key: 'verified', label: '邮箱验证', children: <Tag color={detail.email && detail.emailVerified ? 'blue' : 'default'}>{detail.email ? (detail.emailVerified ? '已验证' : '待确认') : '无绑定邮箱'}</Tag> },
+          { key: 'password', label: '密码登录', children: <Tag color={detail.identityAvailable && detail.hasPassword ? 'blue' : 'default'}>{detail.identityAvailable ? (detail.hasPassword ? '已设置' : '未设置') : '历史记录待补全'}</Tag> },
           { key: 'roomUserId', label: '房间身份 ID', children: <code className="risk-wrap">{detail.roomUserId || '未记录'}</code> },
           { key: 'created', label: '注册时间', children: time(detail.createdAt) },
           { key: 'registrationIp', label: '注册 IP', children: detail.registrationIp || '未记录' },
         ]} />
       </RiskSection>
       <RiskSection title="活动概况" description="今日为北京时间自然日，IP 与客户端计数为近 24 小时">
-        <Descriptions column={1} size="small" items={[
+        <Descriptions column={{ xs: 1, sm: 2 }} size="middle" items={[
           { key: 'human', label: '最近服务端人机校验', children: detail.lastHumanVerifiedAt ? time(detail.lastHumanVerifiedAt) : '未记录，不等于机器人' },
-          { key: 'proxy', label: '最近 HTTP 来源', children: detail.lastNetworkRoute === 'trusted_proxy' ? '可信代理链路' : detail.lastNetworkRoute === 'direct' ? '直连或未信任的代理' : '历史未采集' },
-          { key: 'forwarded', label: '今日忽略的转发声明', children: count(detail.daily.untrustedForwarded) },
+          { key: 'proxy', label: '最近 HTTP 来源', children: <Tag color={detail.lastNetworkRoute === 'trusted_proxy' ? 'blue' : 'default'}>{detail.lastNetworkRoute === 'trusted_proxy' ? '可信代理链路' : detail.lastNetworkRoute === 'direct' ? '直连或未信任的代理' : '历史未采集'}</Tag> },
+          { key: 'forwarded', label: '今日忽略的转发声明', children: <Tag color={detail.daily.untrustedForwarded > 0 ? 'orange' : 'default'}>{count(detail.daily.untrustedForwarded)} 次</Tag> },
           { key: 'score', label: '当前风险', children: <Tag color={riskColor(detail.score)}>{detail.score} 分 · {riskLabel(detail.score)}</Tag> },
           { key: 'seen', label: '首次采集', children: time(detail.firstSeenAt) },
           { key: 'last', label: '最近活动', children: time(detail.lastSeenAt) },
@@ -94,7 +94,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
       <Table size="small" rowKey="id" dataSource={[...(detail.factors || [])].filter(factor => !matchedOnly || factor.matched || factor.points > 0).sort((a, b) => b.points - a.points)} pagination={false} scroll={{ x: 900 }} columns={[
         { title: '规则与分类', dataIndex: 'label', render: (label: string, row) => <div className="risk-cell-stack"><span>{label}</span><small>{row.category || '历史规则'}</small></div> },
         { title: '统计窗口', dataIndex: 'window', width: 130, render: (value: string) => value || '历史未记录' },
-        { title: '触发阈值', dataIndex: 'threshold', width: 100, render: (value?: number) => value === undefined ? '—' : `≥ ${count(value)}` }, { title: '观测值', dataIndex: 'value', render: (value: number, row) => ['musicWithoutContext', 'roomHopping', 'highErrorRate', 'newAccountBurst', 'musicOnlyBurst', 'toolClientBurst', 'urlHarvesting'].includes(row.id) ? (value ? '满足组合条件' : '未满足组合条件') : `${count(value)}${['operationConcentration', 'emptyResponseRate'].includes(row.id) ? '%' : ''}`, width: 160 },
+        { title: '触发阈值', dataIndex: 'threshold', width: 100, render: (value?: number) => value === undefined ? '—' : `≥ ${count(value)}` }, { title: '观测值', dataIndex: 'value', render: (value: number, row) => ['musicWithoutContext', 'roomHopping', 'highErrorRate', 'musicOnlyBurst', 'toolClientBurst', 'urlHarvesting'].includes(row.id) ? (value ? '满足组合条件' : '未满足组合条件') : `${count(value)}${['operationConcentration', 'emptyResponseRate'].includes(row.id) ? '%' : ''}`, width: 160 },
         { title: '贡献分', dataIndex: 'points', width: 110, render: (value: number, row) => value ? <Tag color="orange">+{value}</Tag> : <span className="risk-muted">{row.matched ? '仅作线索' : '未命中'}</span> },
       ]} />
     </RiskSection>
@@ -131,7 +131,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
       ]} />
     </RiskSection>
     <RiskSection title="歌曲请求的 IP 变化" description="近 10 分钟至少 3 个歌曲请求 IP 且切换 6 次加 20 分，切换 12 次加 30 分，稳定共享出口或两个出口之间切换不命中此因子，仅供人工复核">
-      <Descriptions column={{ xs: 1, sm: 2 }} size="small" items={[
+      <Descriptions column={{ xs: 1, sm: 2 }} size="middle" items={[
         { key: 'musicIps', label: '歌曲请求 IP', children: count(detail.musicIpCount) },
         { key: 'musicChanges', label: '切换次数', children: count(detail.musicIpChanges) },
       ]} />
@@ -150,7 +150,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
       {operations.length ? <div className="risk-operation-grid">{operations.map(([key, value]) => <div key={key}><span className="risk-wrap">{OPERATIONS[key.slice(10)] || key.slice(10)}</span><b>{count(value)}</b></div>)}</div> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="今日尚无操作数据" />}
     </RiskSection>
     <RiskSection title="全局请求配额" description="当前生效的账户及共享网络额度，不是单账户自定义配置">
-      <Descriptions column={{ xs: 1, sm: 2 }} size="small" items={(Object.keys(POLICY_LABELS) as (keyof Policy)[]).map(key => ({ key, label: POLICY_LABELS[key], children: count(detail.policy?.[key]) }))} />
+      <Descriptions column={{ xs: 1, sm: 2 }} size="middle" items={(Object.keys(POLICY_LABELS) as (keyof Policy)[]).map(key => ({ key, label: POLICY_LABELS[key], children: <Tag color="blue">{count(detail.policy?.[key])}</Tag> }))} />
     </RiskSection>
     <RiskSection title="最近 14 天" description="按北京时间 00:00–24:00 汇总，仅展示有活动的日期"><DailyTable days={detail.days || []} /></RiskSection>
     <RiskMusicResponses detail={detail} />
@@ -185,7 +185,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   </div>;
   const decisionTab = <div className="risk-tab-content">
     <RiskSection title="异常访问人机验证" description="管理员放行长期有效，直至撤销，仅跳过异常访问验证码，不解除账户封禁、登录验证或请求额度限制">
-      {human && <Descriptions size="small" column={{ xs: 1, sm: 2 }} items={[
+      {human && <Descriptions size="middle" column={{ xs: 1, sm: 2 }} items={[
         { key: 'state', label: '当前状态', children: human.bypass ? '管理员已放行' : human.pending ? '待验证，资源已拦截' : '无需验证' },
         { key: 'day', label: '北京时间日期', children: human.day },
         { key: 'daily', label: '今日触发 / 通过', children: `${human.triggers} / ${human.passes}（每日最多两轮）` },

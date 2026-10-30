@@ -1,7 +1,4 @@
 import HumanVerification from './HumanVerification';
-import SocialLoginScan from './SocialLoginScan';
-import SocialProviderIcon from './SocialProviderIcon';
-import { socialProviders, socialLabels, type SocialProvider } from '../lib/socialLogin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { wechatLoginRetryDelay } from '../lib/wechatLoginRetry';
 import {
@@ -15,6 +12,7 @@ import {
   LogOut,
   Mail,
   MessageCircle,
+  Radio,
   ShieldCheck,
   Trash2,
   Unlink,
@@ -52,25 +50,22 @@ import { fetchAccountMusicAccounts, setAccountMusicShared, deleteAccountMusicAcc
 import { listAccountRooms } from '../api/accountRooms';
 import type { AccountRoomSummary, RoomMusicAccounts } from '../types';
 
-const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false, wechat_scan: false, qq_scan: false };
+const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false };
 
-type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'wechat-login' | 'wechat-bind' | 'manage' | `${SocialProvider}-login` | `${SocialProvider}-bind`;
+type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'wechat-login' | 'wechat-bind' | 'manage';
 
 const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: string; description: string }> = {
   linuxdo: { label: 'Linux Do', description: '社区身份' },
   github: { label: 'GitHub', description: '开发者身份' },
   wechat: { label: '微信文件传输助手登录', description: '通过文件传输助手确认身份' },
-  wechat_scan: { label: '微信扫码登录', description: '使用微信扫码确认身份' },
-  qq_scan: { label: 'QQ扫码登录', description: '使用 QQ 扫码确认身份' },
 };
 
 function LinuxDoMark() {
-  return <span className="text-[11px] font-black tracking-[-0.08em]">LINUX.DO</span>;
+  return <img src="/branding/linuxdo.svg" alt="" className="h-5 w-5 object-contain" />;
 }
 
 function ProviderIcon({ provider }: { provider: Exclude<AccountIdentityProvider, 'email'> }) {
   if (provider === 'github') return <Github className="h-5 w-5" />;
-  if (provider === 'wechat_scan' || provider === 'qq_scan') return <SocialProviderIcon provider={provider} />;
   if (provider === 'wechat') return <MessageCircle className="h-5 w-5" />;
   return <LinuxDoMark />;
 }
@@ -461,10 +456,8 @@ export default function AccountAccess({
     }
   };
 
-  const scanProvider = socialProviders.find(provider => view.startsWith(`${provider}-`));
   const title = view === 'manage'
     ? '账户与安全'
-    : scanProvider ? socialLabels[scanProvider]
     : view.startsWith('wechat')
       ? '微信文件传输助手登录'
       : view === 'email-register'
@@ -497,13 +490,13 @@ export default function AccountAccess({
         closeOnMaskClick={!required}
         zIndex={115}
         containerClassName="fixed inset-0 flex items-center justify-center p-4 sm:p-6"
-        panelClassName="relative max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto rounded-2xl border border-white/10 bg-netease-dark p-5 text-left shadow-2xl animate-fade-in sm:p-6"
+        panelClassName="account-modal-panel relative max-h-[calc(100dvh-2rem)] w-full max-w-3xl overflow-y-auto rounded-[28px] p-5 text-left shadow-2xl animate-fade-in sm:p-6"
       >
         <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="account-dialog-title" className="account-dialog">
-        <div className="mb-5 flex items-center justify-between border-b border-white/8 pb-4">
+        <div className="account-dialog-header mb-5 flex items-center justify-between pb-4">
           <div className="flex items-center gap-3">
             {!['welcome', 'manage'].includes(view) && (
-              <button type="button" onClick={() => { setError(''); setView(getAccountAccessBackView(view, Boolean(account))); }} className="rounded-lg bg-white/[0.06] p-2 text-netease-muted transition hover:bg-white/10 hover:text-white" aria-label="返回">
+              <button type="button" onClick={() => { setError(''); setView(getAccountAccessBackView(view, Boolean(account))); }} className="account-icon-button rounded-xl p-2 text-netease-muted transition" aria-label="返回">
                 <ArrowLeft className="h-4 w-4" />
               </button>
             )}
@@ -512,7 +505,7 @@ export default function AccountAccess({
               <p className="mt-1 text-xs text-netease-muted">{account ? '管理登录方式与账户安全' : '你的音乐，你们的此刻'}</p>
             </div>
           </div>
-          {!required && <button type="button" onClick={close} className="rounded-lg p-1.5 text-netease-muted transition hover:bg-white/10 hover:text-white" aria-label="关闭">
+          {!required && <button type="button" onClick={close} className="account-icon-button rounded-xl p-1.5 text-netease-muted transition" aria-label="关闭">
             <X className="h-5 w-5" />
           </button>}
         </div>
@@ -523,57 +516,48 @@ export default function AccountAccess({
             <button type="button" onClick={() => { void refreshProviders().catch(() => undefined); }} className="shrink-0 underline underline-offset-4">重试</button>
           </div>
         )}
-        {error && (view === 'welcome' || view === 'methods') && (
-          <div role="alert" className="mb-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">
-            <p>{error}</p>
-            <button type="button" onClick={() => { void refresh().catch(reason => setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试')); }} className="mt-2 underline underline-offset-4">重新检查账户</button>
-          </div>
-        )}
-
         {view === 'welcome' && (
-          <div className="pb-1 pt-3 sm:pt-5">
-            <div className="flex items-center gap-5 sm:gap-6">
-              <div aria-hidden="true" className="relative flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-white/10 bg-[#171717] shadow-[0_8px_20px_rgba(0,0,0,.35)] sm:h-24 sm:w-24">
-                <span className="absolute inset-2 rounded-full border border-white/[0.07]" />
-                <span className="absolute inset-4 rounded-full border border-white/[0.07]" />
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-netease-red sm:h-12 sm:w-12"><Headphones className="h-5 w-5 text-white" /></span>
+          <div className="account-welcome pb-1 pt-3 sm:pt-5">
+            <div className="account-welcome-copy">
+              <div className="flex items-center gap-5 sm:gap-6">
+                <div aria-hidden="true" className="account-welcome-orb relative flex h-20 w-20 shrink-0 items-center justify-center rounded-full sm:h-24 sm:w-24">
+                  <span className="absolute inset-2 rounded-full border border-white/[0.07]" />
+                  <span className="absolute inset-4 rounded-full border border-white/[0.07]" />
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full bg-netease-red sm:h-12 sm:w-12"><Headphones className="h-5 w-5 text-white" /></span>
+                </div>
+                <h3 className="text-[26px] font-semibold leading-snug tracking-tight text-white sm:text-3xl">好音乐<br />值得一起听</h3>
               </div>
-              <h3 className="text-[26px] font-semibold leading-snug tracking-tight text-white sm:text-3xl">好音乐<br />值得一起听</h3>
+              <p className="mt-6 text-sm leading-7 text-netease-muted">登录后，和朋友一起点歌、收藏好音乐</p>
             </div>
-            <p className="mt-6 text-sm leading-7 text-netease-muted">登录后，和朋友一起点歌、收藏好音乐</p>
-            <div className="my-6 flex flex-wrap gap-x-6 gap-y-3 border-y border-white/[0.08] py-4 text-xs text-netease-muted">
-              <span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-white/70" aria-hidden />一起点歌</span>
-              <span className="inline-flex items-center gap-2"><Heart className="h-4 w-4 text-white/70" aria-hidden />收藏随行</span>
+            <div className="account-welcome-actions">
+              <div className="account-welcome-benefits mb-5 flex flex-wrap gap-2 text-xs text-netease-muted">
+                <span className="inline-flex items-center gap-2 rounded-full px-3 py-2"><Users className="h-4 w-4" aria-hidden />一起点歌</span>
+                <span className="inline-flex items-center gap-2 rounded-full px-3 py-2"><Heart className="h-4 w-4" aria-hidden />收藏随行</span>
+                <span className="inline-flex items-center gap-2 rounded-full px-3 py-2"><Radio className="h-4 w-4" aria-hidden />多端可用</span>
+              </div>
+              <button type="button" onClick={() => setView('methods')} className="account-primary-button group flex min-h-12 w-full items-center justify-center gap-3 rounded-2xl px-4 py-3 text-sm font-semibold text-white transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">
+                登录或创建账户 <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" aria-hidden />
+              </button>
+              {!required && <button type="button" onClick={close} className="mt-2 flex min-h-11 w-full items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">先逛逛首页</button>}
             </div>
-            <button type="button" onClick={() => setView('methods')} className="group flex min-h-12 w-full items-center justify-center gap-3 rounded-xl bg-netease-red px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-netease-red/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-white">
-              登录或创建账户 <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" aria-hidden />
-            </button>
-            {!required && <button type="button" onClick={close} className="mt-2 flex min-h-11 w-full items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">先逛逛首页</button>}
           </div>
         )}
 
         {view === 'methods' && (
-          <div className="space-y-3">
-            {socialProviders.map(provider => providers[provider] && (
-              <button key={provider} type="button" onClick={() => setView(`${provider}-login`)} className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider={provider} /></span>
-                <span className="flex-1 text-sm font-semibold text-white">{socialLabels[provider]}</span>
-                <ChevronRight className="h-4 w-4 text-white/25" />
-              </button>
-            ))}
+          <div className="account-method-grid grid grid-cols-2 gap-2.5">
             {providers.wechat && (
               <button
                 type="button"
                 onClick={() => setView('wechat-login')}
-                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]"
+                className="account-method-card flex min-h-14 w-full items-center gap-3 rounded-2xl p-3 text-left transition"
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider="wechat" /></span>
                 <span className="flex-1 text-sm font-semibold text-white">微信文件传输助手登录</span>
                 <ChevronRight className="h-4 w-4 text-white/25" />
               </button>
             )}
-            <button type="button" onClick={() => setView('email-login')} className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]">
-              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><Mail className="h-5 w-5" /></span>
+            <button type="button" onClick={() => setView('email-login')} className="account-method-card flex min-h-14 w-full items-center gap-3 rounded-2xl p-3 text-left transition">
+              <span className="account-provider-icon account-provider-icon-email flex h-10 w-10 items-center justify-center rounded-xl text-white"><Mail className="h-5 w-5" /></span>
               <span className="flex-1"><span className="block text-sm font-semibold text-white">邮箱</span><span className="mt-0.5 block text-xs text-netease-muted">密码登录或验证码注册</span></span>
               <ChevronRight className="h-4 w-4 text-white/25" />
             </button>
@@ -582,7 +566,7 @@ export default function AccountAccess({
                 key={provider}
                 type="button"
                 onClick={() => void startAccountOAuth(provider, 'login').catch(error => setError(error.message))}
-                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-white/[0.045]"
+                className="account-method-card flex min-h-14 w-full items-center gap-3 rounded-2xl p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-55"
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider={provider} /></span>
                 <span className="flex-1"><span className="block text-sm font-semibold text-white">{providerMeta[provider].label}</span><span className="mt-0.5 block text-xs text-netease-muted">{providerMeta[provider].description}</span></span>
@@ -593,7 +577,7 @@ export default function AccountAccess({
           </div>
         )}
 
-        {required && !scanProvider && view !== 'wechat-login' && view !== 'wechat-bind' && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
+        {required && view !== 'wechat-login' && view !== 'wechat-bind' && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
 
         {(view === 'email-login' || view === 'email-register') && (
           <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void submitEmail(view === 'email-register'); }}>
@@ -604,7 +588,7 @@ export default function AccountAccess({
             )}
             {providers.turnstile?.enabled && <HumanVerification key={`${view}:${challengeAttempt}`} siteKey={providers.turnstile.siteKey} onToken={setTurnstileToken} />}
             {error && <p className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</p>}
-            <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-3.5 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50">{submitting && <Loader2 className="h-4 w-4 animate-spin" />}{view === 'email-register' ? '创建并登录' : '登录'}</button>
+            <button type="submit" disabled={submitting} className="account-primary-button flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white transition disabled:opacity-50">{submitting && <Loader2 className="h-4 w-4 animate-spin" />}{view === 'email-register' ? '创建并登录' : '登录'}</button>
             <button type="button" onClick={() => { setError(''); setView(view === 'email-register' ? 'email-login' : 'email-register'); }} className="w-full py-2 text-sm text-netease-muted transition hover:text-white">{view === 'email-register' ? '已有账户？返回登录' : '没有账户？使用邮箱注册'}</button>
           </form>
         )}
@@ -612,20 +596,14 @@ export default function AccountAccess({
         {(view === 'wechat-bind' || view === 'wechat-login') && (
           <WechatAccountScan action={view === 'wechat-bind' ? 'bind' : 'login'} onComplete={finishWechat} />
         )}
-        {scanProvider && <SocialLoginScan provider={scanProvider} action={view.endsWith('-bind') ? 'bind' : 'login'} onComplete={result => {
-          if (!result.account) { setError('账户响应异常，请重新登录'); setView('methods'); return; }
-          finishWechat(result.account);
-          setToast({ message: view.endsWith('-bind') ? '身份绑定成功' : '扫码登录成功', type: 'success' });
-        }} />}
-
         {view === 'manage' && account && (
-          <div>
-            <div className="mb-6 flex items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.04] p-4">
+          <div className="account-manage-layout">
+            <div className="account-profile-card mb-6 flex items-center gap-4 rounded-2xl p-4">
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black"><ShieldCheck className="h-5 w-5" /></span>
               <div className="min-w-0"><p className="truncate text-[15px] font-semibold text-white">{account.email || 'OpenMusic 账户'}</p><p className="mt-1 text-xs text-netease-muted">已绑定 {account.identities.length} 种登录方式</p></div>
             </div>
-            <div className="space-y-2.5">
-              <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
+            <div className="account-manage-sections space-y-2.5">
+              <div className="account-section-card rounded-2xl p-3.5">
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div><p className="text-sm font-medium text-white">音乐会员</p><p className="mt-1 text-xs text-netease-muted">新建房间时会自动使用已保存的会员账号</p></div>
                   {accountDataLoading && <Loader2 className="h-4 w-4 animate-spin text-white/45" />}
@@ -635,7 +613,7 @@ export default function AccountAccess({
                     const musicAccount = musicAccounts[platform];
                     if (!musicAccount) return null;
                     return (
-                      <div key={platform} className="flex items-center gap-3 rounded-xl border border-white/8 bg-black/10 px-3 py-2.5">
+                       <div key={platform} className="account-row flex items-center gap-3 rounded-xl px-3 py-2.5">
                         <span className="min-w-0 flex-1"><span className="block text-sm text-white">{musicPlatformLabels[platform]}</span><span className="block truncate text-xs text-netease-muted">{musicAccount.nickname || '已登录'} · {musicAccount.hasSvip ? 'SVIP' : musicAccount.hasVip ? 'VIP' : '漫游'}</span></span>
                         <button type="button" role="switch" aria-checked={musicAccount.shared} disabled={submitting || !musicAccount.hasVip} onClick={() => void toggleAccountMusic(platform, !musicAccount.shared)} className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${musicAccount.shared ? 'bg-emerald-500' : 'bg-white/20'}`}><span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${musicAccount.shared ? 'translate-x-5' : ''}`} /></button>
                         <button type="button" disabled={submitting} onClick={() => void removeAccountMusic(platform)} className="rounded-lg p-1.5 text-white/35 transition hover:bg-red-400/10 hover:text-red-300 disabled:opacity-40" aria-label={`删除${musicPlatformLabels[platform]}会员信息`}><Trash2 className="h-4 w-4" /></button>
@@ -645,26 +623,26 @@ export default function AccountAccess({
                   {!accountDataLoading && !Object.values(musicAccounts).some(Boolean) && <p className="py-2 text-xs text-white/40">还没有保存音乐会员账号</p>}
                 </div>
               </div>
-              <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
+               <div className="account-section-card rounded-2xl p-3.5">
                 <p className="text-sm font-medium text-white">我的房间</p>
                 <div className="mt-3 space-y-2">
-                  {accountRooms.length > 0 ? accountRooms.map((room) => <Link key={room.id} to={`/room/${room.id}`} onClick={() => setPanelOpen(false)} className="flex items-center justify-between rounded-xl border border-white/8 bg-black/10 px-3 py-2.5 transition hover:bg-white/[0.06]"><span className="min-w-0"><span className="block truncate text-sm text-white">{room.name}</span><span className="mt-0.5 block text-xs text-white/40">{room.id} · {room.userCount} 人在线</span></span><ChevronRight className="h-4 w-4 text-white/35" /></Link>) : <p className="py-2 text-xs text-white/40">还没有创建房间</p>}
+                  {accountRooms.length > 0 ? accountRooms.map((room) => <Link key={room.id} to={`/room/${room.id}`} onClick={() => setPanelOpen(false)} className="account-row flex items-center justify-between rounded-xl px-3 py-2.5 transition"><span className="min-w-0"><span className="block truncate text-sm text-white">{room.name}</span><span className="mt-0.5 block text-xs text-white/40">{room.id} · {room.userCount} 人在线</span></span><ChevronRight className="h-4 w-4 text-white/35" /></Link>) : <p className="py-2 text-xs text-white/40">还没有创建房间</p>}
                 </div>
               </div>
               {account.hasPassword && (
-                <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-3.5"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.07]"><Mail className="h-4 w-4" /></span><span className="flex-1"><span className="block text-sm font-medium text-white">邮箱与密码</span><span className="block truncate text-xs text-netease-muted">{account.email}</span></span><span className="text-xs text-emerald-300/80">已启用</span></div>
+                <div className="account-section-card flex items-center gap-3 rounded-2xl p-3.5"><span className="account-provider-icon flex h-9 w-9 items-center justify-center rounded-xl"><Mail className="h-4 w-4" /></span><span className="flex-1"><span className="block text-sm font-medium text-white">邮箱与密码</span><span className="block truncate text-xs text-netease-muted">{account.email}</span></span><span className="text-xs text-emerald-300/80">已启用</span></div>
               )}
-              {(['wechat_scan', 'qq_scan', 'wechat', 'linuxdo', 'github'] as const).map((provider) => {
+              {(['wechat', 'linuxdo', 'github'] as const).map((provider) => {
                 const identity = identityMap.get(provider);
                 const enabled = providers[provider];
                 if (!identity && !enabled) return null;
                 return (
-                  <div key={provider} className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
-                    <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.07]"><ProviderIcon provider={provider} /></span>
+                  <div key={provider} className="account-section-card flex items-center gap-3 rounded-2xl p-3.5">
+                    <span className="account-provider-icon flex h-9 w-9 items-center justify-center rounded-xl"><ProviderIcon provider={provider} /></span>
                     <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-white">{providerMeta[provider].label}</span><span className="block truncate text-xs text-netease-muted">{identity?.username || (identity ? '已绑定' : '尚未绑定')}</span></span>
                     {identity ? (
                       <button type="button" disabled={submitting} onClick={() => void unbind(provider)} className="rounded-full p-2 text-white/28 transition hover:bg-red-400/10 hover:text-red-300 disabled:opacity-40" aria-label={`解绑 ${providerMeta[provider].label}`}><Unlink className="h-4 w-4" /></button>
-                    ) : provider === 'wechat' || provider === 'wechat_scan' || provider === 'qq_scan' ? (
+                    ) : provider === 'wechat' ? (
                       <button type="button" onClick={() => setView(`${provider}-bind`)} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
                     ) : (
                       <button type="button" onClick={() => void startAccountOAuth(provider, 'bind').catch(error => setError(error.message))} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
@@ -674,8 +652,11 @@ export default function AccountAccess({
               })}
             </div>
             {error && <p className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</p>}
-            <button type="button" disabled={submitting} onClick={() => void logout()} className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/8 py-3 text-sm text-netease-muted transition hover:bg-white/[0.05] hover:text-white"><LogOut className="h-4 w-4" />退出账户</button>
+            <button type="button" disabled={submitting} onClick={() => void logout()} className="account-logout-button mt-6 flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm transition"><LogOut className="h-4 w-4" />退出账户</button>
           </div>
+        )}
+        {error && error !== '本机设备密钥已变化，请重新登录' && (view === 'welcome' || view === 'methods') && (
+          <p role="alert" className="account-status-note mt-4 text-center text-[11px] leading-5">{error}</p>
         )}
         </div>
       </Modal>

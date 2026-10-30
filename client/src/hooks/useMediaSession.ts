@@ -1,6 +1,3 @@
-import { getSharedAudio } from '../lib/audioElement';
-import { interruptAudioFocus, isAudioFocusInterrupted } from '../lib/audioFocus';
-import { resetAudioSessionUnlocked } from '../lib/audioUnlock';
 import { useEffect, useRef } from 'react';
 import { useRoomStore } from '../stores/roomStore';
 import { useAudioStore } from '../stores/audioStore';
@@ -50,7 +47,7 @@ function resolveSystemMediaControlFlags(
 
 /**
  * 将房间播放/暂停/切歌同步到系统媒体控件（锁屏、通知栏、耳机键、键盘多媒体键）。
- * 播放/暂停未绑定或无权限时只控制本机声音，其他按键按权限注册
+ * 无对应权限时不注册/不展示按键。
  */
 export function useMediaSession({
   enabled = true,
@@ -75,19 +72,23 @@ export function useMediaSession({
 
     let pendingPauseTimer: number | null = null;
 
-    const interruptLocalPlayback = () => {
-      const audio = getSharedAudio();
-      interruptAudioFocus(audio);
-      audio.pause();
-      resetAudioSessionUnlocked();
-      useAudioStore.getState().setNeedsAudioUnlock(true);
-      updateMediaSessionPlaybackState('paused', { force: true });
+    const softResumeOnly = () => {
+      if (!useRoomStore.getState().room?.isPlaying) return;
+      useAudioStore.getState().softResumeLocalAudio?.();
+      updateMediaSessionPlaybackState('playing', { force: true });
     };
 
-    const softResumeOnly = () => {
-      if (isAudioFocusInterrupted(getSharedAudio())) return;
-      updateMediaSessionPlaybackState('playing', { force: true });
-      useAudioStore.getState().softResumeLocalAudio?.();
+    const toggleLocalMute = () => {
+      const store = useAudioStore.getState();
+      if (store.volume > 0) {
+        try { localStorage.setItem('openmusic:volume-before-mute', String(store.volume)); } catch { /* ignore */ }
+        store.setVolume(0);
+      } else {
+        let prev = 1;
+        try { prev = Number(localStorage.getItem('openmusic:volume-before-mute')) || 1; } catch { /* ignore */ }
+        store.setVolume(Math.max(0.05, prev));
+      }
+      softResumeOnly();
     };
 
     const cancelPendingPause = () => {
@@ -97,20 +98,12 @@ export function useMediaSession({
       }
     };
 
-    const restoreLocalVolume = () => {
-      let prev = 1;
-      try { prev = Number(localStorage.getItem('openmusic:volume-before-mute')) || 1; } catch { /* ignore */ }
-      useAudioStore.getState().setVolume(Math.max(0.05, prev));
-    };
-
     const handlePlay = () => {
       const { room, canControlPlayback } = useRoomStore.getState();
       if (!room?.current) return;
       cancelPendingPause();
       if (!resolveSystemMediaControlFlags(room, canControlPlayback).playBound) {
-        if (!room.isPlaying) return;
-        if (useAudioStore.getState().volume === 0) restoreLocalVolume();
-        softResumeOnly();
+        toggleLocalMute();
         return;
       }
       const { localPlayback } = useAudioStore.getState();
@@ -127,22 +120,14 @@ export function useMediaSession({
       const { room, canControlPlayback } = useRoomStore.getState();
       if (!room?.current) return;
 
-      // 浏览器无法区分后台耳机暂停与其它媒体抢焦点，只停本机，不把系统中断传播到全房间
-      if (room.isPlaying && (document.hidden || shouldIgnoreBackgroundRoomPause() || isAudioFocusInterrupted(getSharedAudio()))) {
-        interruptLocalPlayback();
-        return;
-      }
       const hasPausePermission = resolveSystemMediaControlFlags(room, canControlPlayback).playBound;
 
       if (!hasPausePermission) {
-        const store = useAudioStore.getState();
-        const vol = store.volume;
-        if (vol > 0) {
-          try { localStorage.setItem('openmusic:volume-before-mute', String(vol)); } catch { /* ignore */ }
-          store.setVolume(0);
-        } else {
-          restoreLocalVolume();
-        }
+        toggleLocalMute();
+        return;
+      }
+
+      if (shouldIgnoreBackgroundRoomPause() && room.isPlaying) {
         softResumeOnly();
         return;
       }
@@ -159,7 +144,7 @@ export function useMediaSession({
       // 这类 pause 不能被成员的“本地静音”兼容逻辑处理，否则会把音量持久化为 0。
       const pauseTrackId = room.current.queueId;
       const pauseDuringTrackLoad = useAudioStore.getState().trackLoading;
-      // 短延迟合并系统 pause/stop，切歌期间的媒体会话误报不改变房态
+      // Windows 关媒体卡片有时先 pause 再 stop：短延迟，若收到 stop 则取消，避免进度条卡顿
       cancelPendingPause();
       pendingPauseTimer = window.setTimeout(() => {
         pendingPauseTimer = null;
@@ -175,11 +160,13 @@ export function useMediaSession({
     };
 
     const handleStop = () => {
-      // 系统 stop 让出本机音频焦点，不自动续播，也不改变全房间播放状态
+      // 关闭系统媒体卡片：取消误触发的 pause，只软续播，不改房态/进度
       cancelPendingPause();
       const room = useRoomStore.getState().room;
       if (!room?.current) return;
-      if (room.isPlaying) interruptLocalPlayback();
+      if (room.isPlaying) {
+        softResumeOnly();
+      }
     };
 
     const handleNext = () => {
@@ -231,7 +218,6 @@ export function useMediaSession({
 
       if (webSessionOk) {
         bindMediaSessionActions({
-          // 保留成对的播放/暂停处理，未绑定房间播放时只控制本机声音
           play: hasTrack ? handlePlay : undefined,
           pause: hasTrack ? handlePause : undefined,
           nexttrack: hasTrack && nextBound ? handleNext : undefined,
@@ -270,7 +256,7 @@ export function useMediaSession({
         if (!current) {
           updateMediaSessionPlaybackState('none');
         } else {
-          updateMediaSessionPlaybackState(room?.isPlaying && !isAudioFocusInterrupted(getSharedAudio()) ? 'playing' : 'paused');
+          updateMediaSessionPlaybackState(room?.isPlaying ? 'playing' : 'paused');
         }
       }
 

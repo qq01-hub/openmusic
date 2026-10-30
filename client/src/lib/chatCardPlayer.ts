@@ -8,8 +8,7 @@
 import type { Song } from '../types';
 import { filterDisplayLyrics, getLyrics, getSongUrlInfo, parseLrc, songKey } from '../api/music';
 import { resolveQishuiLocalPlaybackUrl, isQishuiLocalPlaybackUrl } from './qishuiLocalPlayback';
-import { configureInlineAudio, tryPlay } from './audioUnlock';
-import { resumeAudioFocus } from './audioFocus';
+import { configureInlineAudio } from './audioUnlock';
 import { findActiveLyricIndex } from './lyricActiveIndex';
 import {
   acquireRoomAudio,
@@ -21,7 +20,7 @@ import {
 } from './roomAudioPriority';
 import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
-import { applyIndependentAudioVolume, getSharedAudio } from './audioElement';
+import { getSharedAudio } from './audioElement';
 import { getAudioController } from './audioController';
 import type { LyricLine } from '../types';
 
@@ -122,11 +121,11 @@ function startProgressLoop() {
 
 export function applyChatCardVolume(volume: number): void {
   if (!cardAudio) return;
-  applyIndependentAudioVolume(cardAudio, volume);
+  cardAudio.volume = Math.min(1, Math.max(0, volume));
 }
 
-export function getChatCardPlaybackState(cardKey?: string): ChatCardPlaybackState {
-  return cardKey && activeState.cardKey !== cardKey ? EMPTY_STATE : activeState;
+export function getChatCardPlaybackState(): ChatCardPlaybackState {
+  return activeState;
 }
 
 export function subscribeChatCardPlayback(listener: () => void): () => void {
@@ -270,8 +269,6 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
   }
 
   const audio = getOrCreateCardAudio();
-  resumeAudioFocus(audio);
-  applyChatCardVolume(useAudioStore.getState().volume);
   const startAt = progressByCard.get(cardKey) || 0;
   const token = ++loadToken;
   abortController?.abort();
@@ -332,9 +329,8 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
         // 无法 seek 时从头播放
       }
     }
-    const result = await tryPlay(audio);
+    await audio.play();
     if (!stillCurrent()) return;
-    if (result !== 'played') throw new Error('chat card playback blocked');
     const mediaDuration = Number(audio.duration);
     publish({
       status: 'playing',
@@ -346,7 +342,6 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
   } catch (err) {
     if (token !== loadToken) return;
     if (err instanceof Error && err.name === 'AbortError') return;
-    audio.pause();
     publish({ status: 'error', error: '试听失败，稍后再试' });
     releaseAudio();
     resumeRoomAfterCard();

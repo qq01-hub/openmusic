@@ -79,7 +79,6 @@ const RULES = [
   { id: 'clientCount', label: '近 24 小时登录客户端特征较多，可被伪造需复核', threshold: 5, points: 10 },
   { id: 'roomHopping', label: '当日高频进入多个不同房间', threshold: 1, points: 15 },
   { id: 'highErrorRate', label: '当日错误较多且错误比例达到 30%', threshold: 1, points: 15 },
-  { id: 'newAccountBurst', label: '注册不足 24 小时且当日音乐请求达到 500', threshold: 1, points: 20 },
   { id: 'operationConcentration', label: '当日音乐操作至少 200 次且单一操作占比达到 90%', threshold: 90, points: 15 },
   { id: 'musicWithoutContext', label: '当日音乐请求至少 500 次、实时操作占比不超过 0.5% 且无成功入房', threshold: 1, points: 20 },
   { id: 'musicMinutePeak', label: '当日音乐请求分钟峰值达到 100', threshold: 100, points: 15 },
@@ -103,14 +102,13 @@ export function evaluateRisk(input = {}) {
     musicIpChanges: input.musicIpCount >= 3 ? input.musicIpChanges : 0,
     roomHopping: input.roomCount >= 10 && input.roomJoins >= 30 ? 1 : 0,
     highErrorRate: input.errors >= 20 && input.errors / Math.max(1, input.requests || 0) >= 0.3 ? 1 : 0,
-    newAccountBurst: input.accountAge >= 0 && input.accountAge < DAY && input.musicRequests >= 500 ? 1 : 0,
     musicOnlyBurst: input.requests >= 1000 && input.musicRequests / input.requests > 0.9 ? 1 : 0,
   };
   const factors = RULES.map(rule => {
     const value = Math.max(0, Number(signals[rule.id]) || 0);
     const points = rule.highThreshold && value >= rule.highThreshold ? rule.highPoints : value >= rule.threshold ? rule.points : 0;
     const window = rule.id === 'musicIpChanges' ? '近 10 分钟' : ['ipCount', 'clientCount'].includes(rule.id) ? '近 24 小时' : rule.id === 'sharedAccounts' ? '近 90 天关联' : '北京时间今日';
-    const category = ['ipCount', 'musicIpChanges', 'sharedAccounts', 'untrustedForwarded'].includes(rule.id) ? '网络与代理' : ['authFailures', 'clientCount', 'newAccountBurst', 'toolClientBurst'].includes(rule.id) ? '身份与客户端' : ['highErrorRate', 'emptyResponseRate', 'urlHarvesting'].includes(rule.id) ? '响应质量' : '请求行为';
+  const category = ['ipCount', 'musicIpChanges', 'sharedAccounts', 'untrustedForwarded'].includes(rule.id) ? '网络与代理' : ['authFailures', 'clientCount', 'toolClientBurst'].includes(rule.id) ? '身份与客户端' : ['highErrorRate', 'emptyResponseRate', 'urlHarvesting'].includes(rule.id) ? '响应质量' : '请求行为';
     return { id: rule.id, label: rule.label, value, points, threshold: rule.threshold, maxPoints: rule.highPoints || rule.points, matched: value >= rule.threshold, window, category };
   });
   const score = Math.min(100, factors.reduce((sum, factor) => sum + factor.points, 0));
@@ -137,13 +135,11 @@ local function scoreRisk(profile, daily, ips, shared, clients, rooms, now, rules
   if unknown and tonumber(unknown) >= now - 86400000 then ipCount = ipCount - 1 end
   local requests = count('requests')
   local music = count('music')
-  local created = tonumber(redis.call('HGET', profile, 'createdAt') or '0')
   local values = {denied=count('denied'), ipCount=ipCount, minutePeak=count('minutePeak'), sharedAccounts=shared,
     musicIpChanges=redis.call('ZCOUNT', musicIps, now - 600000, '+inf') >= 3 and redis.call('ZCOUNT', musicChanges, now - 600000, '+inf') or 0,
     authFailures=count('authFailures'), clientCount=redis.call('ZCOUNT', clients, now - 86400000, '+inf'),
     roomHopping=redis.call('ZCARD', rooms) >= 10 and count('roomJoins') >= 30 and 1 or 0,
     highErrorRate=count('errors') >= 20 and count('errors') / math.max(1, requests) >= 0.3 and 1 or 0,
-    newAccountBurst=created > 0 and now >= created and now - created < 86400000 and music >= 500 and 1 or 0,
     operationConcentration=not estimated and music >= 200 and operationTotal >= 200 and math.floor(operationMax / operationTotal * 100) or 0,
     musicWithoutContext=not estimated and music >= 500 and count('roomJoins') == 0 and count('socketRequests') / music <= 0.005 and 1 or 0,
     musicMinutePeak=count('musicMinutePeak'), untrustedForwarded=count('untrustedForwarded'),
@@ -179,7 +175,7 @@ function clientSignal(agent) {
 
 function safeIdentity(account, fallback = {}) {
   const email = String(account ? account.email || '' : fallback.email || '');
-  const identities = (Array.isArray(account?.identities) ? account.identities : []).filter(entry => ['email', 'github', 'linuxdo', 'wechat', 'wechat_scan', 'qq_scan'].includes(entry.provider)).map(entry => ({
+  const identities = (Array.isArray(account?.identities) ? account.identities : []).filter(entry => ['email', 'github', 'linuxdo', 'wechat'].includes(entry.provider)).map(entry => ({
     provider: entry.provider, username: String(entry.username || '').slice(0, 128), linkedAt: Number(entry.linkedAt || 0),
     subjectHint: entry.provider === 'email' ? '' : entry.subject ? (String(entry.subject).length > 6 ? `${String(entry.subject).slice(0, 2)}***${String(entry.subject).slice(-2)}` : '***') : '',
   }));
@@ -807,7 +803,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         if (!fields[5]) return null;
         const account = rawAccount ? JSON.parse(rawAccount) : null;
         const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
-        const aliases = { email: '邮箱', wechat: '微信文件传输助手 weixin', wechat_scan: '微信扫码 weixin', qq_scan: 'QQ扫码', github: 'GitHub', linuxdo: 'Linux.do' };
+        const aliases = { email: '邮箱', wechat: '微信文件传输助手 weixin', github: 'GitHub', linuxdo: 'Linux.do' };
         const values = [id, identity.displayName, identity.email, identity.roomUserId, account?.displayName,
           ...fields.slice(0, 5), ...nicknames, ...JSON.parse(fields[6] || '[]'),
           ...identity.identities.flatMap(entry => [entry.username, entry.provider, aliases[entry.provider], entry.subjectHint])];

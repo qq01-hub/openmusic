@@ -62,13 +62,11 @@ export function formatRelativeTime(at: number | null | undefined): string {
 export function formatAuditAction(entry: AdminAuditEntry) {
   switch (entry.action) {
     case 'login_ok': {
-      if (entry.via === 'wechat_scan' || entry.via === 'qq_scan') return `登录成功（${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}）`;
       if (entry.via === 'linuxdo') return `登录成功（Linux.do：${entry.linuxdoUsername || ''}）`;
       if (entry.via === 'github') return `登录成功（GitHub：${entry.githubUsername || ''}）`;
       return `登录成功${entry.username ? ` ${entry.username}` : ''}`;
     }
     case 'login_fail': {
-      if (entry.via === 'wechat_scan' || entry.via === 'qq_scan') return `登录失败（${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}）`;
       if (entry.via === 'linuxdo') return `登录失败（Linux.do：${entry.linuxdoUsername || ''}）`;
       if (entry.via === 'github') return `登录失败（GitHub：${entry.githubUsername || ''}）`;
       return `登录失败${entry.username ? ` ${entry.username}` : ''}`;
@@ -85,12 +83,6 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return '解绑 GitHub 账号';
     case 'oauth_callback_failed':
       return `${entry.provider === 'linuxdo' ? 'Linux.do' : 'GitHub'} 授权失败 · ${entry.stage || '未知阶段'} · ${entry.code || 'OAUTH_FAILED'}${entry.upstreamStatus ? ` · HTTP ${entry.upstreamStatus}` : ''}`;
-    case 'social_bind':
-      return `绑定${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}`;
-    case 'social_unbind':
-      return `解绑${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}`;
-    case 'social_fail':
-      return `扫码验证失败 · ${entry.code || 'SOCIAL_LOGIN_UNAVAILABLE'}`;
     case 'set_credentials':
       return `修改管理员账号密码${entry.username ? `（${entry.username}）` : ''}`;
     case 'set_credentials_fail':

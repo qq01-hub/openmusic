@@ -1,4 +1,4 @@
-import { getSharedAudio, getSharedAudioOutputSource } from '../../../lib/audioElement';
+import { getSharedAudio, getSharedAudioOutput } from '../../../lib/audioElement';
 import { isProxiedMediaUrl, isSameOriginMediaUrl } from '../../../lib/mediaProxyUrl';
 import type { RoomVisualPresetId } from '../../../lib/roomVisualPreset';
 import { shouldProxySongPlaybackUrl } from '../../../lib/roomVisualPreset';
@@ -202,9 +202,6 @@ export function ensureGalaxyAudioOutput(): void {
 export function resetGalaxyAudioWire(): void {
   wired = false;
   playListenerAttached = false;
-  audioCtx = null;
-  analyser = null;
-  beatAnalyser = null;
 }
 
 export function isGalaxyAudioWired(): boolean {
@@ -222,7 +219,7 @@ function wireAnalyser(audio: HTMLAudioElement): boolean {
   if (wired) return true;
 
   try {
-    const output = getSharedAudioOutputSource();
+    const output = getSharedAudioOutput();
     if (!output) return false;
     connectSourceToAnalysers(output.source);
     wired = true;
@@ -247,7 +244,9 @@ function ensureAnalyser(): AnalyserNode | null {
   if (!canWireGalaxyAudioNow()) return null;
 
   const audio = getSharedAudio();
-  audioCtx = getSharedAudioOutputSource()?.context ?? audioCtx ?? new AudioContext();
+  const output = getSharedAudioOutput();
+  if (!output) return null;
+  audioCtx = output.context;
 
   if (!analyser) {
     analyser = audioCtx.createAnalyser();

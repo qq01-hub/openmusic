@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Trash2, Zap, ThumbsUp, ThumbsDown, AlertTriangle, Ban, GripVertical, Shuffle, Share2 } from 'lucide-react';
 import { getClientId } from '../../lib/clientId';
 import { formatCrossSourceTip } from '../../lib/sourceLabels';
@@ -101,8 +101,19 @@ function QueueRow({
   const allowDrag = canReorder && !song.isCurrent;
   const { favorites, categories, setFavorite, setFavoriteCategory } = useFavorites();
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const categoryPickerRootRef = useRef<HTMLDivElement>(null);
   const [categorySaving, setCategorySaving] = useState(false);
   const favoriteSong = favorites.find((item) => songKey(item) === songKey(song));
+
+  useEffect(() => {
+    if (!categoryPickerOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!categoryPickerRootRef.current?.contains(target) && !(target instanceof Element && target.closest('[role="listbox"]'))) setCategoryPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer, true);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer, true);
+  }, [categoryPickerOpen]);
 
   const handleFavoriteDoubleClick = useCallback(() => {
     setCategoryPickerOpen(true);
@@ -229,7 +240,7 @@ function QueueRow({
               className="flex-shrink-0 max-w-[4.5rem] rounded-full bg-sky-400/15 px-1.5 py-0 text-[9px] leading-4 text-sky-300 truncate"
             />
           )}
-          <div className="relative flex flex-shrink-0 items-center">
+          <div ref={categoryPickerRootRef} className="relative flex flex-shrink-0 items-center">
             <FavoriteButton
               song={song}
               className="w-7 h-7 text-netease-muted hover:text-rose-300"

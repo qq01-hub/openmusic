@@ -65,7 +65,6 @@ import {
   createWechatUinStore,
 } from './wechatUinAuth.js';
 import { mountAdminApi, appendAdminAudit } from './adminApi.js';
-import { createSocialLogin, mountSocialLoginRoutes, socialProviderEnabled } from './socialLogin.js';
 import { initAdminCredentials } from './adminCredentials.js';
 import { riskControl, RiskControlError } from './riskControl.js';
 import { createAccountAccessMiddleware } from './accountAccess.js';
@@ -2936,8 +2935,6 @@ app.get('/api/auth/providers', (_req, res) => {
     turnstile: { enabled: getRuntimeConfig().turnstileEnabled, siteKey: getRuntimeConfig().turnstileEnabled ? getRuntimeConfig().turnstileSiteKey : '' },
     linuxdo: isLinuxdoConfigured(),
     github: isGithubConfigured(),
-    wechat_scan: socialProviderEnabled('wechat_scan', getRuntimeConfig()),
-    qq_scan: socialProviderEnabled('qq_scan', getRuntimeConfig()),
     // 账户微信登录复用文件传输助手扫码；会话证明由服务端签发。
     wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
   });
@@ -2973,40 +2970,6 @@ app.post('/api/auth/identities/:provider/unbind', async (req, res) => {
     recordAccountAuthMetric(`${req.params.provider}_unbind`, error instanceof AccountAuthError ? error.code : 'error');
     return sendAccountAuthError(res, error);
   }
-});
-
-mountSocialLoginRoutes(app, {
-  basePath: '/api/auth/social',
-  service: createSocialLogin({ getStore: getRedisClient, getConfig: getRuntimeConfig }),
-  metric: recordAccountAuthMetric,
-  contextFor: async (req, res, action) => {
-    const account = action === 'bind' ? await requireAccountSession(req, res) : null;
-    if (action === 'bind' && !account) return null;
-    if (account) await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
-    return {
-      audience: 'account',
-      principal: createHash('sha256').update(`${account?.id || ''}:${resolveAccountSessionToken(req) || ''}`).digest('hex'),
-      ip: getRequestIp(req),
-      account,
-    };
-  },
-  complete: async (req, res, context, identity) => {
-    let account;
-    if (context.action === 'bind') {
-      const current = await resolveAccountFromRequest(req);
-      if (!current || current.id !== context.account.id) throw new AccountAuthError('ACCOUNT_AUTH_REQUIRED', '账户会话已变化，请重新绑定', 401);
-      await riskControl.assertAllowed(current.id);
-      account = await bindExternalIdentity(context.account.id, identity);
-    } else {
-      req.loginDeviceKey = optionalLoginDeviceKey(req);
-      const result = await loginOrRegisterExternalIdentity(identity);
-      account = result.account;
-      const token = await createTrackedAccountSession(req, account, identity.provider, result.created);
-      await syncAccountRoomIdentity(req, res, account);
-      await replaceAccountSession(req, res, token);
-    }
-    return { ok: true, account: publicAccount(account) };
-  },
 });
 
 app.post('/api/auth/wechat/start', async (req, res) => {
@@ -5330,7 +5293,7 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
-  socket.on('set_room_qishui_proxy', ({ enabled } = {}, callback) => {
+  socket.on('set_room_qishui_proxy', ({ enabled, percent } = {}, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_qishui_proxy', callback)) return;
     const roomId = socketToRoom.get(socket.id);
@@ -5338,7 +5301,7 @@ io.on('connection', (socket) => {
       callback?.({ success: false, error: '未加入房间' });
       return;
     }
-    const result = setQishuiProxyEnabled(roomId, getSocketUserId(socket), enabled, socket.id);
+    const result = setQishuiProxyEnabled(roomId, getSocketUserId(socket), enabled, socket.id, percent);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;
