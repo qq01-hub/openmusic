@@ -61,7 +61,7 @@ const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: s
 };
 
 function LinuxDoMark() {
-  return <img src="/branding/linuxdo.svg?omv=3" alt="" className="linuxdo-mark h-5 w-5 object-contain" />;
+  return <img src="/branding/linuxdo.svg?omv=3" alt="" className="h-5 w-5 object-contain" />;
 }
 
 function ProviderIcon({ provider }: { provider: Exclude<AccountIdentityProvider, 'email'> }) {
