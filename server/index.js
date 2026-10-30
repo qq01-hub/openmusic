@@ -13,6 +13,7 @@ import {
   isAllowedMediaHostname,
   isBlockedMediaHostname,
   serveUpstreamMedia,
+  warmSharedUpstreamMedia,
 } from './mediaProxy.js';
 import { formatMetingFetchError } from './metingFetch.js';
 import { fetchMeting } from './metingFetch.js';
@@ -1132,7 +1133,7 @@ function createQishuiSourceToken(rawUrl, accountId = '') {
   if (!accountId) return '';
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', getQishuiSourceSigningKey(), iv);
-  cipher.setAAD(Buffer.from(`qishui-source:v4:${accountId}`));
+  cipher.setAAD(Buffer.from('qishui-source:v4:shared'));
   const body = JSON.stringify({ u: String(rawUrl), e: Date.now() + QISHUI_SOURCE_TOKEN_TTL_MS });
   const encrypted = Buffer.concat([cipher.update(body, 'utf8'), cipher.final()]);
   return `v4.${Buffer.concat([iv, cipher.getAuthTag(), encrypted]).toString('base64url')}`;
@@ -1140,14 +1141,38 @@ function createQishuiSourceToken(rawUrl, accountId = '') {
 
 function verifySignedQishuiSourceToken(token, accountId = '') {
   if (!accountId || typeof token !== 'string' || token.length > 8192 || !/^v4\.[A-Za-z0-9_-]+$/u.test(token)) return '';
+  const payload = Buffer.from(token.slice(3), 'base64url');
+  if (payload.length < 29) return '';
+  for (const aad of ['qishui-source:v4:shared', `qishui-source:v4:${accountId}`]) {
+    try {
+      const decipher = createDecipheriv('aes-256-gcm', getQishuiSourceSigningKey(), payload.subarray(0, 12));
+      decipher.setAAD(Buffer.from(aad));
+      decipher.setAuthTag(payload.subarray(12, 28));
+      const parsed = JSON.parse(Buffer.concat([decipher.update(payload.subarray(28)), decipher.final()]).toString('utf8'));
+      if (typeof parsed.u === 'string' && Number.isSafeInteger(parsed.e) && parsed.e > Date.now()) {
+        return parsed.u;
+      }
+    } catch {
+      // 兼容共享与旧版绑定 AAD
+    }
+  }
+  return '';
+}
+
+function shouldWarmReportedPlaybackMedia(rawUrl) {
+  const text = String(rawUrl || '').trim();
+  if (!text) return '';
   try {
-    const payload = Buffer.from(token.slice(3), 'base64url');
-    if (payload.length < 29) return '';
-    const decipher = createDecipheriv('aes-256-gcm', getQishuiSourceSigningKey(), payload.subarray(0, 12));
-    decipher.setAAD(Buffer.from(`qishui-source:v4:${accountId}`));
-    decipher.setAuthTag(payload.subarray(12, 28));
-    const parsed = JSON.parse(Buffer.concat([decipher.update(payload.subarray(28)), decipher.final()]).toString('utf8'));
-    return typeof parsed.u === 'string' && Number.isSafeInteger(parsed.e) && parsed.e > Date.now() ? parsed.u : '';
+    const parsed = new URL(text, 'http://localhost');
+    if (parsed.pathname === '/api/media-proxy') {
+      const nested = String(parsed.searchParams.get('url') || '').trim();
+      return /^https?:\/\//iu.test(nested) ? nested : '';
+    }
+    if (!/^https?:$/iu.test(parsed.protocol)) return '';
+    if (parsed.protocol === 'http:' || /.kugou.(?:com|net)$/iu.test(parsed.hostname)) {
+      return parsed.toString();
+    }
+    return '';
   } catch {
     return '';
   }
@@ -1282,6 +1307,9 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
       if (metingType === 'url') {
         const body = await localizeQishuiPayload(await finalizeMetingTextResponse(location, metingType), metingQuery, req);
         if (!body.url) return res.status(403).json({ error: 'no url' });
+        if (String(metingQuery.server || '').toLowerCase() === 'kugou') {
+          warmSharedUpstreamMedia(body.url);
+        }
         return res.json(body);
       }
       if (metingType === 'lrc') {
@@ -1326,6 +1354,9 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
   if (metingType === 'url') {
     const body = await localizeQishuiPayload(await finalizeMetingTextResponse(text, metingType), metingQuery, req);
     if (!body.url) return res.status(403).json({ error: 'no url' });
+    if (String(metingQuery.server || '').toLowerCase() === 'kugou') {
+      warmSharedUpstreamMedia(body.url);
+    }
     return res.json(body);
   }
 
@@ -1853,6 +1884,11 @@ app.get('/api/qishui-source', async (req, res) => {
 
   try {
     const { sourceUrl, auth } = await resolveQishuiPlaybackSource(rawUrl);
+    const presence = findUserRoomPresence(identity.userId);
+    const room = presence?.roomId ? getRoomInternal(presence.roomId) : null;
+    if (room?.qishuiProxyEnabled && Number(room?.qishuiProxyPercent ?? 100) > 0) {
+      warmSharedUpstreamMedia(sourceUrl);
+    }
     res.set('Cache-Control', 'no-store, private');
     return res.json({ url: sourceUrl, auth });
   } catch (error) {
@@ -6427,6 +6463,8 @@ io.on('connection', (socket) => {
     }
 
     if (result.updated && result.media) {
+      const warmTarget = shouldWarmReportedPlaybackMedia(result.media.url);
+      if (warmTarget) warmSharedUpstreamMedia(warmTarget);
       io.to(roomId).emit('playback_media', result.media);
     }
     callback?.({ success: true, updated: Boolean(result.updated) });

@@ -59,10 +59,11 @@ import {
   isCachedUrlCrossSource,
   getCachedUrlCrossSourceFrom,
   getTrackCrossSourceFrom,
+  shouldProxyQishuiTrack,
 } from '../lib/songPreloadCache';
 import { resolveQishuiLocalPlaybackUrl, retainQishuiPlaybackUrl } from '../lib/qishuiLocalPlayback';
 import { seekAudioTo, isExpectedAudioSeek, finishAudioSeek } from '../lib/audioSeek';
-import { refreshSignedApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
+import { refreshSignedApiUrl, resolveSignedApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
 import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../lib/mediaProxyUrl';
 import { shouldProxySongPlaybackUrl } from '../lib/roomVisualPreset';
 import {
@@ -105,20 +106,6 @@ import {
   getQualityLabel,
   getUserPlaybackQuality,
 } from '../api/music/quality';
-
-function shouldProxyQishuiTrack(song: Pick<QueueItem, 'queueId' | 'id'>, enabled: boolean, percent: number): boolean {
-  if (!enabled) return false;
-  const ratio = Math.min(100, Math.max(0, Math.floor(Number(percent) || 0)));
-  if (ratio <= 0) return false;
-  if (ratio >= 100) return true;
-  const source = `${song.queueId || ''}:${song.id || ''}`;
-  let hash = 2166136261;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) % 100 < ratio;
-}
 
 /** 主控本机失败后的本地恢复间隔：不切歌，等网络恢复再重试 */
 const LOCAL_PLAYBACK_RECOVERY_MS = 8000;
@@ -1015,7 +1002,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         useAudioStore.getState().setNeedsAudioUnlock(false);
         const live = useRoomStore.getState().room;
         if (live?.queue.length || live?.nextRandom) {
-          prefetchUpcomingFromRoom(live);
+          prefetchUpcomingFromRoom(live, { includeCurrent: false });
         }
       });
 
@@ -1240,7 +1227,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             if (timeoutId) window.clearTimeout(timeoutId);
           });
           if (gen !== loadGeneration.current) return;
-          url = (await refreshSignedApiUrl(resolved.url)) || resolved.url;
+          url = (await resolveSignedApiUrl(resolved.url)) || resolved.url;
           if (gen !== loadGeneration.current) return;
           playbackUrl = url;
           debugLog('track_resolve_done', debugLine({
@@ -1265,7 +1252,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               const refreshed = await resolveSongUrl(current);
               if (gen !== loadGeneration.current) return;
               resolvedMeta = refreshed;
-              url = (await refreshSignedApiUrl(refreshed.url)) || refreshed.url;
+              url = (await resolveSignedApiUrl(refreshed.url)) || refreshed.url;
               localResult = await resolveQishuiLocalPlaybackUrl(url, localAbort.signal, { proxy: proxyQishui });
             }
             if (gen !== loadGeneration.current || localAbort.signal.aborted || localResult.status === 'aborted') {
@@ -1275,7 +1262,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               invalidateTrackUrlCache(current);
               const fallbackUrl = await fetchServiceFallbackUrl(current);
               if (!fallbackUrl) throw new SourceUnavailableError('no url');
-              playbackUrl = (await refreshSignedApiUrl(fallbackUrl)) || fallbackUrl;
+              playbackUrl = (await resolveSignedApiUrl(fallbackUrl)) || fallbackUrl;
               resolvedMeta = {
                 ...resolvedMeta,
                 url: playbackUrl,
@@ -1399,6 +1386,22 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           });
         }
 
+        if (!justSkippedRef.current) {
+          const pbBeforeWait = getClientPlaybackState();
+          const initialOffset = pbBeforeWait && (!pbBeforeWait.trackId || pbBeforeWait.trackId === current.queueId)
+            ? getPlaybackTime(pbBeforeWait)
+            : Math.max(0, Number(useRoomStore.getState().room?.currentTime) || 0);
+          if (initialOffset >= 5) {
+            await waitForAudioMinimumReady(controller.audio);
+            if (gen !== loadGeneration.current) return;
+            try {
+              seekAudioTo(controller.audio, capSeekTime(initialOffset, current, controller.audio.duration));
+            } catch {
+              // ignore seek before metadata
+            }
+          }
+        }
+
         await waitForAudioCanPlay(controller.audio);
         if (gen !== loadGeneration.current) return;
         debugLog('track_audio_ready', debugLine({
@@ -1495,16 +1498,17 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           ) {
             const wasNewTrack = justSkippedRef.current;
             justSkippedRef.current = false;
-            // 换源后 audio 停在 0：必须 mandatory seek；若服务端已为同曲建立时间轴，沿用其当前进度。
             tryFlushPendingSnapshot();
             if (wasNewTrack) {
-              applySync({ forceTime: resolveInitialTrackSyncTime(queueId, live.currentTime) });
+              const initialTarget = resolveInitialTrackSyncTime(queueId, live.currentTime);
+              // 切歌新曲已在 0s 完成缓冲，曲首阶段直接从 0 起播，避免因取链耗时向后硬跳冲掉已缓冲数据
+              applySync({ forceTime: initialTarget < 6 ? 0 : initialTarget });
             } else {
               const pb = getClientPlaybackState();
               const targetTime = pb
                 ? getPlaybackTime(pb)
                 : Math.max(0, Number(live.currentTime) || 0);
-              applySync({ forceTime: targetTime });
+              applySync({ forceTime: targetTime < 6 && controller.audio.currentTime < 1 ? 0 : targetTime });
             }
           }
         }

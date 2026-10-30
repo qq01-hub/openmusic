@@ -441,9 +441,10 @@ async function applyCorrectionSync(
     explicitHardSeek(audio, target, trackId, 'remote_seek');
   } else if (
     audio.currentTime < INITIAL_SYNC_AUDIO_SEC
+    && target >= 6
     && Math.abs(diff) > REMOTE_SEEK_THRESHOLD_SEC
   ) {
-    // 刷新/进房后本机仍在曲首：必须对齐服务端进度（否则会从 0 开播）
+    // 刷新/进房后本机仍在曲首且房间已播至中途：必须对齐服务端进度
     explicitHardSeek(audio, target, trackId, 'initial_sync');
   } else if (remaining <= FINAL_WINDOW_SEC) {
     // 仅曲末允许向前追一次；中途时钟漂移不 seek
@@ -515,7 +516,7 @@ async function applyMandatorySync(
   }
 
   if (audio.paused || options.forceZero || Math.abs(target - audio.currentTime) > 0.25) {
-    if (audio.paused || options.forceZero || Math.abs(target - audio.currentTime) > 0.25) {
+    if (options.forceZero ? audio.currentTime > 0.05 : Math.abs(target - audio.currentTime) > 0.25) {
     explicitHardSeek(audio, target, trackId, options.forceZero ? 'force_zero' : 'mandatory');
   }
   }

@@ -285,18 +285,23 @@ async function decryptAudio(data: Uint8Array, rawKey: string): Promise<{ data: U
     ['decrypt'],
   );
   const metadata = findFlacMetadata(stsd);
-  // 小批并行避免每个样本串行跨 WebCrypto 调度，同时控制内存峰值
+  // 大批并行减少 WebCrypto 往返调度，并直接传入 TypedArray 视图省去每样本 slice 拷贝
   const decryptSamples = async (write: (sample: Uint8Array, index: number) => void) => {
-    for (let start = 0; start < sizes.length; start += 64) {
-      await Promise.all(Array.from({ length: Math.min(64, sizes.length - start) }, async (_, offset) => {
+    for (let start = 0; start < sizes.length; start += 256) {
+      await Promise.all(Array.from({ length: Math.min(256, sizes.length - start) }, async (_, offset) => {
         const index = start + offset;
         const counter = new Uint8Array(16);
         counter.set(senc.data.subarray(8 + index * 8, 16 + index * 8));
         const sourceOffset = sampleOffsets[index];
+        const sampleView = new Uint8Array(
+          data.buffer as ArrayBuffer,
+          data.byteOffset + sourceOffset,
+          sizes[index],
+        );
         const decrypted = await crypto.subtle.decrypt(
-          { name: 'AES-CTR', counter: toArrayBuffer(counter), length: 64 },
+          { name: 'AES-CTR', counter: counter as Uint8Array<ArrayBuffer>, length: 64 },
           key,
-          toArrayBuffer(data.subarray(sourceOffset, sourceOffset + sizes[index])),
+          sampleView,
         );
         write(new Uint8Array(decrypted), index);
       }));
@@ -318,20 +323,37 @@ async function decryptAudio(data: Uint8Array, rawKey: string): Promise<{ data: U
     return { data: output, contentType: 'audio/flac' };
   }
 
-  const samples: Uint8Array[] = new Array(sizes.length);
-  await decryptSamples((sample, index) => { samples[index] = sample; });
+  const totalSampleBytes = sizes.reduce((sum, size) => sum + size, 0);
+  const sampleOffsetsOut = new Uint32Array(sizes.length);
+  let sampleCursor = 0;
+  for (let index = 0; index < sizes.length; index += 1) {
+    sampleOffsetsOut[index] = sampleCursor;
+    sampleCursor += sizes[index];
+  }
   const ftyp = box(data, 'ftyp');
+  const ftypSlice = ftyp ? data.subarray(ftyp.offset, ftyp.offset + ftyp.size) : new Uint8Array();
   const draftMoov = cleanBoxChildren(data, moov.offset + 8, moov.offset + moov.size, {
     sizes, stsc: stscEntries, chunkCount, mdatOffset: 0,
   });
-  const mdatOffset = (ftyp?.size || 0) + draftMoov.length + 16;
+  const mdatOffset = ftypSlice.length + draftMoov.length + 16;
   const cleanMoovData = cleanBoxChildren(data, moov.offset + 8, moov.offset + moov.size, {
     sizes, stsc: stscEntries, chunkCount, mdatOffset,
   });
-  const cleanMoov = concat([u32Bytes(cleanMoovData.length + 8), ascii('moov'), cleanMoovData]);
-  const cleanMdatData = concat(samples);
-  const cleanMdat = concat([u32Bytes(cleanMdatData.length + 8), ascii('mdat'), cleanMdatData]);
-  return { data: concat([ftyp ? data.subarray(ftyp.offset, ftyp.offset + ftyp.size) : new Uint8Array(), cleanMoov, cleanMdat]), contentType: 'audio/mp4' };
+  const output = new Uint8Array(mdatOffset + totalSampleBytes);
+  let headerWriteAt = 0;
+  output.set(ftypSlice, headerWriteAt);
+  headerWriteAt += ftypSlice.length;
+  output.set(u32Bytes(cleanMoovData.length + 8), headerWriteAt);
+  headerWriteAt += 4;
+  output.set(ascii('moov'), headerWriteAt);
+  headerWriteAt += 4;
+  output.set(cleanMoovData, headerWriteAt);
+  headerWriteAt += cleanMoovData.length;
+  output.set(u32Bytes(totalSampleBytes + 8), headerWriteAt);
+  headerWriteAt += 4;
+  output.set(ascii('mdat'), headerWriteAt);
+  await decryptSamples((sample, index) => output.set(sample, mdatOffset + sampleOffsetsOut[index]));
+  return { data: output, contentType: 'audio/mp4' };
 }
 
 const workerScope = self as unknown as {

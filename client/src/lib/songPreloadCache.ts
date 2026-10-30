@@ -1,6 +1,6 @@
 import { getAvailableSources, getSongUrlInfo, getTrackKey, searchSongs, unwrapQishuiAudioUrl } from '../api/music';
 import { prefetchQishuiLocalPlayback } from './qishuiLocalPlayback';
-import { isHttpsPageContext, shouldProxyPlaybackUrl, toProxiedMediaUrl } from './mediaProxyUrl';
+import { isHttpsPageContext, isProxiedMediaUrl, shouldProxyPlaybackUrl, toProxiedMediaUrl } from './mediaProxyUrl';
 import { isIOS } from './audioUnlock';
 import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
 import { stripApiSignParams } from './signedApiUrl';
@@ -360,6 +360,24 @@ function getEffectivePlaybackQuality(song: Pick<QueueItem, 'id' | 'source'>): st
     return getLowestQuality(source) ?? getUserPlaybackQuality(source);
   }
   return getUserPlaybackQuality(source);
+}
+
+export function shouldProxyQishuiTrack(
+  song: Pick<QueueItem, 'queueId' | 'id'>,
+  enabled: boolean,
+  percent: number,
+): boolean {
+  if (!enabled) return false;
+  const ratio = Math.min(100, Math.max(0, Math.floor(Number(percent) || 0)));
+  if (ratio <= 0) return false;
+  if (ratio >= 100) return true;
+  const source = `${song.queueId || ''}:${song.id || ''}`;
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % 100 < ratio;
 }
 
 function songLikelyNeedsPlaybackProxy(song: Pick<QueueItem, 'source' | 'url'>): boolean {
@@ -890,15 +908,75 @@ export function prefetchQueueSongs(
   else if (options.nextRandom?.id) retain.push(options.nextRandom);
   pruneSourceErrors(retain);
 
-  // 汽水只预解密「即将播放的第一首」，避免当前曲+多首队列并行整曲驻留内存
-  const firstQishui = targets.find((song) => songSourceOf(song) === 'qishui') || null;
+  // 仅预取即将播放的第一首歌曲音频数据（汽水或同源代理），避免多首并发预取占用服务器带宽
+  const nextUp = targets[0] || null;
   for (const song of targets) {
     void fetchSongUrl(song, { allowQualityDowngrade: false }).then((result) => {
-      if (!result?.url || !firstQishui || song.queueId !== firstQishui.queueId) return;
-      const room = useRoomStore.getState().room;
-      const proxyQishui = Boolean(room?.qishuiProxyEnabled) && Number(room?.qishuiProxyPercent ?? 100) > 0;
-      prefetchQishuiLocalPlayback(result.url, proxyQishui);
+      if (!result?.url || !nextUp || song.queueId !== nextUp.queueId) return;
+      if (songSourceOf(song) === 'qishui') {
+        const room = useRoomStore.getState().room;
+        const proxyQishui = shouldProxyQishuiTrack(
+          song,
+          Boolean(room?.qishuiProxyEnabled),
+          Number(room?.qishuiProxyPercent ?? 100),
+        );
+        prefetchQishuiLocalPlayback(result.url, proxyQishui, Boolean(useRoomStore.getState().isPlaybackLeader));
+        return;
+      }
+      if (isProxiedMediaUrl(result.url)) {
+        prefetchProxiedAudioPlayback(result.url);
+      }
     });
   }
 }
 
+
+let proxiedPrefetchTimer: number | null = null;
+let proxiedPrefetchAbort: AbortController | null = null;
+let proxiedPrefetchUrl = '';
+const proxiedPrefetchedSet = new Set<string>();
+
+/** 预取下一首同源代理音频首包（256KB），带随机错峰抖动，避免同房多人同时切歌时突发请求洪峰 */
+export function prefetchProxiedAudioPlayback(url: string | null | undefined): void {
+  if (!url || !isProxiedMediaUrl(url) || typeof window === 'undefined') return;
+  const canonical = stripApiSignParams(url);
+  if (!canonical || proxiedPrefetchedSet.has(canonical) || proxiedPrefetchUrl === canonical) return;
+
+  if (proxiedPrefetchTimer !== null) {
+    window.clearTimeout(proxiedPrefetchTimer);
+    proxiedPrefetchTimer = null;
+  }
+  proxiedPrefetchAbort?.abort();
+  const controller = new AbortController();
+  proxiedPrefetchAbort = controller;
+  proxiedPrefetchUrl = canonical;
+
+  const isLeader = useRoomStore.getState().isPlaybackLeader;
+  const delayMs = isLeader ? 600 : 1200 + Math.floor(Math.random() * 1600);
+
+  proxiedPrefetchTimer = window.setTimeout(() => {
+    proxiedPrefetchTimer = null;
+    if (controller.signal.aborted) return;
+    void fetch(canonical, {
+      method: 'GET',
+      headers: { Range: 'bytes=0-262143' },
+      credentials: 'include',
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (res.ok || res.status === 206) {
+        await res.arrayBuffer().catch(() => {});
+        proxiedPrefetchedSet.add(canonical);
+        while (proxiedPrefetchedSet.size > MAX_URL_CACHE) {
+          const oldest = proxiedPrefetchedSet.keys().next().value;
+          if (!oldest) break;
+          proxiedPrefetchedSet.delete(oldest);
+        }
+      }
+    }).catch(() => {}).finally(() => {
+      if (proxiedPrefetchAbort === controller) {
+        proxiedPrefetchAbort = null;
+        proxiedPrefetchUrl = '';
+      }
+    });
+  }, delayMs);
+}

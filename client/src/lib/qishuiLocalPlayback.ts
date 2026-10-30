@@ -30,8 +30,23 @@ const pending = new Map<string, Promise<QishuiLocalPlaybackResult>>();
 /** 串行解密：并行 Worker 会同时持有多首「密文+明文」峰值 */
 let decryptChain: Promise<void> = Promise.resolve();
 let requestId = 0;
+let sharedDecryptWorker: Worker | null = null;
+let prefetchTimer: number | null = null;
 let prefetchAbort: AbortController | null = null;
 let prefetchToken = '';
+
+function getDecryptWorker(): Worker {
+  if (!sharedDecryptWorker) {
+    sharedDecryptWorker = new Worker(new URL('../workers/qishuiDecryptWorker.ts', import.meta.url), { type: 'module' });
+  }
+  return sharedDecryptWorker;
+}
+
+function resetDecryptWorker(): void {
+  if (!sharedDecryptWorker) return;
+  sharedDecryptWorker.terminate();
+  sharedDecryptWorker = null;
+}
 
 function sourceToken(wrappedUrl: string): string {
   try {
@@ -65,29 +80,31 @@ function remember(key: string, url: string): string {
 function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal, proxy = false): Promise<string> {
   const run = () => new Promise<string>((resolve, reject) => {
     const id = ++requestId;
-    const worker = new Worker(new URL('../workers/qishuiDecryptWorker.ts', import.meta.url), { type: 'module' });
-    const abort = () => {
+    const worker = getDecryptWorker();
+    const cleanup = () => {
       window.clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
-      worker.terminate();
+      worker.onmessage = null;
+      worker.onerror = null;
+    };
+    const abort = () => {
+      cleanup();
+      resetDecryptWorker();
       reject(new DOMException('汽水本地解密已取消', 'AbortError'));
     };
     const timer = window.setTimeout(() => {
-      signal?.removeEventListener('abort', abort);
-      worker.terminate();
+      cleanup();
+      resetDecryptWorker();
       reject(new Error('汽水本地解密超时'));
     }, LOCAL_DECRYPT_TIMEOUT_MS);
     if (signal?.aborted) {
-      window.clearTimeout(timer);
       abort();
       return;
     }
     signal?.addEventListener('abort', abort, { once: true });
     worker.onmessage = (event: MessageEvent<WorkerResult>) => {
       if (event.data.id !== id) return;
-      window.clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      worker.terminate();
+      cleanup();
       if (!event.data.data) {
         reject(new Error(event.data.error || '汽水本地解密失败'));
         return;
@@ -95,9 +112,8 @@ function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal, proxy 
       resolve(URL.createObjectURL(new Blob([event.data.data], { type: event.data.contentType || 'audio/mp4' })));
     };
     worker.onerror = (event) => {
-      window.clearTimeout(timer);
-      signal?.removeEventListener('abort', abort);
-      worker.terminate();
+      cleanup();
+      resetDecryptWorker();
       reject(new Error(event.message || '汽水本地解密 Worker 失败'));
     };
     worker.postMessage({ id, url: sourceUrl, auth, proxy });
@@ -192,6 +208,10 @@ export async function resolveQishuiLocalPlaybackUrl(
   const useProxy = typeof options === 'boolean' ? options : Boolean(options.proxy);
   const token = sourceToken(url);
   if (token && prefetchToken && prefetchToken !== token) {
+    if (prefetchTimer !== null) {
+      window.clearTimeout(prefetchTimer);
+      prefetchTimer = null;
+    }
     prefetchAbort?.abort();
     prefetchAbort = null;
     prefetchToken = '';
@@ -202,21 +222,36 @@ export async function resolveQishuiLocalPlaybackUrl(
 /**
  * 仅预取下一首解密结果；同时只保留一个预取任务
  */
-export function prefetchQishuiLocalPlayback(url: string | null | undefined, proxy = false): void {
+export function prefetchQishuiLocalPlayback(
+  url: string | null | undefined,
+  proxy = false,
+  isLeader = false,
+): void {
   if (!isQishuiLocalPlaybackUrl(url)) return;
   const token = sourceToken(url);
   if (!token) return;
   if (blobCache.has(token) || pending.has(token)) return;
   if (prefetchToken === token) return;
 
+  if (prefetchTimer !== null) {
+    window.clearTimeout(prefetchTimer);
+    prefetchTimer = null;
+  }
   prefetchAbort?.abort();
   const controller = new AbortController();
   prefetchAbort = controller;
   prefetchToken = token;
-  void resolveLocalPlaybackUrl(url, controller.signal, proxy).finally(() => {
-    if (prefetchAbort === controller) {
-      prefetchAbort = null;
-      prefetchToken = '';
-    }
-  });
+  const delayMs = proxy
+    ? (isLeader ? 400 : 1000 + Math.floor(Math.random() * 1800))
+    : 200;
+  prefetchTimer = window.setTimeout(() => {
+    prefetchTimer = null;
+    if (controller.signal.aborted) return;
+    void resolveLocalPlaybackUrl(url, controller.signal, proxy).finally(() => {
+      if (prefetchAbort === controller) {
+        prefetchAbort = null;
+        prefetchToken = '';
+      }
+    });
+  }, delayMs);
 }
