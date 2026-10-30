@@ -1,4 +1,3 @@
-import { preloadAllLyricFonts } from './lyricFonts';
 
 let chromeInitDone = false;
 
@@ -124,14 +123,22 @@ function initMineradioControlGlassSurface() {
   };
 
   const refreshAll = () => {
-    requestAnimationFrame(updateControlGlassDisplacementMap);
-    requestAnimationFrame(updateSearchBoxGlassDisplacementMap);
-    requestAnimationFrame(updateSearchPillGlassDisplacementMap);
+    updateControlGlassDisplacementMap();
+    updateSearchBoxGlassDisplacementMap();
+    updateSearchPillGlassDisplacementMap();
   };
 
   // Replacing an feImage data URL makes DevTools register a new resource load.
   // Wait for a resize gesture to settle so dragging a panel does not reload it every frame.
   let resizeRefreshTimer: number | undefined;
+  let searchPillRefreshFrame = 0;
+  const scheduleSearchPillRefresh = () => {
+    if (searchPillRefreshFrame) return;
+    searchPillRefreshFrame = requestAnimationFrame(() => {
+      searchPillRefreshFrame = 0;
+      updateSearchPillGlassDisplacementMap();
+    });
+  };
   const refreshAfterResizeSettles = () => {
     if (resizeRefreshTimer !== undefined) {
       window.clearTimeout(resizeRefreshTimer);
@@ -165,7 +172,7 @@ function initMineradioControlGlassSurface() {
 
   if (window.MutationObserver && (searchTabs || searchResults)) {
     const observer = new MutationObserver(() => {
-      requestAnimationFrame(updateSearchPillGlassDisplacementMap);
+      scheduleSearchPillRefresh();
     });
     if (searchTabs) observer.observe(searchTabs, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
     if (searchResults) observer.observe(searchResults, { childList: true, subtree: true });
@@ -180,17 +187,15 @@ function initMineradioControlGlassSurface() {
   });
 }
 
-/** 房间页专用：歌词字体 + 底栏玻璃位移图（仅初始化一次） */
+/** 房间页专用：底栏玻璃位移图（仅初始化一次） */
 export function ensureRoomChromeInit() {
   if (chromeInitDone) return;
   chromeInitDone = true;
-  preloadAllLyricFonts();
   initMineradioControlGlassSurface();
 }
 
-/** TV 模式仅需歌词字体 */
+/** TV 模式保留独立初始化入口 */
 export function ensureTvChromeInit() {
   if (chromeInitDone) return;
   chromeInitDone = true;
-  preloadAllLyricFonts();
 }

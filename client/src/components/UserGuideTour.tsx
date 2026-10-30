@@ -9,7 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Check, Sparkles } from 'lucide-react';
+import { ArrowRight, Sparkles } from 'lucide-react';
 import {
   getGuideSelector,
   getPendingGuideSteps,
@@ -413,11 +413,7 @@ export default function UserGuideTour({ scope, paused = false, delayMs = 700 }: 
               );
             })}
           </ul>
-          <div className="mt-4 flex shrink-0 items-center justify-between gap-3">
-            <p className="flex items-center gap-1.5 text-xs text-white/60 sm:text-[13px]">
-              <Check className="h-3.5 w-3.5" aria-hidden />
-              高亮区域是操作入口
-            </p>
+          <div className="mt-4 flex shrink-0 justify-end">
             <button
               type="button"
               onClick={advance}

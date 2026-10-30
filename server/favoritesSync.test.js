@@ -1,3 +1,4 @@
+import { evalRedisScript } from './redisScripts.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -82,7 +83,7 @@ test('Redis 收藏不可读时不得返回成功空列表或用空列表覆盖�
   let raw = JSON.stringify([song('1')]);
   let writes = 0;
   const context = vm.createContext({
-    enabled: false,
+    evalRedisScript, enabled: false,
     redisClient: { get: async () => raw, eval: async () => { writes += 1; return 1; } },
     favoriteKey: (id) => id, MAX_FAVORITES: 5000, FAVORITES_CAS_RETRIES: 8,
     FAVORITES_CAS_SCRIPT: 'fixture-script',

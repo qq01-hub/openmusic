@@ -31,8 +31,8 @@ import { VariableSizeList, type ListChildComponentProps, type ListOnScrollProps 
 
 const VIRTUAL_LIST_THRESHOLD = 24;
 /**
- * VariableSizeList 用绝对定位；行高估矮或图片加载前量到偏矮高度时，会互相重叠。
- * 先走原生列表保证稳定；消息上限 400，性能可接受。
+ * VariableSizeList 用绝对定位；动态行高、图片和音乐卡片加载后会让滚动条估算产生偏差。
+ * 保留原生列表，先保证滚动位置和实际内容一致。
  */
 const VIRTUAL_LIST_ENABLED = false;
 const ROW_GAP_PX = 8;
@@ -223,6 +223,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const chatConfettiRootRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList>(null);
+  const scrollRafRef = useRef<number | null>(null);
   const rowHeightsRef = useRef(new Map<string, number>());
   const prevMessageCountRef = useRef(0);
   const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
@@ -250,8 +251,9 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
   const scrollToBottomEnd = useCallback((behavior: ScrollBehavior = 'instant') => {
     if (useVirtualList) {
-      if (messages.length > 0) {
-        listRef.current?.scrollToItem(messages.length - 1, 'end');
+      const count = useChatStore.getState().messages.length;
+      if (count > 0) {
+        listRef.current?.scrollToItem(count - 1, 'end');
       }
       return;
     }
@@ -260,7 +262,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     const el = chatScrollRoot;
     if (!el) return;
     el.scrollTo({ top: el.scrollHeight, behavior });
-  }, [chatScrollRoot, messages.length, useVirtualList]);
+  }, [chatScrollRoot, useVirtualList]);
 
   const flushWelcomeConfetti = useCallback(() => {
     if (pureMode || !pendingWelcomeConfettiRef.current) return;
@@ -556,6 +558,14 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     });
   }, [chatScrollRoot, roomMeta.id, hasMoreOlder, loadChatHistory]);
 
+  const scheduleHandleScroll = useCallback(() => {
+    if (scrollRafRef.current !== null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      handleScroll();
+    });
+  }, [handleScroll]);
+
   const onVirtualScroll = useCallback((props: ListOnScrollProps) => {
     if (!initialScrollDoneRef.current && stickToBottomRef.current) return;
     if (!props.scrollUpdateWasRequested) handleScroll();
@@ -564,9 +574,15 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   useEffect(() => {
     const el = chatScrollRoot;
     if (!el || useVirtualList) return;
-    el.addEventListener('scroll', handleScroll, { passive: true });
-    return () => el.removeEventListener('scroll', handleScroll);
-  }, [chatScrollRoot, handleScroll, useVirtualList]);
+    el.addEventListener('scroll', scheduleHandleScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', scheduleHandleScroll);
+      if (scrollRafRef.current !== null) {
+        cancelAnimationFrame(scrollRafRef.current);
+        scrollRafRef.current = null;
+      }
+    };
+  }, [chatScrollRoot, scheduleHandleScroll, useVirtualList]);
 
   useEffect(() => {
     if (!messages.length || typeof Notification === 'undefined') return;
@@ -675,31 +691,42 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
       ref={bindScrollRoot}
       className="h-full space-y-2 overflow-x-hidden overflow-y-auto px-3 py-2 pb-3"
     >
-      {messages.map((msg) => (
-        <ChatMessageRow
-          key={msg.id}
-          msg={msg}
-          room={roomMeta}
-          myUserId={myUserId}
-          pureMode={pureMode}
-          pureImageRevealed={revealedPureImages.has(msg.id)}
-          aiProcessing={processingMessages.get(msg.id) || null}
-          reactionPickerOpen={reactionPickerMessageId === msg.id}
-          chatMuted={chatMuted}
-          canModerate={canModerate}
-          chatScrollRoot={chatScrollRoot}
-          chatPanelRef={chatPanelRef}
-          onReply={onReply}
-          onRecall={onRecall}
-          onMentionUser={onMentionUser}
-          onToggleReaction={onToggleReaction}
-          onOpenReactionPicker={onReactionPickerChange}
-          onRevealPureImage={handleRevealPureImage}
-          onPreviewImage={onPreviewImage}
-          cardActions={cardActions}
-          onContentResize={handleStickyContentResize}
-        />
-      ))}
+      {messages.map((msg) => {
+        // 保留原生滚动容器和真实文档流，只让浏览器跳过视口外消息的布局与绘制
+        // contain-intrinsic-size 让滚动条继续使用稳定的占位高度，进入视口后由真实高度接管
+        const intrinsicSize = estimateMessageHeight(msg);
+        return (
+          <div
+            key={msg.id}
+            data-chat-message-row={msg.id}
+            className="chat-message-render-boundary"
+            style={{ containIntrinsicSize: `auto ${intrinsicSize}px` }}
+          >
+            <ChatMessageRow
+              msg={msg}
+              room={roomMeta}
+              myUserId={myUserId}
+              pureMode={pureMode}
+              pureImageRevealed={revealedPureImages.has(msg.id)}
+              aiProcessing={processingMessages.get(msg.id) || null}
+              reactionPickerOpen={reactionPickerMessageId === msg.id}
+              chatMuted={chatMuted}
+              canModerate={canModerate}
+              chatScrollRoot={chatScrollRoot}
+              chatPanelRef={chatPanelRef}
+              onReply={onReply}
+              onRecall={onRecall}
+              onMentionUser={onMentionUser}
+              onToggleReaction={onToggleReaction}
+              onOpenReactionPicker={onReactionPickerChange}
+              onRevealPureImage={handleRevealPureImage}
+              onPreviewImage={onPreviewImage}
+              cardActions={cardActions}
+              onContentResize={handleStickyContentResize}
+            />
+          </div>
+        );
+      })}
       <div className="h-px w-full shrink-0" aria-hidden />
     </div>
   );

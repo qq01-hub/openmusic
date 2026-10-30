@@ -1,3 +1,4 @@
+import { interruptAudioFocus, isAudioFocusInterrupted, resumeAudioFocus } from '../lib/audioFocus';
 import { useEffect, useRef, useCallback, useState, type MutableRefObject } from 'react';
 import { useRoomStore } from '../stores/roomStore';
 import { useAudioStore } from '../stores/audioStore';
@@ -19,6 +20,7 @@ import { getAudioController } from '../lib/audioController';
 import {
   onWeChatBridgeReady,
   playInUserGesture,
+  tryPlay,
   tryPlayWithAutoplayFallback,
   assessPlaybackResult,
   playbackNeedsUnlock,
@@ -28,6 +30,9 @@ import {
   shouldShowUnlockOverlay,
   shouldPromptAudioUnlock,
   isMobileDevice,
+  isIOS,
+  isAudioOutputRunning,
+  getAudioOutputDiagnostics,
   isRestrictedAutoplayEnv,
   type PlayResult,
 } from '../lib/audioUnlock';
@@ -57,8 +62,12 @@ import {
   isCachedUrlCrossSource,
   getCachedUrlCrossSourceFrom,
   getTrackCrossSourceFrom,
+  bindSongPlaybackQuality,
+  recordPlayableSongQuality,
+  getSongPlaybackQualityAttempt,
 } from '../lib/songPreloadCache';
-import { resolveQishuiLocalPlaybackUrl } from '../lib/qishuiLocalPlayback';
+import { resolveQishuiLocalPlaybackUrl, retainQishuiPlaybackUrl } from '../lib/qishuiLocalPlayback';
+import { seekAudioTo, isExpectedAudioSeek, finishAudioSeek } from '../lib/audioSeek';
 import { refreshSignedApiUrl, signApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
 import { isProxiedMediaUrl, isSameOriginMediaUrl, shouldProxyInsecurePlaybackUrl, toProxiedMediaUrl, unwrapProxiedMediaUrl } from '../lib/mediaProxyUrl';
 import { shouldProxySongPlaybackUrl } from '../lib/roomVisualPreset';
@@ -68,11 +77,11 @@ import {
   MAX_TEMP_PLAYBACK_RETRIES,
   SourceUnavailableError,
 } from '../lib/audioPlaybackError';
+import { rememberUnsupportedIosQuality, getIosQualityRevision } from '../lib/iosPlaybackQuality';
 import {
   recordSongPlaybackFailure,
   recordSongPlaybackSuccess,
   isPlaybackQualityLockedToLowest,
-  lockPlaybackQualityToLowest,
 } from '../lib/playbackQualityLock';
 import { waitForAudioCanPlay } from '../lib/audioReady';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
@@ -101,6 +110,7 @@ import {
   getQualityLabel,
   getUserPlaybackQuality,
 } from '../api/music/quality';
+import { createPlaybackAdvanceGuard } from '../lib/playbackAdvanceGuard';
 
 /** 主控本机失败后的本地恢复间隔：不切歌，等网络恢复再重试 */
 const LOCAL_PLAYBACK_RECOVERY_MS = 8000;
@@ -111,6 +121,7 @@ const LOCAL_RECOVERY_TOAST_COOLDOWN_MS = 20000;
 const SOURCE_ERROR_SERVER_VERIFY_AFTER = 2;
 /** 单次取链（含跨源）总超时，避免卡在 loading 拖死全屋 */
 const RESOLVE_URL_TIMEOUT_MS = 15000;
+const pendingQualityFallbacks = new WeakSet<Set<string>>();
 /** 主控 loading 过久仍无结果时强制走音源异常切歌 */
 const LEADER_LOAD_STUCK_SKIP_MS = 20000;
 /** 主控长时间无法把 audio 绑到当前曲时强制切歌（无 duration 时服务端也不会自动推进） */
@@ -138,26 +149,6 @@ function isSourceUnavailableReason(reason: string): boolean {
     || reason === 'service_no_fallback';
 }
 
-/**
- * 本机播放失败时降到最低音质（仅本机，不影响房间设置），并提示用户。
- * @returns 本次是否新触发了降档
- */
-function ensureLowestQualityForLocalRecovery(song: QueueItem): boolean {
-  const source = song.source || 'netease';
-  const current = getUserPlaybackQuality(source);
-  const lowest = getLowestQuality(source);
-  if (!lowest) return false;
-
-  const alreadyLowest = Boolean(
-    current && (current === lowest || isPlaybackQualityLockedToLowest()),
-  );
-  if (alreadyLowest) return false;
-
-  lockPlaybackQualityToLowest();
-  invalidateTrackUrlCache(song);
-  return true;
-}
-
 function notifyLocalRecoveryToast(
   song: QueueItem,
   options: { qualityDowngraded: boolean; reason: string },
@@ -182,10 +173,11 @@ function notifyLocalRecoveryToast(
 
 /** 播放出错/卡顿时换发新签名并续播，避免 om_ts 过期后 Range 请求 403 */
 async function reloadAudioWithFreshSign(audio: HTMLAudioElement): Promise<void> {
+  if (isAudioFocusInterrupted(audio)) return;
   const prevSrc = audio.currentSrc || audio.src;
   if (!prevSrc) {
     audio.load();
-    await audio.play().catch(() => {});
+    if (!isAudioFocusInterrupted(audio)) await tryPlay(audio);
     return;
   }
   const fresh = (await refreshSignedApiUrl(prevSrc)) || prevSrc;
@@ -193,18 +185,18 @@ async function reloadAudioWithFreshSign(audio: HTMLAudioElement): Promise<void> 
   if (fresh !== prevSrc) {
     audio.src = fresh;
     try {
-      if (resumeAt > 0) audio.currentTime = resumeAt;
+      if (resumeAt > 0) seekAudioTo(audio, resumeAt);
     } catch {
       // ignore seek failures before metadata
     }
   }
   audio.load();
   try {
-    if (resumeAt > 0) audio.currentTime = resumeAt;
+    if (resumeAt > 0) seekAudioTo(audio, resumeAt);
   } catch {
     // ignore
   }
-  await audio.play().catch(() => {});
+  if (!isAudioFocusInterrupted(audio)) await tryPlay(audio);
 }
 
 let audioListenersAttached = false;
@@ -238,6 +230,7 @@ interface AudioRuntime {
   suppressAutoResumeRef: MutableRefObject<boolean>;
   tempRetries: MutableRefObject<number>;
   lowestFallbackAttempted: MutableRefObject<boolean>;
+  qualityFallbackAttempts: MutableRefObject<Set<string>>;
   successRecordedTrackKey: MutableRefObject<string | null>;
   stallRetryTimer: MutableRefObject<number | null>;
   /** 首次解密较慢时，metadata 到达后补一次播放和进度对齐 */
@@ -267,6 +260,7 @@ function revertUnauthorizedSeek(audio: HTMLAudioElement): void {
   if (canSeekInRoom(live, canControlPlayback)) return;
   const current = live?.current;
   if (!current || !isAudioBoundToQueue(audio, current.queueId)) return;
+  if (isExpectedAudioSeek(audio)) return;
 
   const state = getClientPlaybackState();
   const expected = state?.trackId === current.queueId
@@ -276,7 +270,7 @@ function revertUnauthorizedSeek(audio: HTMLAudioElement): void {
 
   enforcingFollowerSeek = true;
   try {
-    audio.currentTime = Math.max(0, expected);
+    seekAudioTo(audio, Math.max(0, expected));
     snapSmoothPlaybackTime(expected);
   } finally {
     enforcingFollowerSeek = false;
@@ -364,12 +358,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const prevQueueIdRef = useRef<string | null>(null);
   const tempRetries = useRef(0);
   const lowestFallbackAttempted = useRef(false);
+  const qualityFallbackAttempts = useRef(new Set<string>());
   const successRecordedTrackKey = useRef<string | null>(null);
   const stallRetryTimer = useRef<number | null>(null);
   const readyRecoveryTimer = useRef<number | null>(null);
   const lastSkipAt = useRef(0);
   const wasLeaderRef = useRef(isPlaybackLeader);
   const resolveFailCountRef = useRef<{ queueId: string; count: number } | null>(null);
+  const playbackAdvanceGuardRef = useRef(createPlaybackAdvanceGuard());
   /** 当前曲目本地汽水解密任务；切歌时立即终止，避免旧曲继续占用浏览器 CPU/带宽。 */
   const qishuiLocalAbortRef = useRef<AbortController | null>(null);
 
@@ -378,12 +374,19 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     return endedTrackKey.current === trackKeyOf(song);
   }, []);
 
-  const handleBeyondDuration = useCallback((song: QueueItem) => {
-    if (!useRoomStore.getState().isPlaybackLeader) return;
-    finishSong(song.queueId);
+  const finishSongOnce = useCallback((queueId: string) => {
+    const live = useRoomStore.getState();
+    if (!live.isPlaybackLeader || live.room?.current?.queueId !== queueId) return;
+    if (!playbackAdvanceGuardRef.current.claim(queueId)) return;
+    void finishSong(queueId);
   }, [finishSong]);
 
+  const handleBeyondDuration = useCallback((song: QueueItem) => {
+    finishSongOnce(song.queueId);
+  }, [finishSongOnce]);
+
   const playAudio = useCallback(async (audio: HTMLAudioElement) => {
+    if (isAudioFocusInterrupted(audio)) return 'blocked' as PlayResult;
     if (isRoomAudioTakenOver()) {
       if (!audio.paused) audio.pause();
       return 'played' as PlayResult;
@@ -398,7 +401,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     audio: HTMLAudioElement,
     liveRoom: NonNullable<typeof room>,
   ) => {
-    if (isRoomAudioTakenOver()) {
+    if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) {
       if (!audio.paused) audio.pause();
       return;
     }
@@ -419,12 +422,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
       if (isAudioSessionUnlocked()) {
         controller.enqueue(async () => {
-          if (isRoomAudioTakenOver()) {
+          if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) {
             if (!audio.paused) audio.pause();
             return;
           }
-          await audio.play().catch(() => {});
-          if (audio.paused) {
+          const retry = await playAudio(audio);
+          if (playbackNeedsUnlock(retry, audio)) {
             resetAudioSessionUnlocked();
             if (shouldShowUnlockOverlay()) {
               useAudioStore.getState().setNeedsAudioUnlock(true);
@@ -439,7 +442,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       return;
     }
     setNeedsAudioUnlock(false);
-  }, [controller, setNeedsAudioUnlock]);
+  }, [controller, playAudio, setNeedsAudioUnlock]);
 
   const handleSyncResult = useCallback((
     result: Awaited<ReturnType<typeof applyFollowerSync>>,
@@ -458,6 +461,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (result === 'blocked' || result === 'error') {
       applyPlaybackResult(result, audio, liveRoom);
     } else if (result === 'played') {
+      if (playbackNeedsUnlock(result, audio)) {
+        applyPlaybackResult(result, audio, liveRoom);
+        return;
+      }
       endedTrackKey.current = null;
       setNeedsAudioUnlock(false);
     }
@@ -475,11 +482,13 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const applySync = useCallback((
     options: { forceZero?: boolean; forceTime?: number; forceCorrection?: boolean } = {},
   ) => {
+    const expectedQueueId = useRoomStore.getState().room?.current?.queueId;
     controller.enqueue(async () => {
       // 本机被更高优先级占用（试听 / 聊天音乐卡片）时禁止跟播，避免抢回音频输出
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || skippingRef.current) return;
+      if (liveRoom.current.queueId !== expectedQueueId) return;
       const song = liveRoom.current;
       const audio = controller.audio;
       if (!isAudioBoundToQueue(audio, song.queueId)) return;
@@ -500,7 +509,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   }, [controller, tvMode, shouldSkipForEndedTrackKey, handleSyncResult]);
 
   const recoverReadyAudio = useCallback((audio: HTMLAudioElement) => {
-    if (isRoomAudioTakenOver() || skippingRef.current) return;
+    if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio) || skippingRef.current) return;
+    // loadedmetadata/loadeddata 早于 canplay，加载期间不能提前启动正式播放
+    if (useAudioStore.getState().trackLoading) return;
     const liveRoom = useRoomStore.getState().room;
     if (!liveRoom?.current || !liveRoom.isPlaying) return;
     if (!isAudioBoundToQueue(audio, liveRoom.current.queueId)) return;
@@ -516,7 +527,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   const applyVisibilitySync = useCallback(() => {
     controller.enqueue(async () => {
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || !liveRoom.isPlaying || skippingRef.current) return;
       const song = liveRoom.current;
@@ -629,7 +640,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const scheduleLocalRecovery = useCallback((song: QueueItem, reason: string) => {
     const queueId = song.queueId;
     const sourceIssue = isSourceUnavailableReason(reason);
-    const qualityDowngraded = sourceIssue ? false : ensureLowestQualityForLocalRecovery(song);
+    // 加载慢或播放授权未完成时仅重试，音质降级由实际媒体错误逐档处理
+    const qualityDowngraded = false;
     notifyLocalRecoveryToast(song, { qualityDowngraded, reason });
 
     if (localRecoveryTimer && localRecoveryQueueId === queueId) return;
@@ -661,6 +673,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       invalidateTrackUrlCache(live);
       tempRetries.current = 0;
       lowestFallbackAttempted.current = false;
+      qualityFallbackAttempts.current = new Set();
       loadLockRef.current = EMPTY_LOAD_LOCK;
       setLoadRetryNonce((n) => n + 1);
     }, delayMs);
@@ -676,11 +689,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       suppressAutoResumeRef,
       tempRetries,
       lowestFallbackAttempted,
+      qualityFallbackAttempts,
       successRecordedTrackKey,
       stallRetryTimer,
       readyRecoveryTimer,
       scheduleLocalRecovery,
-      finishSong,
+      finishSong: finishSongOnce,
       playAudio,
       applyPlaybackResult,
       recoverReadyAudio,
@@ -692,6 +706,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       attachAudioBufferingListeners(audio);
 
       audio.addEventListener('ended', () => {
+        if (isAudioFocusInterrupted(audio)) return;
         const runtime = activeAudioRuntime;
         if (!runtime) return;
         // 息屏时部分 WebView 会误触发 ended（未真正播完），不可据此切歌/停房
@@ -704,9 +719,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             if (live.room?.isPlaying && live.room.current) {
               // ended 状态下 play() 会把进度归零，续播后钉回原处
               const resumeAt = audio.currentTime;
-              void audio.play().then(() => {
+              if (!isAudioFocusInterrupted(audio)) void audio.play().then(() => {
                 if (resumeAt > 1 && audio.currentTime < resumeAt - 1) {
-                  audio.currentTime = resumeAt;
+                  seekAudioTo(audio, resumeAt);
                 }
               }).catch(() => {});
             }
@@ -736,8 +751,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
       audio.addEventListener('pause', () => {
         // 本机被更高优先级占用（试听 / 聊天音乐卡片）时不自动恢复房间播放
-        if (isRoomAudioTakenOver()) return;
-        // 仅对抗息屏瞬间的系统挂起；锁屏控件主动暂停不在此窗口内
+        if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
+        // 本机主动暂停及换源窗口不视作系统焦点中断
         if (intentionalLocalPauseRef.current) return;
         // 播完触发的 pause：此时元素处于 ended，play() 会从 0 重放同一首。
         // 后台切歌要等取链，旧曲会被从头顶播两秒；恢复交给 applyFollowerSync。
@@ -745,27 +760,27 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         const runtime = activeAudioRuntime;
         // 切歌/换源窗口：旧 src 可能被误 play，尤其是后台主线程节流时
         if (runtime?.suppressAutoResumeRef.current) return;
-        if (isLikelySystemMediaSuspend()) {
-          const live = useRoomStore.getState();
-          if (!live.room?.isPlaying || !live.room.current) return;
-          if (!isAudioBoundToQueue(audio, live.room.current.queueId)) return;
-          void audio.play().catch(() => {});
-          return;
-        }
-        // 系统关掉媒体卡片时可能直接 pause 元素，房间仍在播 → 静默续上，不碰进度条
         const live = useRoomStore.getState();
-        if (!live.room?.isPlaying || !live.room.current) return;
+        if (!audio.paused || audio.error || !live.room?.isPlaying || !live.room.current) return;
         if (!isAudioBoundToQueue(audio, live.room.current.queueId)) return;
-        void audio.play().catch(() => {});
+        // 外部视频、通话或耳机切换造成的暂停不得自动抢回，只暂停本机跟播
+        interruptAudioFocus(audio);
+        resetAudioSessionUnlocked();
+        useAudioStore.getState().setNeedsAudioUnlock(true);
       });
 
       audio.addEventListener('seeking', () => {
+        if (isIOS()) recordPlayableSongQuality(audio);
         if (enforcingFollowerSeek) return;
         revertUnauthorizedSeek(audio);
       });
 
       audio.addEventListener('seeked', () => {
         if (enforcingFollowerSeek) return;
+        if (isExpectedAudioSeek(audio)) {
+          finishAudioSeek(audio);
+          return;
+        }
         revertUnauthorizedSeek(audio);
       });
 
@@ -778,6 +793,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           networkState: audio.networkState,
           errorCode: audio.error?.code ?? null,
           errorMessage: audio.error?.message || null,
+          outputState: getAudioOutputDiagnostics(audio).state,
           proxied: Boolean(audio.currentSrc && isProxiedMediaUrl(audio.currentSrc)),
         }));
         const live = useRoomStore.getState();
@@ -802,7 +818,34 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           return;
         }
 
-        void classifyMediaPlaybackError(audio).then((errorClass) => {
+        const failedSrc = audio.currentSrc || audio.src;
+        const attempts = runtime.qualityFallbackAttempts.current;
+        const boundAttempt = getSongPlaybackQualityAttempt(audio);
+        const boundQuality = boundAttempt?.quality;
+        if (isIOS() && boundQuality) attempts.add(boundQuality);
+        if (pendingQualityFallbacks.has(attempts)) return;
+        pendingQualityFallbacks.add(attempts);
+        void classifyMediaPlaybackError(audio, (probe) => {
+          const attempted = [...attempts];
+          const failedQuality = boundQuality || attempted.at(-1) || getUserPlaybackQuality(song.source || 'netease');
+          if (isIOS() && (!boundAttempt || boundAttempt.revision === getIosQualityRevision(song.source || 'netease'))) {
+            rememberUnsupportedIosQuality(song.source || 'netease', failedQuality, probe?.contentType);
+          }
+          debugLog('audio_media_probe', debugLine({
+            queueId: song.queueId,
+            failedQuality,
+            status: probe?.status ?? null,
+            contentType: probe?.contentType || null,
+            contentLength: probe?.contentLength || null,
+            contentRange: probe?.contentRange || null,
+            acceptRanges: probe?.acceptRanges || null,
+          }));
+        }).then((errorClass) => {
+          if (
+            runtime.qualityFallbackAttempts.current !== attempts
+            || !isAudioBoundToQueue(audio, song.queueId)
+            || (audio.currentSrc || audio.src) !== failedSrc
+          ) return;
           if (errorClass === 'temporary') {
             if (runtime.tempRetries.current < MAX_TEMP_PLAYBACK_RETRIES) {
               runtime.tempRetries.current += 1;
@@ -820,17 +863,24 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           // 先清掉各音质旧缓存，避免下一次加载再次命中同一坏链。
           invalidateTrackUrlCache(song);
 
-          if (runtime.lowestFallbackAttempted.current) {
+          const lowest = getLowestQuality(song.source || 'netease');
+          const canContinueIosFallback = isIOS() && lowest && !attempts.has(lowest)
+            && !isTrackCrossSource(song) && !isCachedUrlCrossSource(song);
+          if (runtime.lowestFallbackAttempted.current && !canContinueIosFallback) {
             runtime.scheduleLocalRecovery(song, 'service_fallback_exhausted');
             return;
           }
 
           runtime.lowestFallbackAttempted.current = true;
           const beforeLocked = isPlaybackQualityLockedToLowest();
-          void fetchServiceFallbackUrl(song).then(async (fallbackUrl) => {
+          return fetchServiceFallbackUrl(song, attempts).then(async (fallbackUrl) => {
+            if (
+              runtime.qualityFallbackAttempts.current !== attempts
+              || !isAudioBoundToQueue(audio, song.queueId)
+              || (audio.currentSrc || audio.src) !== failedSrc
+            ) return;
             if (fallbackUrl) {
-              const qualityDowngraded = ensureLowestQualityForLocalRecovery(song)
-                || (!beforeLocked && isPlaybackQualityLockedToLowest());
+              const qualityDowngraded = !beforeLocked && isPlaybackQualityLockedToLowest();
               notifyLocalRecoveryToast(song, { qualityDowngraded, reason: 'media_quality_fallback' });
               runtime.tempRetries.current = 0;
               if (isCachedUrlCrossSource(song) || isTrackCrossSource(song)) {
@@ -838,18 +888,35 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               }
               const freshFallback = (await refreshSignedApiUrl(fallbackUrl)) || fallbackUrl;
               controller.enqueue(async () => {
+                if (
+                  runtime.qualityFallbackAttempts.current !== attempts
+                  || useRoomStore.getState().room?.current?.queueId !== song.queueId
+                ) return;
                 const a = controller.audio;
                 a.pause();
                 // 直接换 src，勿对旧媒体 seek 0（否则可能闪播旧源开头）
                 a.src = freshFallback;
                 bindAudioQueueId(a, song.queueId);
+                bindSongPlaybackQuality(a, song.source || 'netease', fallbackUrl);
                 a.load();
-                await a.play().catch(() => {});
+                debugLog('audio_quality_fallback', debugLine({
+                  queueId: song.queueId,
+                  attemptedQualities: [...attempts].join('>'),
+                  lowestLocked: isPlaybackQualityLockedToLowest(),
+                }));
+                if (!isAudioFocusInterrupted(a)) await tryPlay(a);
               });
               return;
             }
             runtime.scheduleLocalRecovery(song, 'service_no_fallback');
           });
+        }).catch(() => {
+          if (
+            runtime.qualityFallbackAttempts.current === attempts
+            && isAudioBoundToQueue(audio, song.queueId)
+          ) runtime.scheduleLocalRecovery(song, 'fallback_request_failed');
+        }).finally(() => {
+          pendingQualityFallbacks.delete(attempts);
         });
       });
 
@@ -907,9 +974,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
                   fromProxied: false,
                 }));
                 if (resumeAt > 0) {
-                  try { controller.audio.currentTime = resumeAt; } catch { /* metadata 尚未就绪 */ }
+                  try { seekAudioTo(controller.audio, resumeAt); } catch { /* metadata 尚未就绪 */ }
                 }
-                await controller.audio.play().catch(() => {});
+                if (!isAudioFocusInterrupted(controller.audio)) await tryPlay(controller.audio);
                 return;
               }
             }
@@ -917,6 +984,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             await reloadAudioWithFreshSign(controller.audio);
           });
         }, 2500);
+      });
+
+      audio.addEventListener('timeupdate', () => {
+        const live = useRoomStore.getState().room?.current;
+        if (isIOS() && live && isAudioBoundToQueue(audio, live.queueId)
+          && !isRoomAudioTakenOver() && !isAudioFocusInterrupted(audio) && isAudioOutputRunning(audio)) {
+          recordPlayableSongQuality(audio);
+        }
       });
 
       audio.addEventListener('playing', () => {
@@ -938,7 +1013,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             const trackKey = trackKeyOf(live);
             if (runtime.successRecordedTrackKey.current !== trackKey) {
               runtime.successRecordedTrackKey.current = trackKey;
-              const recovered = recordSongPlaybackSuccess();
+              const recovered = !isIOS() && recordSongPlaybackSuccess();
               if (recovered) {
                 invalidateUnloadedSongUrlCache(trackKey);
                 const preferred = getUserPlaybackQuality(live.source || 'netease');
@@ -951,11 +1026,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           }
         }
         ensureGalaxyAudioOutputIfLoaded();
-        markAudioSessionUnlocked();
-        useAudioStore.getState().setNeedsAudioUnlock(false);
+        if (isAudioOutputRunning(audio)) {
+          markAudioSessionUnlocked();
+          useAudioStore.getState().setNeedsAudioUnlock(false);
+        } else {
+          // playing 可能早于 AudioContext.resume 完成，授权结果交由 playAudio 复查
+          resumeSharedAudioOutput();
+        }
         const live = useRoomStore.getState().room;
         if (live?.queue.length || live?.nextRandom) {
-          prefetchUpcomingFromRoom(live);
+          prefetchUpcomingFromRoom(live, { includeCurrent: false });
         }
       });
 
@@ -999,7 +1079,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
 
     return audio;
-  }, [controller, scheduleLocalRecovery, finishSong, playAudio, applyPlaybackResult, recoverReadyAudio]);
+  }, [controller, scheduleLocalRecovery, finishSongOnce, playAudio, applyPlaybackResult, recoverReadyAudio]);
 
   const retryPlayback = useCallback(async (fromUserGesture = false) => {
     const liveRoom = useRoomStore.getState().room;
@@ -1011,13 +1091,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
 
     // 用户主动恢复房间播放时结束本机占用（试听 / 卡片播放）；静默跟播则继续让路
-    if (isRoomAudioTakenOver()) {
+    if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) {
       if (!fromUserGesture) return;
       if (getRoomAudioOwner() === 'chat_card') stopChatCardPlayback({ resumeRoom: false });
       else stopSongPreview({ resumeRoom: false });
     }
 
     if (fromUserGesture) {
+      resumeAudioFocus(controller.audio);
       resumeSharedAudioOutput();
       markAudioSessionUnlocked();
       setNeedsAudioUnlock(false);
@@ -1138,6 +1219,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       const loadStartedAt = performance.now();
       tempRetries.current = 0;
       lowestFallbackAttempted.current = false;
+      qualityFallbackAttempts.current = new Set();
       successRecordedTrackKey.current = null;
       setTrackLoading(true);
       debugLog('track_load_start', debugLine({
@@ -1194,7 +1276,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           if (current.source === 'qishui' && /\/api\/qishui-source(?:\?|$)/i.test(url)) {
             const localAbort = new AbortController();
             qishuiLocalAbortRef.current = localAbort;
-            let localResult = await resolveQishuiLocalPlaybackUrl(url, localAbort.signal);
+            let localResult = await resolveQishuiLocalPlaybackUrl(url, localAbort.signal, Boolean(room?.qishuiProxyEnabled));
             // 服务重启后旧的汽水播放会话会失效；清掉缓存地址后重取一次。
             if (localResult.status === 'failed' && !localAbort.signal.aborted) {
               invalidateTrackUrlCache(current);
@@ -1202,7 +1284,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               if (gen !== loadGeneration.current) return;
               resolvedMeta = refreshed;
               url = (await refreshSignedApiUrl(refreshed.url)) || refreshed.url;
-              localResult = await resolveQishuiLocalPlaybackUrl(url, localAbort.signal);
+              localResult = await resolveQishuiLocalPlaybackUrl(url, localAbort.signal, Boolean(room?.qishuiProxyEnabled));
             }
             if (gen !== loadGeneration.current || localAbort.signal.aborted || localResult.status === 'aborted') {
               return;
@@ -1276,7 +1358,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
         if (gen !== loadGeneration.current) return;
 
-        const needsOutputGain = Number(loudness?.gain) > 0;
+        const qishuiProxyPlayback = current.source === 'qishui' && Boolean(room?.qishuiProxyEnabled);
+        const needsOutputGain = isIOS() || qishuiProxyPlayback
+          || (crossSource ? crossSourceFrom : current.source) === 'kugou' || Number(loudness?.gain) > 0;
         const releaseOutputGain = hasSharedAudioOutput() && !needsOutputGain && !shouldProxySongPlaybackUrl();
         const useOutputGain = needsOutputGain || (hasSharedAudioOutput() && !releaseOutputGain);
         if (releaseOutputGain && isProxiedMediaUrl(playbackUrl)) {
@@ -1302,7 +1386,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           }
           const audio = controller.audio;
           if (useOutputGain) getSharedAudioOutputSource();
-          applyTrackLoudness(loudness);
+          applyTrackLoudness(loudness, crossSource ? crossSourceFrom : (current.source || 'netease'));
           audio.pause();
           clearAudioQueueBinding(audio);
           // 先用已知进度占位，避免换源瞬间进度条跳回 0；真正对齐在 load 完成后 forceTime
@@ -1314,7 +1398,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             snapSmoothPlaybackTime(justSkippedRef.current ? 0 : previewTime);
           }
           audio.src = playbackUrl;
+          retainQishuiPlaybackUrl(playbackUrl);
           bindAudioQueueId(audio, current.queueId);
+          bindSongPlaybackQuality(audio, current.source || 'netease', url);
           audio.load();
           debugLog('track_audio_bound', debugLine({
             queueId: current.queueId,
@@ -1336,9 +1422,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             if (gen !== loadGeneration.current) return;
             const audio = controller.audio;
             const earlyProbe = await playAudio(audio);
-            if (!playbackNeedsUnlock(earlyProbe, audio)) {
-              audio.pause();
-            }
+            // 尚在取流的 play 请求不能被主动暂停，否则 metadata 预载可能停在未就绪状态
+            if (earlyProbe === 'played') audio.pause();
             if (playbackNeedsUnlock(earlyProbe, audio) && liveAfterSrc) {
               applyPlaybackResult(earlyProbe, audio, liveAfterSrc);
             }
@@ -1356,7 +1441,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }));
 
         // 仅缓存/同步服务端地址；blob: 只属于当前浏览器，不能发给房间内其他用户。
-        rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);
+        const usedQualityFallback = qualityFallbackAttempts.current.size > 0;
+        if (!usedQualityFallback) {
+          rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);
+        }
         if (duration && duration > 0) {
           const live = useRoomStore.getState().room;
           if (live?.current?.queueId === current.queueId) {
@@ -1368,20 +1456,24 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           setMediaDuration(trackKey, duration);
           reportTrackDurationToServer(current.queueId, duration);
         }
-        useAudioStore.getState().setActualMedia(trackKey, {
-          qualityLabel,
-          source: crossSource ? crossSourceFrom : (current.source || 'netease'),
-        });
+        if (!usedQualityFallback) {
+          useAudioStore.getState().setActualMedia(trackKey, {
+            qualityLabel,
+            source: crossSource ? crossSourceFrom : (current.source || 'netease'),
+          });
+        }
         // 向房间分享当前曲链接，后续进房者可直接命中缓存
-        reportPlaybackMedia({
-          trackId: current.queueId,
-          url: stripApiSignParams(url),
-          qualityLabel,
-          crossSource,
-          crossSourceFrom,
-          loudness,
-          duration,
-        });
+        if (!usedQualityFallback) {
+          reportPlaybackMedia({
+            trackId: current.queueId,
+            url: stripApiSignParams(url),
+            qualityLabel,
+            crossSource,
+            crossSourceFrom,
+            loudness,
+            duration,
+          });
+        }
         syncMediaDuration(controller.audio, current, trackKey);
         tryFlushPendingSnapshot();
 
@@ -1397,9 +1489,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             if (gen !== loadGeneration.current) return;
             const audio = controller.audio;
             const probe = await playAudio(audio);
-            if (!playbackNeedsUnlock(probe, audio)) {
-              audio.pause();
-            }
+            // 正式同步统一在加载流程结束后执行，探测本身不应推进当前时间
+            audio.pause();
             if (playbackNeedsUnlock(probe, audio) && liveAfterLoad) {
               applyPlaybackResult(probe, audio, liveAfterLoad);
             }
@@ -1407,7 +1498,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }
 
         const liveRoom = useRoomStore.getState().room;
-        if (liveRoom) prefetchUpcomingFromRoom(liveRoom);
+        if (liveRoom) prefetchUpcomingFromRoom(liveRoom, { includeCurrent: false });
       } catch (err) {
         console.error('Failed to load song:', err);
         debugLog('track_load_failed', debugLine({
@@ -1463,6 +1554,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     room?.current?.id,
     room?.current?.queueId,
     room?.current?.source,
+    room?.current?.source === 'qishui' ? room?.qishuiProxyEnabled : false,
     loadRetryNonce,
     trackReloadNonce,
     sharedAudioGeneration,
@@ -1565,6 +1657,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   useEffect(() => {
     let lastWatchdogAt = 0;
     const runLoadWatchdog = () => {
+      if (isAudioFocusInterrupted(controller.audio)) return;
       const now = Date.now();
       if (now - lastWatchdogAt < LOAD_WATCHDOG_INTERVAL_MS) return;
       lastWatchdogAt = now;
@@ -1604,7 +1697,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   // 服务端 PlaybackState（150ms 防抖后）→ 统一同步
   useEffect(() => {
     if (trackLoading) return;
-    if (isRoomAudioTakenOver()) return;
+    if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
     const liveRoom = useRoomStore.getState().room;
     if (!liveRoom?.current) return;
     if (!canSyncAudioForQueue(controller.audio, liveRoom.current.queueId)) return;
@@ -1626,7 +1719,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
     const id = window.setInterval(() => {
       if (document.hidden) return;
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || !liveRoom.isPlaying) return;
       if (skippingRef.current || controller.isRunning) return;
@@ -1644,7 +1737,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   useEffect(() => {
     setAudioBufferEndHandler((audio) => {
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || skippingRef.current) return;
       if (!canSyncAudioForQueue(controller.audio, liveRoom.current.queueId)) return;
@@ -1653,7 +1746,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
       const song = liveRoom.current;
       controller.enqueue(async () => {
-        if (isRoomAudioTakenOver()) return;
+        if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
         await applyPostBufferSync(audio, {
           song,
           capTime: (time, mediaDur) => capSeekTime(time, song, mediaDur),
@@ -1677,14 +1770,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     applySync();
   }, [isPlaybackLeader, tvMode, room?.current?.queueId, trackLoading, applySync, controller]);
 
-  // visibilitychange / pageshow / focus：切走不做任何事；切回强制对齐并续播；脱节则重载/切歌
+  // 回到前台仅恢复未被系统媒体中断的播放；焦点中断须由用户主动恢复
   useEffect(() => {
     installBackgroundPlaybackGuards();
     let resumeTimer: number | null = null;
 
     const resumeFromForeground = () => {
       if (document.hidden) return;
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
 
       const live = useRoomStore.getState();
       const liveRoom = live.room;
@@ -1750,8 +1843,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
   const handlePlayPause = useCallback(() => {
     if (!room) return;
+    if (isAudioFocusInterrupted(controller.audio)) {
+      void retryPlayback(true);
+      return;
+    }
     togglePlay(!room.isPlaying);
-  }, [room, togglePlay]);
+  }, [controller, retryPlayback, room, togglePlay]);
 
   const handleLocalPlayback = useCallback((isPlaying: boolean) => {
     const live = useRoomStore.getState().room;
@@ -1775,6 +1872,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       }
       return;
     }
+    resumeAudioFocus(audio);
     if (live?.current) {
       const pos = Number.isFinite(audio.currentTime) && audio.currentTime > 0
         ? audio.currentTime
@@ -1786,7 +1884,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   }, [controller]);
 
   const handleSoftResumeLocalAudio = useCallback(() => {
-    if (isRoomAudioTakenOver()) return;
+    if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
     if (suppressAutoResumeRef.current) return;
     const live = useRoomStore.getState().room;
     const audio = controller.audio;
@@ -1812,7 +1910,6 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     useRoomStore.getState().setRoom({ ...live, currentTime: capped });
 
     if (canSyncAudioForQueue(controller.audio, current.queueId)) {
-      controller.audio.currentTime = capped;
       applySync({ forceTime: capped });
     }
     seek(capped);
@@ -1849,11 +1946,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   // 离开房间时清掉本机音频占用，避免带入下一个房间
   useEffect(() => () => {
     resetRoomAudioPriority();
-  }, []);
+    resumeAudioFocus(controller.audio);
+  }, [controller]);
   useEffect(() => {
     onWeChatBridgeReady(() => {
       const liveRoom = useRoomStore.getState().room;
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       if (!controller.audio.src || !liveRoom?.current || !liveRoom.isPlaying) return;
       if (!playbackStateMatchesCurrentTrack(liveRoom.current)) return;
       if (useAudioStore.getState().trackLoading || skippingRef.current) return;
@@ -1878,7 +1976,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   useEffect(() => {
     const check = () => {
       if (document.hidden) return;
-      if (isRoomAudioTakenOver()) return;
+      if (isRoomAudioTakenOver() || isAudioFocusInterrupted(controller.audio)) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || !liveRoom.isPlaying) return;
       const loading = useAudioStore.getState().trackLoading;

@@ -2,7 +2,7 @@
  * 轻量进程内响应缓存：同一 key 的并发加载共享同一个 Promise。
  * 失败不写入缓存，避免上游短暂故障被放大成缓存故障。
  */
-export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048 } = {}) {
+export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, shouldCache = () => true } = {}) {
   const values = new Map();
   const inflight = new Map();
 
@@ -31,7 +31,7 @@ export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048 } 
       .then(loader)
       .then((value) => {
         const effectiveTtlMs = Math.max(0, Number(requestedTtlMs) || 0);
-        if (effectiveTtlMs > 0) {
+        if (effectiveTtlMs > 0 && shouldCache(value)) {
           values.set(cacheKey, { value, expiresAt: Date.now() + effectiveTtlMs });
           prune();
         }

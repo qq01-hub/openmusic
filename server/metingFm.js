@@ -132,12 +132,12 @@ function normalizeFmSongs(raw, source = 'netease', excludedIds = new Set()) {
   return songs;
 }
 
-const MAX_FM_RETRIES = 5;
+const MAX_FM_RETRIES = 2;
 const FM_RETRY_BACKOFF_MS = 800;
 // FM 整体失败后的熔断窗口：空队列的房间会以自动推进节奏反复预取，
-// 上游长期不可用时避免每个 tick 都打满 5 次重试
+// 上游长期不可用时避免每个 tick 都重复请求
 const FM_FAILURE_COOLDOWN_MS = 30_000;
-let fmFailureCooldownUntil = 0;
+const fmFailureCooldowns = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -146,66 +146,89 @@ function sleep(ms) {
 /**
  * 私人漫游（网易 / QQ / 酷狗 / 汽水）。
  * - 传入 ephemeralCookie（无 VIP 本地账号）：走 Meting /admin/fm，不入库
- * - 否则走 type=fm；有 roomId 时房间账号优先，否则用 Meting 原有 Cookie 池
+ * - 私有账号无结果或不可用时走公共 type=fm，使用 Meting 原有 Cookie 池
  * - QQ 仅支持猜你喜欢，无熟悉/探索等模式
  */
 export async function fetchMetingFmSongs(fmMode = DEFAULT_FM_MODE, options = {}) {
   if (normalizeFmMode(fmMode) === FM_MODE_OFF) return [];
-  if (Date.now() < fmFailureCooldownUntil) return [];
-
   const roomId = String(options.roomId || '').trim();
   const roomName = String(options.roomName || '私人漫游');
-  const ephemeralCookie = String(options.ephemeralCookie || '').trim();
+  let ephemeralCookie = String(options.ephemeralCookie || '').trim();
   const mode = normalizeFmMode(fmMode);
   const source = normalizeFmSource(options.source);
+  const onAccountInvalid = typeof options.onAccountInvalid === 'function' ? options.onAccountInvalid : null;
+  const cooldownKey = `${roomId}:${source}:${mode}`;
+  const now = Date.now();
+  for (const [key, until] of fmFailureCooldowns) {
+    if (until <= now) fmFailureCooldowns.delete(key);
+  }
+  const cooldownUntil = fmFailureCooldowns.get(cooldownKey) || 0;
+  if (now < cooldownUntil) {
+    console.info('Meting FM skipped during cooldown', {
+      roomId,
+      source,
+      mode,
+      remainingMs: cooldownUntil - now,
+    });
+    return [];
+  }
   // 已保存的旧房间也必须遵守后台音源开关，避免关闭后仍被空队列预取触发上游请求。
   if (!isMusicSourceEnabled(source, getRuntimeConfig().musicSourcesEnabled)) return [];
   // QQ、酷狗无模式参数；其余平台 DEFAULT 不传 id。
   const modeId = ['tencent', 'kugou'].includes(source) || mode === 'DEFAULT' ? '' : mode;
   const excludedIds = new Set(Array.isArray(options.excludeIds) ? options.excludeIds.map((id) => String(id).trim()).filter(Boolean) : []);
+  const currentIds = new Set(options.currentSongId ? [String(options.currentSongId)] : []);
+  for (const id of currentIds) excludedIds.add(id);
+  const normalizeSongs = (raw) => {
+    const songs = normalizeFmSongs(raw, source, excludedIds);
+    if (songs.length || source !== 'tencent') return songs;
+    // QQ 推荐批次耗尽时只重播最久远的一首，下次重新推荐，始终排除当前曲
+    const repeats = new Map(normalizeFmSongs(raw, source, currentIds).map((song) => [song.id, song]));
+    for (const id of excludedIds) {
+      if (repeats.has(id)) return [repeats.get(id)];
+    }
+    return [];
+  };
 
   for (let i = 0; i < MAX_FM_RETRIES; i += 1) {
     if (i > 0) await sleep(FM_RETRY_BACKOFF_MS * i);
     try {
+      console.info('Meting FM request', {
+        roomId,
+        source,
+        mode,
+        attempt: i + 1,
+        accountCookie: Boolean(ephemeralCookie),
+      });
       if (ephemeralCookie) {
-        const result = await fetchEphemeralFmSong(ephemeralCookie, modeId, source, [...excludedIds]);
-        const songs = result.ok ? normalizeFmSongs(result.data, source, excludedIds) : [];
+        // QQ 在本层优先挑选未播歌曲，避免上游先排空整批后无法进入下一轮
+        const upstreamExcludedIds = source === 'tencent' ? currentIds : excludedIds;
+        const result = await fetchEphemeralFmSong(ephemeralCookie, modeId, source, [...upstreamExcludedIds]);
+        const songs = result.ok ? normalizeSongs(result.data) : [];
         if (songs.length) {
-          fmFailureCooldownUntil = 0;
+          fmFailureCooldowns.delete(cooldownKey);
+          console.info('Meting FM success', { roomId, source, mode, count: songs.length });
           return songs;
         }
 
-        // 账号漫游接口无结果时，尝试房间专属漫游接口。
-        if (roomId) {
-          const fallbackResponse = await runWithMetingRequestContext(
-            {
-              userId: '',
-              userNickname: '系统',
-              roomId,
-              roomName,
-            },
-            () => fetchMetingApi(buildFmQuery(fmMode, source), {}, 12000),
-          );
-          if (fallbackResponse.ok) {
-            const fallbackText = await fallbackResponse.text();
-            if (fallbackText.trim()) {
-              let fallbackData;
-              try {
-                fallbackData = JSON.parse(fallbackText);
-              } catch {
-                fallbackData = null;
-              }
-              const fallbackSongs = normalizeFmSongs(fallbackData, source, excludedIds);
-              if (fallbackSongs.length) {
-                fmFailureCooldownUntil = 0;
-                return fallbackSongs;
-              }
-            }
+        if (!result.ok) {
+          const accountInvalid = result.code === 'MUSIC_ACCOUNT_INVALID'
+            || /登录态.*(?:无效|过期)|登录.*(?:失效|过期)|未登录|需要登录|请.*登录|cookie.*(?:无效|失效|过期)|not logged in|login required|cookie.*expired/iu.test(String(result.error || ''));
+          if (accountInvalid) ephemeralCookie = '';
+          if (onAccountInvalid && accountInvalid) {
+            await onAccountInvalid({ status: Number(result.status), code: result.code, error: result.error || '' });
           }
+          console.warn('Meting FM account request failed', {
+            roomId,
+            source,
+            mode,
+            status: result.status || null,
+            code: result.code || null,
+            error: result.error || 'empty response',
+          });
         }
 
-        console.error('账号漫游无可用歌曲:', result.error || '返回为空');
-        continue;
+        // 保留房间日志归因，显式绕过房间私有账号路由
       }
 
       const response = await runWithMetingRequestContext(
@@ -214,10 +237,23 @@ export async function fetchMetingFmSongs(fmMode = DEFAULT_FM_MODE, options = {})
           userNickname: '系统',
           roomId,
           roomName,
+          usePublicMeting: true,
         },
         () => fetchMetingApi(buildFmQuery(fmMode, source), {}, 12000),
       );
-      if (!response.ok) continue;
+      if (!response.ok) {
+        let failure;
+        try { failure = JSON.parse(await response.text()); } catch { failure = null; }
+        console.warn('Meting FM public request failed', {
+          roomId,
+          source,
+          mode,
+          status: response.status || null,
+          code: failure?.code || null,
+          error: failure?.error || `HTTP ${response.status || 0}`,
+        });
+        continue;
+      }
 
       const text = await response.text();
       if (!text.trim()) continue;
@@ -229,17 +265,25 @@ export async function fetchMetingFmSongs(fmMode = DEFAULT_FM_MODE, options = {})
         continue;
       }
 
-      const songs = normalizeFmSongs(data, source, excludedIds);
+      const songs = normalizeSongs(data);
       if (songs.length) {
-        fmFailureCooldownUntil = 0;
+        fmFailureCooldowns.delete(cooldownKey);
+        console.info('Meting FM success', { roomId, source, mode, count: songs.length });
         return songs;
       }
     } catch (err) {
-      console.error('Meting FM error:', formatMetingFetchError(err));
+      console.error('Meting FM error:', { roomId, source, mode, code: err?.code || 'UPSTREAM_REQUEST_FAILED', error: formatMetingFetchError(err) });
     }
   }
 
-  fmFailureCooldownUntil = Date.now() + FM_FAILURE_COOLDOWN_MS;
+  if (fmFailureCooldowns.size >= 2048) fmFailureCooldowns.delete(fmFailureCooldowns.keys().next().value);
+  fmFailureCooldowns.set(cooldownKey, Date.now() + FM_FAILURE_COOLDOWN_MS);
+  console.info('Meting FM empty or failed', {
+    roomId,
+    source,
+    mode,
+    cooldownMs: FM_FAILURE_COOLDOWN_MS,
+  });
   console.error(`Meting FM 连续 ${MAX_FM_RETRIES} 次失败，${FM_FAILURE_COOLDOWN_MS / 1000}s 内暂停漫游预取`);
   return [];
 }

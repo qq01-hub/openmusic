@@ -4,6 +4,7 @@ import path from 'path';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { getRedisClient } from './roomStorage.js';
+import { evalRedisScript } from './redisScripts.js';
 
 const scrypt = promisify(scryptCallback);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +67,8 @@ function normalizeRecord(parsed) {
     mustChange: parsed.mustChange === true,
     linuxdo: normalizeOAuthBinding(parsed.linuxdo),
     github: normalizeOAuthBinding(parsed.github),
+    wechat_scan: normalizeOAuthBinding(parsed.wechat_scan),
+    qq_scan: normalizeOAuthBinding(parsed.qq_scan),
   };
 }
 
@@ -105,6 +108,31 @@ async function writeToRedis(record) {
     console.error('admin-credentials Redis 写入失败:', err?.message || err);
     return false;
   }
+}
+
+async function patchAdminRecord(patch, expectedHash) {
+  const client = getRedisClient();
+  if (!client) return null;
+  let saved = false;
+  try {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const raw = await client.get(CREDENTIALS_KEY);
+      const stored = raw ? JSON.parse(raw) : null;
+      if (!normalizeRecord(stored) || expectedHash !== undefined && stored.hash !== expectedHash) return null;
+      const result = await evalRedisScript(client,
+        "if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end; redis.call('SET', KEYS[1], ARGV[2]); return 1",
+        { keys: [CREDENTIALS_KEY], arguments: [raw, JSON.stringify({ ...stored, ...patch })] });
+      if (result !== 1) continue;
+      saved = true;
+      // 其他写入可能在确认响应之前已完成，重新读取后再更新凭据快照
+      const latest = normalizeRecord(JSON.parse(await client.get(CREDENTIALS_KEY)));
+      current = latest ? { ...latest, source: 'redis' } : null;
+      return current;
+    }
+  } catch {
+    if (saved) current = null;
+  }
+  return null;
 }
 
 function readLegacyLocalFile() {
@@ -215,17 +243,15 @@ export async function setAdminCredentials({ username, password, currentPassword 
     return { success: false, error: '不能继续使用默认密码，请设置更强的密码' };
   }
 
+  const verifiedHash = current.hash;
   const verified = await verifyAdminCredentials(current.username, currentPassword);
   if (!verified) return { success: false, error: '当前密码错误' };
 
   const record = await buildRecord(nextUsername, nextPassword, { mustChange: false });
-  // 改密不应顺带解绑 Linux.do / GitHub
-  if (current.linuxdo) record.linuxdo = current.linuxdo;
-  if (current.github) record.github = current.github;
-  const redisPersisted = await writeToRedis(record);
+  // 只更新凭据字段，保留 Redis 中最新的第三方绑定
+  const redisPersisted = await patchAdminRecord(record, verifiedHash);
   if (!redisPersisted) return { success: false, error: '管理员凭据写入 Redis 失败' };
 
-  current = { ...record, source: 'redis' };
   deleteLegacyLocalFile();
   return { success: true, username: nextUsername, persisted: true, mustChange: false };
 }
@@ -233,6 +259,20 @@ export async function setAdminCredentials({ username, password, currentPassword 
 /** 后台管理员当前绑定的 Linux.do 账号（未绑定为 null） */
 export function getAdminLinuxdoBinding() {
   return current?.linuxdo || null;
+}
+
+export async function getAdminSocialBinding(provider) {
+  if (!['wechat_scan', 'qq_scan'].includes(provider)) return null;
+  const stored = await readFromRedis();
+  return stored?.[provider] || null;
+}
+
+export async function setAdminSocialBinding(provider, identity) {
+  if (!current || !['wechat_scan', 'qq_scan'].includes(provider)) return { success: false, error: '无法更新管理员绑定' };
+  const binding = identity ? normalizeOAuthBinding({ id: identity.subject, username: identity.profile.username, boundAt: Date.now() }) : null;
+  if (identity && !binding) return { success: false, error: '无效的扫码身份' };
+  if (await patchAdminRecord({ [provider]: binding })) return { success: true };
+  return { success: false, error: '管理员绑定保存失败，请重试' };
 }
 
 /** 是否已有管理员账号绑定了这个 Linux.do 账号（用于「Linux.do 一键登录后台」） */
@@ -247,24 +287,18 @@ export async function bindAdminLinuxdo({ id, username, avatarUrl }) {
   const linuxdoId = String(id || '').trim();
   if (!linuxdoId) return { success: false, error: '无效的 Linux.do 账号' };
 
-  const record = { ...current, linuxdo: { id: linuxdoId, username: String(username || ''), avatarUrl: String(avatarUrl || ''), boundAt: Date.now() } };
-  const { source: _s, ...payload } = record;
-  const persisted = await writeToRedis(payload);
+  const persisted = await patchAdminRecord({ linuxdo: { id: linuxdoId, username: String(username || ''), avatarUrl: String(avatarUrl || ''), boundAt: Date.now() } });
   if (!persisted) return { success: false, error: '绑定写入 Redis 失败' };
 
-  current = { ...record, source: 'redis' };
   return { success: true, linuxdo: current.linuxdo };
 }
 
 /** 解绑管理员账号的 Linux.do 登录 */
 export async function unbindAdminLinuxdo() {
   if (!current) return { success: false, error: '管理后台未启用' };
-  const record = { ...current, linuxdo: null };
-  const { source: _s, ...payload } = record;
-  const persisted = await writeToRedis(payload);
+  const persisted = await patchAdminRecord({ linuxdo: null });
   if (!persisted) return { success: false, error: '解绑写入 Redis 失败' };
 
-  current = { ...record, source: 'redis' };
   return { success: true };
 }
 
@@ -285,23 +319,17 @@ export async function bindAdminGithub({ id, username, avatarUrl }) {
   const githubId = String(id || '').trim();
   if (!githubId) return { success: false, error: '无效的 GitHub 账号' };
 
-  const record = { ...current, github: { id: githubId, username: String(username || ''), avatarUrl: String(avatarUrl || ''), boundAt: Date.now() } };
-  const { source: _s, ...payload } = record;
-  const persisted = await writeToRedis(payload);
+  const persisted = await patchAdminRecord({ github: { id: githubId, username: String(username || ''), avatarUrl: String(avatarUrl || ''), boundAt: Date.now() } });
   if (!persisted) return { success: false, error: '绑定写入 Redis 失败' };
 
-  current = { ...record, source: 'redis' };
   return { success: true, github: current.github };
 }
 
 /** 解绑管理员账号的 GitHub 登录 */
 export async function unbindAdminGithub() {
   if (!current) return { success: false, error: '管理后台未启用' };
-  const record = { ...current, github: null };
-  const { source: _s, ...payload } = record;
-  const persisted = await writeToRedis(payload);
+  const persisted = await patchAdminRecord({ github: null });
   if (!persisted) return { success: false, error: '解绑写入 Redis 失败' };
 
-  current = { ...record, source: 'redis' };
   return { success: true };
 }

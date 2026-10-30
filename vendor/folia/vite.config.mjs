@@ -13,7 +13,16 @@ export default defineConfig({
       const entry = Object.values(bundle).find(item => item.type === 'chunk' && item.isEntry && item.facadeModuleId?.endsWith('/stage.tsx'));
       const css = Object.values(bundle).filter(item => item.type === 'asset' && item.fileName.endsWith('.css')).map(item => item.fileName);
       if (!entry || !css.length || !entry.exports.includes('mountFolia')) throw new Error('Folia stage entry is incomplete');
-      fs.writeFileSync(path.join(options.dir, 'stage.json'), JSON.stringify({ script: entry.fileName, css }));
+      const preload = new Set();
+      const collectImports = chunk => {
+        for (const imported of chunk.imports) {
+          if (preload.has(imported)) continue;
+          preload.add(imported);
+          if (bundle[imported]?.type === 'chunk') collectImports(bundle[imported]);
+        }
+      };
+      collectImports(entry);
+      fs.writeFileSync(path.join(options.dir, 'stage.json'), JSON.stringify({ script: entry.fileName, css, preload: [...preload] }));
       fs.copyFileSync(path.resolve(import.meta.dirname, 'upstream/LICENSE'), path.join(options.dir, 'LICENSE.txt'));
       const sources = {};
       const collect = directory => {

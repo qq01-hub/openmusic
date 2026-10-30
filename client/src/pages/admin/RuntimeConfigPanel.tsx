@@ -41,6 +41,12 @@ type RuntimeTextField = Exclude<
   | 'favoriteShareTtlMs'
   | 'smtpPort'
   | 'smtpSecure'
+  | 'anonymousLoginEnabled'
+  | 'apihzWechatEnabled'
+  | 'apihzQqEnabled'
+  | 'turnstileEnabled'
+  | 'riskChallengeEnabled'
+  | 'riskChallengeCooldownMinutes'
   | 'svipQualityEnabled'
   | 'sharedMembershipEnabled'
   | 'qqGroupUrl'
@@ -89,6 +95,15 @@ interface RuntimeFieldGroup {
 }
 
 const RUNTIME_FIELD_GROUPS: RuntimeFieldGroup[] = [
+  {
+    id: 'turnstile', title: '人机校验 · Cloudflare Turnstile',
+    purpose: <Space orientation="vertical"><span>保护邮箱发码、注册和登录，默认关闭，启用前先填写密钥和允许主机名，服务异常时拒绝本次受保护操作，不影响现有房间播放，也不解除账户限制</span><Space wrap><Typography.Link href="https://dash.cloudflare.com/" target="_blank" rel="noopener noreferrer">申请 Site Key / Secret Key ↗</Typography.Link><Typography.Link href="https://developers.cloudflare.com/turnstile/get-started/" target="_blank" rel="noopener noreferrer">配置说明 ↗</Typography.Link><Typography.Link href="https://developers.cloudflare.com/turnstile/plans/" target="_blank" rel="noopener noreferrer">免费方案与限额 ↗</Typography.Link></Space></Space>,
+    fields: [
+      { key: 'turnstileSiteKey', label: 'Site Key', tip: '公开站点标识，Cloudflare 控制台选择 Managed 类型' },
+      { key: 'turnstileSecretKey', label: 'Secret Key', secret: true, tip: '仅在服务端验证使用，加密保存，不回显' },
+      { key: 'turnstileHostnames', label: '允许的精确主机名', placeholder: 'music.example.com,www.example.com', tip: '与 Cloudflare 控制台一致，以英文逗号分隔，不含 https://、端口或路径，最多 10 个' },
+    ],
+  },
   {
     id: 'smtp',
     title: '注册邮箱（SMTP）',
@@ -157,7 +172,7 @@ const RUNTIME_FIELD_GROUPS: RuntimeFieldGroup[] = [
   {
     id: 'apihz',
     title: '接口盒子',
-    purpose: '表情包搜索',
+    purpose: '表情包搜索与微信、QQ 聚合扫码登录共用此处 ID 和密钥',
     fields: [
       { key: 'apihzBaseUrl', label: 'API 地址', placeholder: 'https://cn.apihz.cn/api' },
       { key: 'apihzId', label: '用户 ID', secret: true },
@@ -308,13 +323,15 @@ function formatJsonResponse(value: string): string {
 export default function RuntimeConfigPanel({
   onError,
   securityTab,
+  initialTab,
 }: {
   onError: (message: string) => void;
   securityTab?: ReactNode;
+  initialTab?: 'identity';
 }) {
   const { message } = App.useApp();
   const [draft, setDraft] = useState<RuntimeConfig | null>(null);
-  const [activeTab, setActiveTab] = useState(securityTab ? 'security' : 'music');
+  const [activeTab, setActiveTab] = useState(initialTab || (securityTab ? 'security' : 'music'));
   const [dirtySecrets, setDirtySecrets] = useState<Set<string>>(new Set());
   const [dirtyMetingAuth, setDirtyMetingAuth] = useState<Set<number>>(new Set());
   const [baselineSecrets, setBaselineSecrets] = useState<Record<string, string>>({});
@@ -341,6 +358,7 @@ export default function RuntimeConfigPanel({
   const applyLoadedConfig = (config: RuntimeConfig) => {
     setDraft({
       ...config,
+      anonymousLoginEnabled: config.anonymousLoginEnabled === true,
       svipQualityEnabled: Object.assign({ netease: false, tencent: false, kugou: false, qishui: false }, typeof config.svipQualityEnabled === 'object' ? config.svipQualityEnabled : { netease: Boolean(config.svipQualityEnabled), tencent: Boolean(config.svipQualityEnabled), kugou: Boolean(config.svipQualityEnabled), qishui: Boolean(config.svipQualityEnabled) }),
       sharedMembershipEnabled: config.sharedMembershipEnabled !== false,
       favoriteShareTtlMs: Number(config.favoriteShareTtlMs) || 30 * 24 * 60 * 60 * 1000,
@@ -544,6 +562,7 @@ export default function RuntimeConfigPanel({
           spellCheck={false}
           style={{ fontFamily: 'monospace' }}
         />
+        {field.key === 'turnstileSecretKey' && configured && <Button danger onClick={() => { setDraft({ ...draft, turnstileEnabled: false, riskChallengeEnabled: false, turnstileSecretKey: '' }); setDirtySecrets(previous => new Set([...previous, 'turnstileSecretKey'])); }}>清除并停用</Button>}
         {field.key === 'roomCredentialEncryptionKey' && (
           <Button
             onClick={() => {
@@ -1711,7 +1730,36 @@ export default function RuntimeConfigPanel({
       label: '身份登录',
       children: (
         <>
+          <SettingsSection
+            title="匿名登录"
+            description="默认关闭，开启后访客无需注册或登录即可创建和加入房间、点歌、播放及收藏，身份和收藏依赖当前设备 Cookie，跨设备同步仍需登录账户，后台管理员仍须登录"
+          >
+            <Space align="center">
+              <Switch
+                checked={draft.anonymousLoginEnabled}
+                onChange={anonymousLoginEnabled => setDraft({ ...draft, anonymousLoginEnabled })}
+                aria-label="允许匿名登录"
+              />
+              <Typography.Text>允许匿名登录 · 保存后生效</Typography.Text>
+            </Space>
+          </SettingsSection>
+          <Divider style={{ margin: 0 }} />
+          <SettingsSection title="人机校验开关" description="免费方案不等于承诺全球可达或提供 SLA，请先验证部署地区、WebView 和服务端网络，再启用"><Switch checked={Boolean(draft.turnstileEnabled)} onChange={turnstileEnabled => setDraft({ ...draft, turnstileEnabled, riskChallengeEnabled: turnstileEnabled && draft.riskChallengeEnabled })} /> <span>保护邮箱登录与注册 · 保存后生效</span></SettingsSection>
+          {fieldGroup('turnstile')}
+          <SettingsSection title="异常访问验证" description="服务端按账户拦截异常资源请求，未通过时不返回资源，每个北京时间自然日最多两轮，两轮都通过后自动放行验证码闸门，不解除封禁或重置配额">
+            <Space orientation="vertical"><Space><Switch checked={Boolean(draft.riskChallengeEnabled)} disabled={!draft.turnstileEnabled} onChange={riskChallengeEnabled => setDraft({ ...draft, riskChallengeEnabled })} /><span>启用异常访问验证</span></Space><Space><span>通过后冷却（分钟）</span><InputNumber min={1} max={1440} precision={0} value={draft.riskChallengeCooldownMinutes || 30} onChange={value => setDraft({ ...draft, riskChallengeCooldownMinutes: value || 30 })} /></Space></Space>
+          </SettingsSection>
+
+          <Divider style={{ margin: 0 }} />
           {fieldGroup('smtp')}
+          <Divider style={{ margin: 0 }} />
+          <SettingsSection title="微信与 QQ 扫码登录" description="登录列表中微信第一、QQ 第二，前台用户与后台管理员均可绑定，复用第三方服务中接口盒子的 ID 和密钥，登录仅支持 https://cn.apihz.cn/api 或 https://vip.apihz.cn/api，微信扫码身份与文件传输助手独立">
+            <Space orientation="vertical">
+              <Space><Switch checked={draft.apihzWechatEnabled === true} onChange={apihzWechatEnabled => setDraft({ ...draft, apihzWechatEnabled })} aria-label="启用微信扫码登录" /><Typography.Text>微信扫码登录 · 保存后生效</Typography.Text></Space>
+              <Space><Switch checked={draft.apihzQqEnabled === true} onChange={apihzQqEnabled => setDraft({ ...draft, apihzQqEnabled })} aria-label="启用QQ扫码登录" /><Typography.Text>QQ扫码登录 · 保存后生效</Typography.Text></Space>
+              {(!draft.configuredSecrets.apihzId || !draft.configuredSecrets.apihzKey) && <Typography.Text type="warning">请先在第三方服务中保存接口盒子 ID 和密钥</Typography.Text>}
+            </Space>
+          </SettingsSection>
           <Divider style={{ margin: 0 }} />
           {fieldGroup('linuxdo')}
           <Divider style={{ margin: 0 }} />

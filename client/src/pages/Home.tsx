@@ -1,9 +1,10 @@
+import RoomCardBadges from '../components/RoomCardBadges';
 import { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Users, ArrowRight, Lock, ListMusic,
   Loader2, RefreshCw, Plus, X, Disc3, Sparkles, Github, History, HeartHandshake, Heart,
-  Play, Activity, Search, ShieldCheck, Crown, Download, Shuffle
+  Play, Activity, Search, ShieldCheck, Download, Shuffle
 } from 'lucide-react';
 import { createRoom, checkRoom, listRooms, randomMatchRoom } from '../api/meting';
 import { useRoomStore } from '../stores/roomStore';
@@ -44,18 +45,23 @@ import type { MusicAccountPlatform } from '../lib/musicAccountQr';
 import { fetchDonations, type DonationEntry } from '../lib/donations';
 import { headerIconCls, headerPillCls } from '../lib/homeHeaderActions';
 import AccountAccess from '../components/AccountAccess';
-import { fetchAccountSession } from '../lib/accountAuth';
-import { ensureFreshAccountAccess } from '../lib/accountAccessSession';
+import { fetchAccountSession, persistAccountNickname } from '../lib/accountAuth';
+import { ensureFreshAccountAccess, hasAnonymousAccess } from '../lib/accountAccessSession';
 import MyRoomsAccess from '../components/MyRoomsAccess';
 import MusicLoading from '../components/MusicLoading';
 
-/** 大厅只用接口带回的 CDN 直链，不走 meting type=pic 再查 */
+/** 大厅优先使用 CDN 直链，未解析的封面通过公开图片接口加载 */
 function lobbyDirectCoverUrl(pic?: string): string | null {
   const raw = String(pic || '').trim();
-  if (!/^https?:\/\//i.test(raw)) return null;
+  if (!raw || (!/^https?:\/\//i.test(raw) && !raw.startsWith('/api/meting?'))) return null;
   try {
-    const parsed = new URL(raw);
-    if (parsed.searchParams.get('type') === 'pic') return null;
+    const parsed = new URL(raw, window.location.origin);
+    if (parsed.searchParams.get('type') === 'pic') {
+      const server = parsed.searchParams.get('server');
+      const id = parsed.searchParams.get('id');
+      if (!server || !id) return null;
+      return `/api/meting?${new URLSearchParams({ server, type: 'pic', id, size: '96' })}`;
+    }
   } catch {
     return null;
   }
@@ -100,6 +106,8 @@ const COVER_GRADIENTS = [
   'from-lime-500 to-emerald-500',
 ];
 
+const HOME_ROOM_PAGE_SIZE = 60;
+
 function gradientForId(id: string) {
   let hash = 0;
   for (let i = 0; i < id.length; i++) {
@@ -125,7 +133,7 @@ function EqualizerBars({ className = '' }: { className?: string }) {
   );
 }
 
-/** 大厅封面：优先自定义封面，否则用接口带回的歌曲 CDN 直链（不走 meting type=pic） */
+/** 大厅封面优先自定义封面，否则展示当前歌曲封面 */
 function lobbyCoverUrl(room: Pick<RoomSummary, 'customCoverUrl' | 'currentSong'>): string | null {
   const custom = String(room.customCoverUrl || '').trim();
   if (custom.startsWith('data:image/')) return custom;
@@ -157,7 +165,7 @@ const RoomCard = memo(function RoomCard({
     setCoverFailed(false);
   }, [coverUrl]);
 
-  const cardClassName = `group relative w-full text-left rounded-[24px] border overflow-hidden backdrop-blur-md
+  const cardClassName = `group relative w-full text-left rounded-[24px] border overflow-hidden
     ${hardLocked
       ? 'border-white/5 bg-black/40 opacity-60 cursor-not-allowed'
       : 'border-white/10 bg-gradient-to-br from-white/[0.09] to-white/[0.02] shadow-xl shadow-black/40 hover:border-white/25 hover:from-white/[0.14] hover:to-white/[0.04] hover:shadow-2xl hover:shadow-black/70'
@@ -175,16 +183,6 @@ const RoomCard = memo(function RoomCard({
         <div className="pointer-events-none absolute inset-x-0 top-0 z-[11] h-px bg-gradient-to-r from-transparent via-white/25 to-transparent" />
       )}
 
-      {(room.isOwner || room.isAdmin) && (
-        <Tooltip content={room.isOwner ? '房主' : '管理员'}>
-          <div
-            className="absolute right-4 top-4 z-20 inline-flex items-center justify-center rounded-full border border-white/10 bg-black/45 p-2 text-amber-300 shadow-lg backdrop-blur-md"
-            aria-label={room.isOwner ? '房主' : '管理员'}
-          >
-            {room.isOwner ? <Crown className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4 text-sky-300" />}
-          </div>
-        </Tooltip>
-      )}
 
       <div className="relative p-5 sm:p-6" style={{ transformStyle: 'preserve-3d' }}>
         <div className="flex items-center gap-5" style={{ transformStyle: 'preserve-3d' }}>
@@ -223,11 +221,7 @@ const RoomCard = memo(function RoomCard({
               <h3 className={`min-w-0 flex-1 text-xl sm:text-[22px] font-black tracking-tight break-words whitespace-normal leading-snug line-clamp-2 ${hardLocked ? 'text-white/50' : 'text-emboss'}`}>
                 {room.name}
               </h3>
-              {room.hasPassword && !hardLocked && (
-                <span className="flex-shrink-0 p-1 rounded-full bg-amber-400/10 text-amber-400 group-hover:bg-amber-400/20 transition-colors">
-                  <Lock className="w-3.5 h-3.5" />
-                </span>
-              )}
+              <RoomCardBadges isOwner={room.isOwner} isAdmin={room.isAdmin} hasPassword={room.hasPassword} hardLocked={Boolean(hardLocked)} />
             </div>
 
             {room.currentSong ? (
@@ -290,7 +284,9 @@ const RoomCard = memo(function RoomCard({
       {body}
     </TiltedCard>
   );
-});
+}, (prev, next) => prev.onJoin === next.onJoin
+  && prev.guideAnchor === next.guideAnchor
+  && areRoomListsEqual([prev.room], [next.room]));
 
 function Modal({
   title,
@@ -392,11 +388,6 @@ function DonationModal({ open, onClose, donations }: { open: boolean; onClose: (
 export default function Home({ entryReady = true, entranceActive = false, onReady }: { entryReady?: boolean; entranceActive?: boolean; onReady?: () => void }) {
   const [titleHandoff] = useState(entranceActive);
   useEffect(() => { onReady?.(); }, [onReady]);
-  useEffect(() => {
-    void import('./Room')
-      .then(({ preloadRoomShell }) => preloadRoomShell())
-      .catch(() => undefined);
-  }, []);
   const sharedMembershipEnabled = useSiteFeaturesStore((state) => state.sharedMembershipEnabled);
   const qqGroupUrl = useSiteFeaturesStore((state) => state.qqGroupUrl);
   const musicSourcesEnabled = useSiteFeaturesStore((state) => state.musicSourcesEnabled);
@@ -408,13 +399,14 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   const contributionEnabled = sharedMembershipEnabled && contributionPlatforms.length > 0;
   const navigate = useNavigate();
   const nickname = useRoomStore((s) => s.nickname);
-  const setNickname = useRoomStore((s) => s.setNickname);
+  const setNickname = useRoomStore((s) => s.setNicknameDraft);
   const { leaveRoom } = useSocket();
 
   usePageSeo({ path: '/' });
   const siteSeo = useSiteSeoConfig();
 
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [roomListLimit, setRoomListLimit] = useState(HOME_ROOM_PAGE_SIZE);
   const [roomsLoading, setRoomsLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [matchLoading, setMatchLoading] = useState(false);
@@ -440,7 +432,11 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
 
   const requireHomeAccount = useCallback(async () => {
     try {
-      if (await fetchAccountSession()) return true;
+      if (await fetchAccountSession()) {
+        await persistAccountNickname();
+        return true;
+      }
+      if (hasAnonymousAccess()) return true;
       window.dispatchEvent(new Event('openmusic:account-auth-required'));
     } catch (reason) {
       setToast({ message: reason instanceof Error ? reason.message : '账户状态暂不可用，请重试', type: 'error' });
@@ -555,7 +551,9 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
       void ensureFreshAccountAccess()
         .then((authenticated) => authenticated && !cancelled ? import('../api/music/toplist').then((m) => m.getNeteaseHotToplist(200)) : undefined)
         .catch(() => {});
-      void import('../pages/Room');
+      void import('../pages/Room')
+        .then(({ preloadRoomShell }) => preloadRoomShell())
+        .catch(() => undefined);
     };
     const ric = typeof window !== 'undefined'
       ? (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback
@@ -698,6 +696,14 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
       others: sortLobbyRooms(others),
     };
   }, [rooms]);
+  const visibleOtherRooms = useMemo(
+    () => otherRooms.slice(0, roomListLimit),
+    [otherRooms, roomListLimit],
+  );
+
+  useEffect(() => {
+    setRoomListLimit(HOME_ROOM_PAGE_SIZE);
+  }, [otherRooms]);
 
   const inputCls =
     'home-modal-input w-full rounded-2xl px-5 py-3.5 text-white text-[15px] caret-white placeholder:text-white/30 outline-none border border-white/10 bg-[#1a1a1a] focus:border-netease-red/60 transition-[border-color] duration-200';
@@ -705,7 +711,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   return (
     <div data-home-startup={entranceActive || undefined} data-home-quiet={isWeakPlaybackDevice() || undefined} className={`home-page h-full flex flex-col relative overflow-hidden bg-[#050505] text-white font-sans selection:bg-netease-red/30${titleHandoff ? ' home-hero-handoff' : ''}`}>
       {/* React Bits Aurora 背景（弱设备 / 移动端自动降级） */}
-      <HomeAuroraBackdrop paused={entranceActive} />
+      <HomeAuroraBackdrop paused={entranceActive} roomCount={rooms.length} />
 
       {/* 悬浮顶栏 */}
       <header data-home-reveal className="home-hero-stage home-hero-stage--header relative z-20 pt-6 px-4 sm:px-6 max-w-7xl mx-auto w-full">
@@ -912,6 +918,11 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
                         }}
                         placeholder="给自己起个昵称..."
                         maxLength={20}
+                        onBlur={() => {
+                          void persistAccountNickname().catch((reason) => {
+                            setToast({ message: reason instanceof Error ? reason.message : '昵称保存失败，请稍后重试', type: 'error' });
+                          });
+                        }}
                         className="w-full h-12 sm:h-14 bg-transparent pl-14 pr-6 text-white caret-netease-red placeholder:text-white/30 outline-none rounded-full text-[15px] transition-colors focus:bg-white/[0.04]"
                       />
                     </div>
@@ -1024,7 +1035,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
               大厅
               {rooms.length > 0 && (
                 <span className="text-sm font-medium bg-white/10 text-white/80 px-3 py-1 rounded-full align-middle">
-                  {rooms.length} 活跃
+                  {rooms.length} 个房间
                 </span>
               )}
             </h2>
@@ -1065,7 +1076,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
               <div className="w-24 h-24 rounded-full bg-white/5 flex items-center justify-center mb-6 shadow-inner">
                 <Search className="w-10 h-10 text-white/20" />
               </div>
-              <h3 className="text-2xl font-bold text-white mb-3">当前没有活跃房间</h3>
+              <h3 className="text-2xl font-bold text-white mb-3">当前没有房间</h3>
               <p className="text-white/40 mb-8 max-w-sm">一切都很安静。不如由你来开启第一首歌，邀请朋友们一起来听吧。</p>
               <button
                 type="button"
@@ -1087,12 +1098,13 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
                   {/* 这里改成了更宽的网格，最大 3 列，从而让卡片变宽 */}
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 sm:gap-6">
                     {recentRooms.map((room, index) => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        onJoin={handleRoomCardClick}
-                        guideAnchor={index === 0}
-                      />
+                      <div key={room.id} className="home-room-grid-item">
+                        <RoomCard
+                          room={room}
+                          onJoin={handleRoomCardClick}
+                          guideAnchor={index === 0}
+                        />
+                      </div>
                     ))}
                   </div>
                 </section>
@@ -1107,15 +1119,27 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
                   )}
                   {/* 同样最大 3 列，保证宽度充足 */}
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 sm:gap-6">
-                    {otherRooms.map((room, index) => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        onJoin={handleRoomCardClick}
-                        guideAnchor={recentRooms.length === 0 && index === 0}
-                      />
+                    {visibleOtherRooms.map((room, index) => (
+                      <div key={room.id} className="home-room-grid-item">
+                        <RoomCard
+                          room={room}
+                          onJoin={handleRoomCardClick}
+                          guideAnchor={recentRooms.length === 0 && index === 0}
+                        />
+                      </div>
                     ))}
                   </div>
+                  {visibleOtherRooms.length < otherRooms.length && (
+                    <div className="mt-6 flex justify-center">
+                      <button
+                        type="button"
+                        onClick={() => setRoomListLimit((limit) => Math.min(otherRooms.length, limit + HOME_ROOM_PAGE_SIZE))}
+                        className="rounded-full border border-white/10 bg-white/[0.04] px-5 py-2.5 text-sm font-semibold text-white/65 transition-colors hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+                      >
+                        加载更多房间（已显示 {visibleOtherRooms.length}/{otherRooms.length}）
+                      </button>
+                    </div>
+                  )}
                 </section>
               )}
             </div>

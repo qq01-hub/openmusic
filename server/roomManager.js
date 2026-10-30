@@ -3,7 +3,7 @@ import { scrypt, scryptSync, randomBytes, timingSafeEqual } from "crypto";
 import { claimAccountRooms } from "./accountRooms.js";
 import { fetchMetingFmSongs, normalizeFmMode, DEFAULT_FM_MODE, FM_MODE_OFF } from "./metingFm.js";
 import { importNeteasePlaylist, importQqPlaylist, importKugouPlaylist, importQishuiPlaylist } from "./playlistImport.js";
-import { getRedisClient, initRoomStorage, isRedisEnabled, loadAllRoomsFromStorage, queueSaveRoomToStorage, cancelQueuedRoomSave, deleteRoomFromStorage, saveRoomToStorage, listFavoriteSongs, addRoomToAccountIndex, removeRoomFromAccountIndex } from "./roomStorage.js";
+import { getRedisClient, initRoomStorage, isRedisEnabled, loadAllRoomsFromStorage, queueSaveRoomToStorage, flushRoomStorageWrites, cancelQueuedRoomSave, deleteRoomFromStorage, saveRoomToStorage, listFavoriteSongs, addRoomToAccountIndex, removeRoomFromAccountIndex } from "./roomStorage.js";
 import {
   DEFAULT_MEMBER_SETTINGS,
   buildWelcomeText,
@@ -782,7 +782,7 @@ export function snapshotRoomForStorage(room) {
     songHistory: (room.songHistory || []).slice(0, MAX_SONG_HISTORY).map(serializeSongHistoryForClient).filter(Boolean),
     jumpRequests: room.jumpRequests,
     skipRequests: room.skipRequests,
-    randomPlayedKeys: Array.from(room.randomPlayedKeys),
+    randomPlayedKeys: Array.from(room.randomPlayedKeys).slice(-MAX_RANDOM_HISTORY),
     nextRandom: serializeSongMeta(room.nextRandom),
     adminIds: Array.from(room.adminIds || []),
     autoPromotedAdminIds: Array.from(room.autoPromotedAdminIds || []),
@@ -793,6 +793,7 @@ export function snapshotRoomForStorage(room) {
     neteaseFmMode: normalizeFmMode(room.neteaseFmMode),
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
+    qishuiProxyEnabled: room.qishuiProxyEnabled === true,
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     musicAccountSecrets: normalizeMusicAccountSecrets(room.musicAccountSecrets),
@@ -805,11 +806,13 @@ export function snapshotRoomForStorage(room) {
     customCoverUrl: normalizeCustomCoverUrl(room.customCoverUrl),
     chatHistoryVisibleOnJoin: Boolean(room.chatHistoryVisibleOnJoin),
     chatShowAvatars: Boolean(room.chatShowAvatars),
+    hideIpLocation: Boolean(room.hideIpLocation),
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
     songRequestEnabled: room.songRequestEnabled !== false,
+    queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),
     songRequestMaxPerUser: normalizeSongRequestMaxPerUser(room.songRequestMaxPerUser),
     songRequestCooldownSec: normalizeSongRequestCooldownSec(room.songRequestCooldownSec),
@@ -862,7 +865,7 @@ function restoreRoomFromStorage(data) {
   room.skipRequests = data.skipRequests || [];
   purgeExpiredSkipRequests(room);
   syncSkipRequestExpiryTimers(room);
-  room.randomPlayedKeys = new Set(data.randomPlayedKeys || []);
+  room.randomPlayedKeys = new Set((Array.isArray(data.randomPlayedKeys) ? data.randomPlayedKeys : []).slice(-MAX_RANDOM_HISTORY));
   room.nextRandom = serializeSongMeta(data.nextRandom);
   room.creatorId = data.creatorId ?? null;
   room.ownerAccountId = typeof data.ownerAccountId === 'string' && data.ownerAccountId.trim()
@@ -890,6 +893,7 @@ function restoreRoomFromStorage(data) {
   room.fmSource = normalizeFmSource(data.fmSource);
   const fmModeBeforeOff = normalizeFmMode(data.fmModeBeforeOff);
   room.fmModeBeforeOff = fmModeBeforeOff === FM_MODE_OFF ? DEFAULT_FM_MODE : fmModeBeforeOff;
+  room.qishuiProxyEnabled = data.qishuiProxyEnabled === true;
   room.playlistRoaming = normalizePlaylistRoaming(data.playlistRoaming);
   room.musicAccounts = normalizeMusicAccounts(data.musicAccounts);
   room.musicAccountSecrets = normalizeMusicAccountSecrets(data.musicAccountSecrets);
@@ -902,11 +906,13 @@ function restoreRoomFromStorage(data) {
   room.customCoverUrl = normalizeCustomCoverUrl(data.customCoverUrl);
   room.chatHistoryVisibleOnJoin = Boolean(data.chatHistoryVisibleOnJoin);
   room.chatShowAvatars = Boolean(data.chatShowAvatars);
+  room.hideIpLocation = Boolean(data.hideIpLocation);
   room.joinNoticeEnabled = data.joinNoticeEnabled !== false;
   room.joinNoticeCooldownSec = normalizeJoinNoticeCooldownSec(data.joinNoticeCooldownSec);
   room.roomAiEnabled = data.roomAiEnabled !== false;
   room.roomAiBotName = normalizeRoomAiBotName(data.roomAiBotName);
   room.songRequestEnabled = data.songRequestEnabled !== false;
+  room.queueLikeSortEnabled = data.queueLikeSortEnabled !== false;
   room.songRequestMinStaySec = normalizeSongRequestMinStaySec(data.songRequestMinStaySec);
   room.songRequestMaxPerUser = normalizeSongRequestMaxPerUser(data.songRequestMaxPerUser);
   room.songRequestCooldownSec = normalizeSongRequestCooldownSec(data.songRequestCooldownSec);
@@ -974,13 +980,9 @@ function persistRoom(room) {
 /** 优雅退出前：把内存中待写房间全部同步刷进 Redis */
 export async function flushAllPendingRoomPersists() {
   persistFlushScheduled = false;
-  const snapshots = [];
-  for (const room of pendingPersistRooms.values()) {
-    snapshots.push(snapshotRoomForStorage(room));
-  }
+  for (const room of pendingPersistRooms.values()) queueSaveRoomToStorage(snapshotRoomForStorage(room));
   pendingPersistRooms.clear();
-  if (snapshots.length === 0) return;
-  await Promise.all(snapshots.map((snap) => saveRoomToStorage(snap)));
+  await flushRoomStorageWrites();
 }
 
 let cachedListRooms = null;
@@ -991,13 +993,6 @@ const LIST_ROOMS_CACHE_MS = 5000;
 function invalidateRoomsListCache() {
   cachedListRooms = null;
   cachedListRoomsAt = 0;
-}
-
-function isRoomVisibleInLobby(room) {
-  if (room.users.size > 0) return true;
-  if (room.current || room.isPlaying) return true;
-  if (room.queue.length > 0) return true;
-  return false;
 }
 
 export async function initRooms() {
@@ -1020,14 +1015,17 @@ export async function initRooms() {
   // 进房/贵宾通知静默窗：重启后已知成员回流（客户端也会带 rejoin）
   const RESTART_NOTICE_MUTE_MS = 5 * 60 * 1000;
   const noticeMuteUntil = Date.now() + RESTART_NOTICE_MUTE_MS;
-  const passwordMigrationSnapshots = [];
+  const roomMigrationSnapshots = [];
   let preservedCount = 0;
   for (const data of stored) {
     const room = restoreRoomFromStorage(data);
     room.restartNoticeMuteUntil = noticeMuteUntil;
     rooms.set(room.id, room);
-    if (room.needsPasswordStorageMigration) {
-      passwordMigrationSnapshots.push(snapshotRoomForStorage(room));
+    const hasOversizedHistory = (Array.isArray(data.songHistory) && data.songHistory.length > MAX_SONG_HISTORY)
+      || (Array.isArray(data.randomPlayedKeys) && data.randomPlayedKeys.length > MAX_RANDOM_HISTORY)
+      || (Array.isArray(data.messages) && data.messages.length > MAX_CHAT_MESSAGES);
+    if (room.needsPasswordStorageMigration || hasOversizedHistory) {
+      roomMigrationSnapshots.push(snapshotRoomForStorage(room));
       room.needsPasswordStorageMigration = false;
     }
     if (room.users.size === 0) {
@@ -1043,9 +1041,11 @@ export async function initRooms() {
     }
   }
 
-  if (passwordMigrationSnapshots.length > 0) {
-    await Promise.all(passwordMigrationSnapshots.map((snapshot) => saveRoomToStorage(snapshot)));
-    console.log(`已清理 ${passwordMigrationSnapshots.length} 个房间快照中的旧明文密码字段`);
+  if (roomMigrationSnapshots.length > 0) {
+    for (let offset = 0; offset < roomMigrationSnapshots.length; offset += 8) {
+      await Promise.all(roomMigrationSnapshots.slice(offset, offset + 8).map(snapshot => saveRoomToStorage(snapshot)));
+    }
+    console.log(`已规范化 ${roomMigrationSnapshots.length} 个房间快照的旧密码字段或超额历史`);
   }
 
   // 房间快照是账户归属的权威数据；启动时补齐丢失的账户索引。
@@ -1289,6 +1289,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     nextRandom: null,
     nextRandomPromise: null,
     randomLoading: false,
+    randomError: "",
     playbackLock: null,
     autoAdvancePromise: null,
     adminIds: new Set(),
@@ -1305,6 +1306,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     neteaseFmMode: DEFAULT_FM_MODE,
     fmSource: "netease",
     fmModeBeforeOff: DEFAULT_FM_MODE,
+    qishuiProxyEnabled: false,
     playlistRoaming: null,
     /** 房主扫码绑定的音源账号公开信息 */
     musicAccounts: { netease: null, tencent: null, kugou: null, qishui: null },
@@ -1326,6 +1328,8 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     chatHistoryVisibleOnJoin: false,
     /** 聊天室昵称旁是否显示头像；默认关闭，仅房主可改 */
     chatShowAvatars: false,
+    /** 房间右上角成员列表是否不展示 IP 归属，默认关闭 */
+    hideIpLocation: false,
     /** 普通成员进房时是否向聊天室推送短暂系统提示 */
     joinNoticeEnabled: true,
     joinNoticeCooldownSec: DEFAULT_JOIN_NOTICE_COOLDOWN_SEC,
@@ -1340,6 +1344,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
      */
     restartNoticeMuteUntil: 0,
     songRequestEnabled: true,
+    queueLikeSortEnabled: true,
     songRequestMinStaySec: 0,
     songRequestMaxPerUser: 0,
     songRequestCooldownSec: 0,
@@ -2308,7 +2313,7 @@ export async function listRooms(userId = '', { resolveCovers = true } = {}) {
     return personalizeLobbyRooms(cachedListRooms, userId);
   }
 
-  const visible = Array.from(rooms.values()).filter(isRoomVisibleInLobby);
+  const visible = Array.from(rooms.values());
   // 不阻塞响应：已有直链同步规范化，缺封面后台解析
   if (resolveCovers) {
     for (const room of visible) scheduleLobbyCoverResolve(room);
@@ -2342,7 +2347,6 @@ function randomMatchRoomWeight(room) {
 }
 
 function isRoomRandomMatchable(room) {
-  if (!isRoomVisibleInLobby(room)) return false;
   // 无人房间无法交接房主体验，随机匹配只带用户进入已有成员在线的房间。
   if (room.users.size <= 0) return false;
   // 随机匹配只进入无需凭据的公开房，避免把用户带到锁房/密码页。
@@ -2389,7 +2393,7 @@ export function listRoomIds() {
   return Array.from(rooms.keys());
 }
 
-// 管理后台：全量房间列表（不过滤大厅隐藏房间，附带成员昵称）
+// 管理后台：全量房间列表，附带成员昵称
 export function listRoomsForAdmin() {
   return Array.from(rooms.values())
     .map((room) => {
@@ -3107,6 +3111,8 @@ export function setRoomFmMode(roomId, actorId, mode, connectionId = null, source
   }
   room.neteaseFmMode = nextMode;
   room.fmSource = nextSource;
+  room.randomError = "";
+  room.randomLoading = !room.current && room.queue.length === 0 && nextMode !== FM_MODE_OFF;
   // 切回私人漫游时只停用指定歌单，保留已加载歌单，便于稍后恢复。
   if (room.playlistRoaming && nextMode !== FM_MODE_OFF) {
     room.playlistRoaming = normalizePlaylistRoaming({ ...room.playlistRoaming, enabled: false });
@@ -3118,6 +3124,15 @@ export function setRoomFmMode(roomId, actorId, mode, connectionId = null, source
     void ensureNextRandom(room);
   }
 
+  return { room: serializeRoom(room) };
+}
+
+export function setQishuiProxyEnabled(roomId, actorId, enabled, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在" };
+  if (!isOwnerConnection(room, actorId, connectionId)) return { error: "仅房主可设置汽水代理" };
+  room.qishuiProxyEnabled = enabled === true;
+  persistRoom(room);
   return { room: serializeRoom(room) };
 }
 
@@ -3171,7 +3186,7 @@ export function getRoomNeteaseFmCookie(roomId) {
   const secret = normalizeMusicAccountSecrets(room.musicAccountSecrets).netease;
   if (!secret) return null;
   const meta = normalizeMusicAccounts(room.musicAccounts).netease;
-  if (meta && meta.hasVip) return null;
+  if (meta && (meta.hasVip || meta.isValid === false)) return null;
   return secret;
 }
 
@@ -3183,7 +3198,7 @@ export function getRoomFmCookie(roomId, platform) {
   if (!secret) return null;
   const meta = normalizeMusicAccounts(room.musicAccounts)[plat];
   // 未共享账号统一走一次性私人漫游接口，避免使用公共账号池。
-  if (meta?.shared === true) return null;
+  if (meta?.shared === true || meta?.isValid === false) return null;
   return secret;
 }
 
@@ -3688,14 +3703,34 @@ export function setChatShowAvatars(roomId, actorId, enabled, connectionId = null
   return { room: serializeRoom(room) };
 }
 
+/** 房间右上角成员列表是否隐藏 IP 归属（仅房主） */
+export function setRoomHideIpLocation(roomId, actorId, hidden, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在" };
+  if (!isOwnerConnection(room, actorId, connectionId)) {
+    return { error: "仅房主可设置 IP 归属显示" };
+  }
+
+  room.hideIpLocation = Boolean(hidden);
+  persistRoom(room);
+  return { room: serializeRoom(room) };
+}
+
 export function setSongRequestEnabled(roomId, actorId, options = {}, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
   const denied = requireModerator(room, actorId, connectionId);
   if (denied) return denied;
 
+  if (options.queueLikeSortEnabled !== undefined && typeof options.queueLikeSortEnabled !== "boolean") {
+    return { error: "点赞排序设置无效" };
+  }
   if (options.enabled !== undefined) {
     room.songRequestEnabled = Boolean(options.enabled);
+  }
+  if (options.queueLikeSortEnabled !== undefined) {
+    room.queueLikeSortEnabled = options.queueLikeSortEnabled;
+    sortQueueByPriority(room);
   }
   if (options.minStaySec !== undefined) {
     room.songRequestMinStaySec = normalizeSongRequestMinStaySec(options.minStaySec);
@@ -4327,7 +4362,7 @@ function sortQueueByPriority(room) {
     // 插队 / 单曲拖动标记，优先于点赞
     const priorityDiff = (b.ownerPriority || 0) - (a.ownerPriority || 0);
     if (priorityDiff !== 0) return priorityDiff;
-    if (!lockedByDrag) {
+    if (!lockedByDrag && room.queueLikeSortEnabled !== false) {
       const likeDiff = getQueueLikes(b) - getQueueLikes(a);
       if (likeDiff !== 0) return likeDiff;
     }
@@ -4335,7 +4370,7 @@ function sortQueueByPriority(room) {
   });
 }
 
-export async function addToQueue(roomId, song, requestedByUser) {
+export async function addToQueue(roomId, song, requestedByUser, options = {}) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
 
@@ -4343,6 +4378,17 @@ export async function addToQueue(roomId, song, requestedByUser) {
     id: requestedByUser?.id || "",
     nickname: requestedByUser?.nickname || "匿名",
   };
+
+  const jump = options.jump === true;
+  if (jump) {
+    if (!room.users.has(requestedBy.id)) return { error: "未加入房间" };
+    if (!isActorConnection(room, requestedBy.id, options.connectionId)) {
+      return { error: "会话无效，请刷新后重试" };
+    }
+    if (!canControlPlayback(room, requestedBy.id) && !room.memberJumpEnabled) {
+      return { error: "房间未开启成员插队" };
+    }
+  }
 
   if (!canUserRequestSong(room, requestedBy.id)) {
     return { error: "房主已禁止点歌" };
@@ -4402,12 +4448,23 @@ export async function addToQueue(roomId, song, requestedByUser) {
     requestedById: requestedBy.id,
     addedAt: Date.now(),
     likedByIds: [],
+    currentLikedByIds: undefined,
+    jumpNext: false,
     ownerPriority: 0,
   });
 
-  room.queue.push(item);
-  if (hadManualOrder) {
-    item.manualOrder = room.queue.length - 1;
+  if (jump) {
+    item.jumpNext = true;
+    item.ownerPriority = Math.max(Date.now(), ...room.queue.map((entry) => entry.ownerPriority || 0)) + 1;
+    const actor = room.users.get(requestedBy.id);
+    if (!isRoomCreator(room, requestedBy.id)) {
+      item.priorityBy = actor.nickname;
+    }
+    room.queue.unshift(item);
+    if (hadManualOrder) reindexManualOrder(room);
+  } else {
+    room.queue.push(item);
+    if (hadManualOrder) item.manualOrder = room.queue.length - 1;
   }
 
   if (!canControlPlayback(room, requestedBy.id)) {
@@ -4423,7 +4480,7 @@ export async function addToQueue(roomId, song, requestedByUser) {
     });
   }
 
-  const systemMessage = appendSystemChatMessage(room, `${formatActorName(requestedBy)} 点了 ${formatSongTitle(item)}`);
+  const systemMessage = appendSystemChatMessage(room, `${formatActorName(requestedBy)} ${jump ? "点歌并插队" : "点了"} ${formatSongTitle(item)}`);
   persistRoom(room);
   return { room: serializeRoom(room), systemMessage };
 }
@@ -4434,16 +4491,18 @@ export function toggleQueueLike(roomId, userId, queueId) {
   const user = room.users.get(userId);
   if (!user) return { error: "未加入房间" };
 
-  const item = room.queue.find((s) => s.queueId === queueId);
-  if (!item) return { error: "只能点赞待播放歌曲" };
+  const isCurrent = room.current?.queueId === queueId;
+  const item = isCurrent ? room.current : room.queue.find((s) => s.queueId === queueId);
+  if (!item) return { error: "歌曲已不在播放或待播队列中" };
 
-  const likedByIds = Array.isArray(item.likedByIds) ? item.likedByIds : [];
+  const likeField = isCurrent ? 'currentLikedByIds' : 'likedByIds';
+  const likedByIds = Array.isArray(item[likeField]) ? item[likeField] : [];
   const nextLiked = !likedByIds.includes(userId);
-  if (nextLiked && isQueueRequester(item, userId, user)) {
+  if (nextLiked && !isCurrent && isQueueRequester(item, userId, user)) {
     return { error: "不能给自己的歌点赞" };
   }
-  item.likedByIds = nextLiked ? [...likedByIds, userId] : likedByIds.filter((id) => id !== userId);
-  sortQueueByPriority(room);
+  item[likeField] = nextLiked ? [...likedByIds, userId] : likedByIds.filter((id) => id !== userId);
+  if (!isCurrent) sortQueueByPriority(room);
   const systemMessage = nextLiked ? appendSystemChatMessage(room, `${formatActorName(user)} 点赞了 ${formatSongTitle(item)}`) : null;
   persistRoom(room);
   return {
@@ -4661,12 +4720,26 @@ async function fetchRandomForRoom(room) {
       requestedById: "",
     };
   }
+  const source = normalizeFmSource(room.fmSource);
+  const playedSourceKeys = Array.from(room.randomPlayedKeys || [])
+    .filter((key) => key.startsWith(`${source}:`));
+  if (playedSourceKeys.length >= MAX_RANDOM_HISTORY) {
+    // Set 按最早到最近保存，达到上限只释放最久远的记录，继续保护当前曲
+    const currentKey = room.current ? songIdentity(room.current.source, room.current.id) : '';
+    let remaining = playedSourceKeys.length;
+    for (const key of playedSourceKeys) {
+      if (remaining < MAX_RANDOM_HISTORY) break;
+      if (key === currentKey) continue;
+      room.randomPlayedKeys.delete(key);
+      remaining -= 1;
+    }
+    persistRoom(room);
+  }
   room.randomBatch = filterSongPayloadByArtist(room.randomBatch || [], getRuntimeConfig().blockedArtistKeywords);
   if (room.randomBatch.length > 0) {
     return room.randomBatch.shift();
   }
 
-  const source = normalizeFmSource(room.fmSource);
   const ephemeralCookie = getRoomFmCookie(room.id, source);
   const excludeIds = Array.from(room.randomPlayedKeys || [])
     .filter((key) => key.startsWith(`${source}:`))
@@ -4677,6 +4750,18 @@ async function fetchRandomForRoom(room) {
     ephemeralCookie: ephemeralCookie || '',
     source,
     excludeIds,
+    currentSongId: room.current?.source === source ? room.current.id : '',
+    onAccountInvalid: async () => {
+      // 旧请求返回时可能已重新登录，不能清除新账号凭证
+      if (getRoomFmCookie(room.id, source) !== ephemeralCookie) return;
+      const account = room.musicAccounts?.[source];
+      if (account) {
+        patchRoomMusicAccountCache(room.id, source, { ...account, isValid: false }, { localCookie: null });
+      } else {
+        clearRoomMusicAccountSecret(room.id, source);
+      }
+      notifyRoomStructureChanged(room.id);
+    },
   });
   const allowedSongs = filterSongPayloadByArtist(Array.isArray(songs) ? songs : [], getRuntimeConfig().blockedArtistKeywords);
   if (allowedSongs.length === 0) return null;
@@ -4706,7 +4791,8 @@ async function ensureNextRandom(room) {
         const key = songIdentity(song.source, song.id);
         const currentKey = room.current ? songIdentity(room.current.source, room.current.id) : '';
         const nextKey = room.nextRandom ? songIdentity(room.nextRandom.source, room.nextRandom.id) : '';
-        if (key === currentKey || key === nextKey || ((!room.playlistRoaming || room.playlistRoaming.enabled === false) && room.randomPlayedKeys.has(key))) continue;
+        if (key === currentKey || key === nextKey || (normalizeFmSource(room.fmSource) !== 'tencent'
+          && (!room.playlistRoaming || room.playlistRoaming.enabled === false) && room.randomPlayedKeys.has(key))) continue;
 
         room.nextRandom = buildPendingRandomItem(song, song.requestedBy || "私人漫游", song.requestedById || "");
         break;
@@ -4757,11 +4843,18 @@ function recordSongPlayHistory(room, song) {
 
 function setCurrentSong(room, song) {
   room.randomLoading = false;
+  room.randomError = "";
   const next = serializeQueueItemForRoom(song);
-  if (next) next.dislikedByIds = [];
+  if (next) {
+    next.dislikedByIds = [];
+    next.currentLikedByIds = [];
+    delete next.jumpNext;
+  }
   room.current = next;
   if ((song?.requestedBy === '私人漫游' || song?.requestedBy === '收藏随机' || song?.requestedBy === '指定歌单') && song?.id) {
-    room.randomPlayedKeys.add(songIdentity(song.source, song.id));
+    const key = songIdentity(song.source, song.id);
+    room.randomPlayedKeys.delete(key);
+    room.randomPlayedKeys.add(key);
     while (room.randomPlayedKeys.size > MAX_RANDOM_HISTORY) {
       const oldest = room.randomPlayedKeys.values().next().value;
       if (!oldest) break;
@@ -4833,13 +4926,8 @@ function takeNextFromQueue(room) {
     const pool = excludeId
       ? room.queue.map((item, index) => index).filter((index) => room.queue[index]?.queueId !== excludeId)
       : room.queue.map((_, index) => index);
-    // 房主/管理员置顶是明确的人工指令，优先级高于随机模式；多个置顶按置顶时间从早到晚消费。
-    const prioritized = pool
-      .filter((index) => Number(room.queue[index]?.ownerPriority || 0) > 0)
-      .sort((a, b) => {
-        const priorityDiff = Number(room.queue[a]?.ownerPriority || 0) - Number(room.queue[b]?.ownerPriority || 0);
-        return priorityDiff || a - b;
-      });
+    // 插队优先于随机模式，按队列位置消费，确保新插到队首的歌曲就是下一首
+    const prioritized = pool.filter((index) => Number(room.queue[index]?.ownerPriority || 0) > 0);
     const candidates = prioritized.length ? prioritized : (pool.length ? pool : room.queue.map((_, index) => index));
     const idx = prioritized.length ? candidates[0] : candidates[Math.floor(Math.random() * candidates.length)];
     return room.queue.splice(idx, 1)[0] || null;
@@ -4858,6 +4946,7 @@ function recycleFinishedSongToQueue(room, finishedSong) {
     queueId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     dislikedByIds: [],
     likedByIds: Array.isArray(finishedSong.likedByIds) ? [...finishedSong.likedByIds] : [],
+    currentLikedByIds: undefined,
     ownerPriority: 0,
     priorityBy: "",
     manualOrder: undefined,
@@ -4885,12 +4974,20 @@ async function playNextUnlocked(room, options = {}) {
 
   // 单曲循环：自然播完时重播当前曲；手动切歌 forceAdvance 仍前进
   if (!forceAdvance && !isSongArtistBlocked(finishedSong || room.current, keywords)
+    && !room.queue.some((item) => item.jumpNext === true)
     && normalizePlayMode(room.playMode) === "loop-one" && (finishedSong || room.current)) {
     if (restartCurrentSong(room)) return;
   }
 
   if (!isSongArtistBlocked(finishedSong || room.current, keywords)) {
     recycleFinishedSongToQueue(room, finishedSong || room.current);
+  }
+
+  // 点歌并插队是一次明确的下一首请求，优先于循环或收藏随机，但不改变房间播放模式
+  if (room.queue.some((item) => item.jumpNext === true)) {
+    clearNextRandom(room);
+    setCurrentSong(room, takeNextFromQueue(room));
+    return;
   }
 
   // 收藏随机明确以收藏列表作为下一首来源；已有点歌队列保留，退出该模式后继续消费。
@@ -4972,7 +5069,9 @@ async function playNextUnlocked(room, options = {}) {
       room.isPlaying = false;
       room.currentTime = 0;
       room.startedAt = null;
-      room.randomLoading = true;
+      room.randomLoading = false;
+      room.randomError = "漫游暂无可用歌曲，稍后自动重试，也可先点歌";
+      room.lastRandomRetryAt = Date.now();
       clearSharedPlaybackMedia(room);
       bumpPlaybackState(room);
       invalidateRoomsListCache();
@@ -4989,8 +5088,10 @@ async function playNextUnlocked(room, options = {}) {
   room.isPlaying = false;
   room.currentTime = 0;
   room.startedAt = null;
-  // 漫游关闭时干净停机，不进入"漫游加载中"重试
-  room.randomLoading = !favoriteShuffle && (Boolean(room.playlistRoaming && room.playlistRoaming.enabled !== false) || (room.neteaseFmMode || DEFAULT_FM_MODE) !== FM_MODE_OFF);
+  room.randomLoading = false;
+  const roamingEnabled = !favoriteShuffle && (Boolean(room.playlistRoaming && room.playlistRoaming.enabled !== false) || (room.neteaseFmMode || DEFAULT_FM_MODE) !== FM_MODE_OFF);
+  room.randomError = roamingEnabled ? "漫游暂无可用歌曲，稍后自动重试，也可先点歌" : "";
+  room.lastRandomRetryAt = Date.now();
   clearSharedPlaybackMedia(room);
   bumpPlaybackState(room);
   invalidateRoomsListCache();
@@ -5009,12 +5110,17 @@ async function runEnsurePlayback(roomId) {
   }
 
   if (!room.randomLoading) room.randomLoading = true;
+  room.randomError = "";
   try {
     await withPlaybackLock(room, async () => {
       if (!room.current) await playNextUnlocked(room, { allowFetchRandom: true });
     });
+  } catch (err) {
+    room.randomError = "漫游加载失败，稍后自动重试，也可先点歌";
+    room.lastRandomRetryAt = Date.now();
+    console.error('Room FM failed:', room.id, err?.name || 'Error');
   } finally {
-    if (room.current) room.randomLoading = false;
+    room.randomLoading = false;
   }
   persistRoom(room);
   return serializeRoom(room);
@@ -5033,12 +5139,12 @@ export async function ensurePlayback(roomId) {
   }
 }
 
-const RANDOM_RETRY_COOLDOWN_MS = 2000;
+const RANDOM_RETRY_COOLDOWN_MS = 30_000;
 
 /** 房间卡在 randomLoading 时由定时任务触发重试 */
 export async function retryStuckRandomLoading(roomId) {
   const room = rooms.get(roomId);
-  if (!room || room.current || !room.randomLoading || room.users.size === 0) return null;
+  if (!room || room.current || (!room.randomLoading && !room.randomError) || room.users.size === 0) return null;
 
   const now = Date.now();
   if (room.lastRandomRetryAt && now - room.lastRandomRetryAt < RANDOM_RETRY_COOLDOWN_MS) {
@@ -6177,6 +6283,8 @@ function serializeQueueItemForRoom(item) {
     requestedById: item.requestedById,
     addedAt: item.addedAt,
     likedByIds: Array.isArray(item.likedByIds) ? item.likedByIds : [],
+    ...(Array.isArray(item.currentLikedByIds) ? { currentLikedByIds: item.currentLikedByIds } : {}),
+    ...(item.jumpNext === true ? { jumpNext: true } : {}),
     dislikedByIds: Array.isArray(item.dislikedByIds) ? item.dislikedByIds : [],
     ownerPriority: item.ownerPriority || 0,
     priorityBy: item.priorityBy || "",
@@ -6341,6 +6449,7 @@ function serializeRoom(room, options = {}) {
     chatMuted: forUserId ? isUserChatMuted(room, forUserId) : false,
     ownerId: room.ownerId,
     creatorId: room.creatorId ?? null,
+    ...(getRuntimeConfig().anonymousLoginEnabled && room.ownerAccountId ? { ownerAccountId: room.ownerAccountId } : {}),
     adminIds: getOrderedAdminIds(room),
     maxAdmins: getRoomMaxAdmins(room),
     autoPromotedAdminIds: getOrderedAutoPromotedAdminIds(room),
@@ -6358,10 +6467,12 @@ function serializeRoom(room, options = {}) {
     chatVisibleSince: forUser?.chatVisibleSince ?? null,
     nextRandom: serializeQueueItemForRoom(room.nextRandom),
     randomLoading: Boolean(room.randomLoading),
+    randomError: room.randomError || "",
     audioQuality: normalizeRoomAudioQuality(room.audioQuality),
     neteaseFmMode: normalizeFmMode(room.neteaseFmMode),
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
+    qishuiProxyEnabled: room.qishuiProxyEnabled === true,
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),
@@ -6371,11 +6482,13 @@ function serializeRoom(room, options = {}) {
     customCoverUrl: normalizeCustomCoverUrl(room.customCoverUrl) || undefined,
     chatHistoryVisibleOnJoin: Boolean(room.chatHistoryVisibleOnJoin),
     chatShowAvatars: Boolean(room.chatShowAvatars),
+    hideIpLocation: Boolean(room.hideIpLocation),
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
     songRequestEnabled: room.songRequestEnabled !== false,
+    queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),
     songRequestMaxPerUser: normalizeSongRequestMaxPerUser(room.songRequestMaxPerUser),
     songRequestCooldownSec: normalizeSongRequestCooldownSec(room.songRequestCooldownSec),
@@ -6422,6 +6535,7 @@ export function prepareRoomBroadcast(roomId) {
     muteAll: Boolean(room.muteAll),
     ownerId: room.ownerId,
     creatorId: room.creatorId ?? null,
+    ...(getRuntimeConfig().anonymousLoginEnabled && room.ownerAccountId ? { ownerAccountId: room.ownerAccountId } : {}),
     adminIds: getOrderedAdminIds(room),
     maxAdmins: getRoomMaxAdmins(room),
     autoPromotedAdminIds: getOrderedAutoPromotedAdminIds(room),
@@ -6437,10 +6551,12 @@ export function prepareRoomBroadcast(roomId) {
     skipRequests: room.skipRequests,
     nextRandom: serializeQueueItemForRoom(room.nextRandom),
     randomLoading: Boolean(room.randomLoading),
+    randomError: room.randomError || "",
     audioQuality: normalizeRoomAudioQuality(room.audioQuality),
     neteaseFmMode: normalizeFmMode(room.neteaseFmMode),
     fmSource: normalizeFmSource(room.fmSource),
     fmModeBeforeOff: normalizeFmMode(room.fmModeBeforeOff),
+    qishuiProxyEnabled: room.qishuiProxyEnabled === true,
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),
@@ -6450,11 +6566,13 @@ export function prepareRoomBroadcast(roomId) {
     customCoverUrl: normalizeCustomCoverUrl(room.customCoverUrl) || undefined,
     chatHistoryVisibleOnJoin: Boolean(room.chatHistoryVisibleOnJoin),
     chatShowAvatars: Boolean(room.chatShowAvatars),
+    hideIpLocation: Boolean(room.hideIpLocation),
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
     songRequestEnabled: room.songRequestEnabled !== false,
+    queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),
     songRequestMaxPerUser: normalizeSongRequestMaxPerUser(room.songRequestMaxPerUser),
     songRequestCooldownSec: normalizeSongRequestCooldownSec(room.songRequestCooldownSec),

@@ -21,16 +21,27 @@ interface Props {
 const SIDE_WINDOW = 5;
 const SCROLL_IDLE_MS = 3000;
 
-function Lyrics({
-  lines,
-  currentTime,
+function Lyrics({ lines, currentTime, ...props }: Props) {
+  const displayLines = useMemo(() => filterDisplayLyrics(lines), [lines]);
+  const activeIndex = findActiveLyricIndex(displayLines, currentTime + LYRIC_SYNC_LEAD_SEC);
+  return <MemoLyricsContent {...props} displayLines={displayLines} activeIndex={activeIndex} />;
+}
+
+type ContentProps = Omit<Props, 'lines' | 'currentTime'> & {
+  displayLines: LyricLine[];
+  activeIndex: number;
+};
+
+function LyricsContent({
+  displayLines,
+  activeIndex,
   onSeek,
   variant = 'center',
   size = 'default',
   scrollable = false,
   instantScroll = false,
   mobileCentered = false,
-}: Props) {
+}: ContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLDivElement>(null);
   const [manualScroll, setManualScroll] = useState(false);
@@ -46,16 +57,10 @@ function Lyrics({
     setShowTranslation(roomVisualFxLive.current.lyricShowTranslation !== false);
   }), []);
 
-  const displayLines = useMemo(() => filterDisplayLyrics(lines), [lines]);
   const isSide = variant === 'side';
   const isLarge = size === 'large';
   const fullScroll = scrollable && isSide;
   const shouldAutoScroll = fullScroll || !isSide;
-
-  const activeIndex = useMemo(
-    () => findActiveLyricIndex(displayLines, currentTime + LYRIC_SYNC_LEAD_SEC),
-    [displayLines, currentTime],
-  );
 
   const windowStart = fullScroll
     ? 0
@@ -105,7 +110,7 @@ function Lyrics({
     setManualScroll(false);
     lastActiveIndexRef.current = -1;
     needsInstantSnapRef.current = true;
-  }, [lines]);
+  }, [displayLines]);
 
   // 首次进入 / 换歌：布局后立刻对齐，避免看到滚动条动画
   useLayoutEffect(() => {
@@ -206,5 +211,7 @@ function Lyrics({
     </div>
   );
 }
+
+const MemoLyricsContent = memo(LyricsContent);
 
 export default memo(Lyrics);

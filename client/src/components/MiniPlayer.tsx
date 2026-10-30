@@ -41,12 +41,13 @@ export default memo(function MiniPlayer({
   variant = 'default',
 }: Props) {
 
-  const { current, isPlaying, fmLoading, skipRequests, hasRoom, canSeek, canPause } = useRoomStore(useShallow((s) => {
+  const { current, isPlaying, fmLoading, fmError, skipRequests, hasRoom, canSeek, canPause } = useRoomStore(useShallow((s) => {
     const r = s.room;
     return {
       current: r?.current ?? null,
       isPlaying: r?.isPlaying ?? false,
       fmLoading: Boolean(r?.randomLoading && !r?.current),
+      fmError: !r?.current ? r?.randomError || '' : '',
       skipRequests: r?.skipRequests,
       hasRoom: Boolean(r),
       canSeek: canSeekInRoom(r, s.canControlPlayback),
@@ -112,10 +113,10 @@ export default memo(function MiniPlayer({
 
 
 
-  if (!current && !fmLoading) return null;
+  if (!current && !fmLoading && !fmError) return null;
 
   if (variant === 'immersive') {
-    if (fmLoading) {
+    if (fmLoading || fmError) {
       return (
         <div id="bottom-bar" data-guide="room-player" className="mineradio-bottom-bar visible room-immersive-bottom mx-auto">
           <div className="mineradio-progress-row">
@@ -130,14 +131,14 @@ export default memo(function MiniPlayer({
                 <div className="control-cover cover-empty" aria-hidden />
                 <div className="control-meta">
                   <div className="control-title">私人漫游</div>
-                  <div className="control-artist">正在加载…</div>
+                  <div className="control-artist" role="status">{fmError || '正在加载…'}</div>
                 </div>
               </div>
             <div className="mineradio-ctrl-btn mineradio-ctrl-btn-placeholder" aria-hidden />
             </div>
             <div className="control-cluster transport">
               <button type="button" className="mineradio-play-btn" disabled aria-label="播放控制">
-                <Loader2 className="h-5 w-5 animate-spin" />
+                {fmLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Play className="h-5 w-5" />}
               </button>
             </div>
             <div className="control-cluster modes">
@@ -282,7 +283,7 @@ export default memo(function MiniPlayer({
       ? 'room-player-bar fixed bottom-0 left-0 right-0 z-40 border-t border-white/10 bg-black/25 pb-[env(safe-area-inset-bottom,0px)] backdrop-blur-xl [-webkit-backdrop-filter:blur(24px)]'
       : 'room-player-bar fixed bottom-0 left-0 right-0 z-40 glass border-t border-netease-border/50 pb-[env(safe-area-inset-bottom,0px)]';
 
-  if (fmLoading) {
+  if (fmLoading || fmError) {
     return (
       <div className={playerBarClass} data-guide="room-player">
         <div className="py-1.5 -my-1.5">
@@ -300,16 +301,16 @@ export default memo(function MiniPlayer({
         <div className="max-w-5xl mx-auto flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5">
           <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0 max-w-[38%] sm:max-w-[32%] min-w-0">
             <div className="flex h-10 w-10 sm:h-11 sm:w-11 flex-shrink-0 items-center justify-center rounded-lg bg-netease-card">
-              <Loader2 className="h-4 w-4 animate-spin text-netease-red" />
+              {fmLoading ? <Loader2 className="h-4 w-4 animate-spin text-netease-red" /> : <Play className="h-4 w-4 text-netease-muted" />}
             </div>
             <div className="min-w-0 hidden sm:block">
               <p className="truncate text-sm font-medium text-netease-muted">私人漫游</p>
-              <p className="truncate text-[11px] text-netease-muted/80 sm:text-xs">正在加载…</p>
+              <p className="truncate text-[11px] text-netease-muted/80 sm:text-xs">{fmError ? '暂未获取到歌曲' : '正在加载…'}</p>
             </div>
           </div>
 
           <div className="min-w-0 flex-1 px-1 text-center sm:px-2">
-            <p className="truncate text-xs font-medium leading-tight text-netease-muted sm:text-sm">正在加载私人漫游…</p>
+            <p role="status" className="text-xs font-medium leading-tight text-netease-muted sm:text-sm">{fmError || '正在加载私人漫游…'}</p>
             <p className="mt-0.5 truncate text-[10px] leading-tight text-netease-muted/70 sm:text-xs">{'\u00A0'}</p>
           </div>
 

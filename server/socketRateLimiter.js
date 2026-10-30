@@ -1,3 +1,4 @@
+import { evalRedisScript } from './redisScripts.js';
 import { createHash } from 'node:crypto';
 
 const DISTRIBUTED_FIXED_WINDOW_SCRIPT = `
@@ -64,6 +65,7 @@ const ACTION_EVENTS = new Set([
   'set_favorite',
   'set_favorite_category',
   'create_favorite_category',
+  'delete_favorite_category',
   'import_favorites',
   'create_favorite_share',
   'revoke_favorite_share',
@@ -72,6 +74,7 @@ const ACTION_EVENTS = new Set([
 ]);
 
 const EXTRA_POLICIES = new Map([
+  ['add_songs', { windowMs: 60_000, max: 6 }],
   ['destroy_room', { windowMs: 60_000, max: 3 }],
   ['send_chat', { windowMs: 60_000, max: 30 }],
   ['recall_chat', { windowMs: 60_000, max: 30 }],
@@ -139,7 +142,7 @@ export function createDistributedSocketRateLimiter({
       const redis = getRedisClient?.();
       if (redis?.isReady) {
         try {
-          const result = await redis.eval(DISTRIBUTED_FIXED_WINDOW_SCRIPT, {
+          const result = await evalRedisScript(redis, DISTRIBUTED_FIXED_WINDOW_SCRIPT, {
             keys: [key],
             arguments: [String(windowMs)],
           });

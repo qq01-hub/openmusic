@@ -1,6 +1,47 @@
+import { isAudioFocusInterrupted, resumeAudioFocus } from './audioFocus';
+
 const AUDIO_UNLOCK_KEY = 'openmusic:audio-unlocked';
 
 let sessionUnlocked = false;
+const audioOutputContexts = new WeakMap<HTMLAudioElement, AudioContext>();
+const PLAY_REQUEST_TIMEOUT_MS = 4000;
+
+type NativeAudioSession = EventTarget & { type: string; readonly state?: string };
+
+/** 可选的系统音频会话能力，旧浏览器仍沿用媒体元素播放 */
+export function getNativeAudioSession(): NativeAudioSession | null {
+  try {
+    return (navigator as Navigator & { audioSession?: NativeAudioSession }).audioSession ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function registerAudioOutputContext(audio: HTMLAudioElement, context: AudioContext): void {
+  audioOutputContexts.set(audio, context);
+}
+
+/** 元素播放成功不代表 Web Audio 已经开始输出 */
+export function isAudioOutputRunning(audio: HTMLAudioElement): boolean {
+  const context = audioOutputContexts.get(audio);
+  return !context || context.state === 'running';
+}
+
+export function getAudioOutputDiagnostics(audio: HTMLAudioElement): {
+  state: string | null;
+  sampleRate: number | null;
+  sessionType: string | null;
+  sessionState: string | null;
+} {
+  const context = audioOutputContexts.get(audio);
+  const session = getNativeAudioSession();
+  return {
+    state: context?.state ?? null,
+    sampleRate: context?.sampleRate ?? null,
+    sessionType: session?.type ?? null,
+    sessionState: session?.state ?? null,
+  };
+}
 
 function isReloadNavigation() {
   const navigation = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined;
@@ -59,16 +100,17 @@ export function isWeChatBrowser(): boolean {
 }
 
 export function isIOS(): boolean {
-  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
 export function isMobileDevice(): boolean {
-  return /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  return isIOS() || /Android/i.test(navigator.userAgent);
 }
 
 /** 微信 / 移动端：自动播放受限，需用户手势解锁 */
 export function isRestrictedAutoplayEnv(): boolean {
-  return isWeChatBrowser() || /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+  return isWeChatBrowser() || isMobileDevice();
 }
 
 /** 房间正在播放且尚未手势授权时，应尽早展示解锁层（不必等音频缓冲完成） */
@@ -78,12 +120,22 @@ export function shouldPromptAudioUnlock(isPlaying: boolean): boolean {
 
 /** 配置 audio 以支持微信 / iOS 内联播放 */
 export function configureInlineAudio(audio: HTMLAudioElement): void {
+  // 在接入 Web Audio 前声明音乐播放用途，避免后台输出沿用 ambient 会话
+  const session = getNativeAudioSession();
+  if (session && session.type !== 'playback') {
+    try {
+      session.type = 'playback';
+    } catch {
+      // 部分浏览器仅暴露接口但不允许设置，继续使用既有播放路径
+    }
+  }
   audio.setAttribute('playsinline', 'true');
   audio.setAttribute('webkit-playsinline', 'true');
   audio.setAttribute('x5-playsinline', 'true');
   audio.setAttribute('x5-video-player-type', 'h5-page');
   audio.setAttribute('x5-video-player-fullscreen', 'false');
-  audio.preload = isMobileDevice() ? 'metadata' : 'auto';
+  // iOS 的 metadata 预载经常只拿到首段信息，切歌后会迟迟不进入 HAVE_FUTURE_DATA
+  audio.preload = isIOS() ? 'auto' : isMobileDevice() ? 'metadata' : 'auto';
   (audio as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
   (audio as HTMLAudioElement & { webkitPlaysInline?: boolean }).webkitPlaysInline = true;
 }
@@ -135,6 +187,11 @@ export function runInWeChatUserGesture(fn: () => void): void {
 
 /** 须在 click/touch 回调中同步调用，否则 iOS / 微信会丢失用户手势导致 play() 被拒 */
 export function playInUserGesture(audio: HTMLAudioElement): void {
+  resumeAudioFocus(audio);
+  const context = audioOutputContexts.get(audio);
+  if (context && context.state !== 'running' && context.state !== 'closed') {
+    void context.resume().catch(() => {});
+  }
   if (!audio.src) return;
   runInWeChatUserGesture(() => {
     void audio.play().catch(() => {});
@@ -142,17 +199,36 @@ export function playInUserGesture(audio: HTMLAudioElement): void {
 }
 
 export async function tryPlay(audio: HTMLAudioElement): Promise<PlayResult> {
+  if (isAudioFocusInterrupted(audio)) return 'blocked';
   if (!audio.src) return 'error';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let mediaStarted = false;
   try {
-    await audio.play();
+    // 播放请求可能永久 pending，不能阻塞串行队列及后续缓冲超时
+    const result = await Promise.race([
+      audio.play().then(async () => {
+        mediaStarted = true;
+        const context = audioOutputContexts.get(audio);
+        if (context && context.state !== 'running' && context.state !== 'closed' && !isAudioFocusInterrupted(audio)) {
+          await context.resume();
+        }
+        return 'settled' as const;
+      }),
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), PLAY_REQUEST_TIMEOUT_MS);
+      }),
+    ]);
+    if (result === 'timeout') return mediaStarted && !isAudioOutputRunning(audio) ? 'blocked' : 'error';
     // 微信 / iOS 可能 resolve 但仍处于 paused
-    if (audio.paused) return 'blocked';
+    if (audio.paused || !isAudioOutputRunning(audio)) return 'blocked';
     return 'played';
   } catch (err) {
-    if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'AbortError')) {
+    if (err instanceof DOMException && err.name === 'NotAllowedError') {
       return 'blocked';
     }
     return 'error';
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -162,20 +238,19 @@ export async function tryPlayWithAutoplayFallback(
   allowMutedFallback: boolean,
 ): Promise<PlayResult> {
   const direct = await tryPlay(audio);
-  if (direct === 'played' || !allowMutedFallback) return direct;
+  if (direct === 'played' || !allowMutedFallback || isAudioFocusInterrupted(audio)) return direct;
 
   const wasMuted = audio.muted;
   try {
     audio.muted = true;
-    await audio.play();
+    const muted = await tryPlay(audio);
     audio.muted = wasMuted;
-    if (!audio.paused) return 'played';
+    if (muted === 'played') return 'played';
 
     const retry = await tryPlay(audio);
     return retry;
-  } catch {
+  } finally {
     audio.muted = wasMuted;
-    return 'blocked';
   }
 }
 
@@ -185,16 +260,17 @@ export async function assessPlaybackResult(
   initial: PlayResult,
 ): Promise<PlayResult> {
   if (initial !== 'played') return initial;
+  if (!isAudioOutputRunning(audio)) return 'blocked';
   if (!isRestrictedAutoplayEnv()) return 'played';
 
   const delayMs = isIOS() ? 50 : 120;
   await new Promise((r) => setTimeout(r, delayMs));
-  if (audio.paused) return 'blocked';
+  if (audio.paused || !isAudioOutputRunning(audio)) return 'blocked';
   return 'played';
 }
 
 /** 根据播放结果判断是否需要展示解锁层 */
 export function playbackNeedsUnlock(result: PlayResult, audio: HTMLAudioElement): boolean {
-  if (result === 'blocked' || result === 'error') return true;
-  return Boolean(audio.src && audio.paused);
+  // 换源中断、媒体错误和预探测后的主动暂停都不代表用户撤销了播放授权
+  return result === 'blocked' && !audio.error;
 }

@@ -1,3 +1,5 @@
+import { validateTurnstileConfig } from './turnstile.js';
+import { socialProviderEnabled } from './socialLogin.js';
 import fs from 'fs';
 import path from 'path';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
@@ -19,6 +21,7 @@ const SECRET_FIELDS = new Set([
   'linuxdoClientSecret',
   'githubClientSecret',
   'smtpPass',
+  'turnstileSecretKey',
   'roomCredentialEncryptionKey',
   'aiApiKey',
 ]);
@@ -85,6 +88,12 @@ function envDefaults() {
     /** 收藏分享固定快照的有效期；在管理后台运行配置中维护。 */
     favoriteShareTtlMs: FAVORITE_SHARE_TTL_DEFAULT_MS,
     // 注册邮箱验证码 SMTP：仅由管理后台维护；密码作为密钥字段加密落盘。
+    turnstileEnabled: false,
+    riskChallengeEnabled: false,
+    riskChallengeCooldownMinutes: 30,
+    turnstileSiteKey: '',
+    turnstileSecretKey: '',
+    turnstileHostnames: '',
     smtpHost: '',
     smtpPort: 587,
     smtpSecure: false,
@@ -113,6 +122,8 @@ function envDefaults() {
     svipQualityEnabled: (() => { const enabled = envText('SVIP_QUALITY_ENABLED') === '1' || envText('SVIP_QUALITY_ENABLED').toLowerCase() === 'true'; return { netease: enabled, tencent: enabled, kugou: enabled, qishui: enabled }; })(),
     /** 是否开放全站共享会员入口 */
     sharedMembershipEnabled: true,
+    /** 是否允许未登录用户以匿名身份使用房间与播放功能 */
+    anonymousLoginEnabled: false,
     qqGroupUrl: '',
     metingApiUrl: envText('METING_API_URL'),
     metingApiAuth: envText('METING_API_AUTH'),
@@ -124,6 +135,8 @@ function envDefaults() {
     qiniuBucket: envText('QINIU_BUCKET'),
     qiniuDomain: envText('QINIU_DOMAIN'),
     qiniuZone: envText('QINIU_ZONE', 'z0'),
+    apihzWechatEnabled: false,
+    apihzQqEnabled: false,
     apihzBaseUrl: envText('APIHZ_BASE_URL', 'https://cn.apihz.cn/api'),
     apihzId: envText('APIHZ_ID', envText('APIHZ_IMG_ID', envText('APIHZ_MGC_ID'))),
     apihzKey: envText('APIHZ_KEY', envText('APIHZ_IMG_KEY', envText('APIHZ_MGC_KEY'))),
@@ -339,6 +352,12 @@ function normalize(config) {
       ? Math.max(0, Math.min(Math.round(roomCreateIpLooseCooldownMs), 60 * 60 * 1000))
       : 60 * 1000,
     favoriteShareTtlMs,
+    turnstileEnabled: config.turnstileEnabled === true,
+    riskChallengeEnabled: config.riskChallengeEnabled === true,
+    riskChallengeCooldownMinutes: Math.min(1440, Math.max(1, Math.trunc(Number(config.riskChallengeCooldownMinutes) || 30))),
+    turnstileSiteKey: String(config.turnstileSiteKey || '').trim().slice(0, 200),
+    turnstileSecretKey: String(config.turnstileSecretKey || '').trim(),
+    turnstileHostnames: String(config.turnstileHostnames || '').trim().toLowerCase().slice(0, 2540),
     smtpHost: String(config.smtpHost || '').trim().replace(/[\r\n]/g, '').slice(0, 253),
     smtpPort: (() => {
       const port = Number(config.smtpPort);
@@ -382,6 +401,10 @@ function normalize(config) {
       && config.sharedMembershipEnabled !== 0
       && String(config.sharedMembershipEnabled || '').trim().toLowerCase() !== 'false'
       && String(config.sharedMembershipEnabled || '').trim() !== '0',
+    anonymousLoginEnabled: config.anonymousLoginEnabled === true
+      || config.anonymousLoginEnabled === 1
+      || String(config.anonymousLoginEnabled || '').trim().toLowerCase() === 'true'
+      || String(config.anonymousLoginEnabled || '').trim() === '1',
     qqGroupUrl: normalizeQqGroupUrl(config.qqGroupUrl),
     metingApiUrl: String(config.metingApiUrl || '').trim(),
     metingApiAuth: String(config.metingApiAuth || '').trim(),
@@ -393,6 +416,8 @@ function normalize(config) {
     qiniuBucket: String(config.qiniuBucket || '').trim(),
     qiniuDomain: trimTrailingSlash(config.qiniuDomain),
     qiniuZone: QINIU_ZONES.has(String(config.qiniuZone || '').trim()) ? String(config.qiniuZone).trim() : 'z0',
+    apihzWechatEnabled: config.apihzWechatEnabled === true,
+    apihzQqEnabled: config.apihzQqEnabled === true,
     apihzBaseUrl: trimTrailingSlash(config.apihzBaseUrl) || 'https://cn.apihz.cn/api',
     apihzId: String(config.apihzId || '').trim(),
     apihzKey: String(config.apihzKey || '').trim(),
@@ -590,7 +615,7 @@ export function getRuntimeConfigForAdmin() {
   });
   for (const field of SECRET_FIELDS) {
     result.configuredSecrets[field] = Boolean(config[field]);
-    result[field] = config[field] ? maskSecret(config[field]) : '';
+    result[field] = field === 'turnstileSecretKey' ? '' : config[field] ? maskSecret(config[field]) : '';
   }
   result.aiModelPools = config.aiModelPools.map(({ apiKey, ...pool }) => ({
     ...pool,
@@ -678,6 +703,14 @@ export function setRuntimeConfig(raw = {}) {
   }
 
   const normalized = normalize(next);
+  if ((normalized.apihzWechatEnabled && !socialProviderEnabled('wechat_scan', normalized))
+    || (normalized.apihzQqEnabled && !socialProviderEnabled('qq_scan', normalized))) {
+    return { success: false, error: '启用扫码登录前请配置接口盒子 ID 和密钥，API 地址须为 https://cn.apihz.cn/api 或 https://vip.apihz.cn/api' };
+  }
+  if (normalized.turnstileEnabled && !getSecretKey()) return { success: false, error: '启用人机校验前必须具备稳定的服务端加密主密钥 CLIENT_ID_SECRET，避免密钥无法持久保存' };
+  if (normalized.riskChallengeEnabled && !normalized.turnstileEnabled) return { success: false, error: '异常访问验证需要先启用并配置 Cloudflare Turnstile' };
+  const challengeError = validateTurnstileConfig(normalized);
+  if (challengeError) return { success: false, error: challengeError };
   const urlChecks = [
     validateHttpUrl(normalized.metingApiUrl, 'Meting API 地址', {
       allowEmpty: true,

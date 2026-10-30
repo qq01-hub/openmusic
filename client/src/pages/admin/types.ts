@@ -55,6 +55,10 @@ export interface AdminAuditEntry {
   approved?: boolean;
   reason?: string;
   code?: string;
+  provider?: string;
+  stage?: string;
+  upstreamStatus?: number;
+  bypass?: boolean;
   recoverable?: boolean;
   deviceId?: string;
   userId?: string;
@@ -78,6 +82,13 @@ export interface SiteAnnouncementConfig {
 }
 
 export interface RuntimeConfig {
+  anonymousLoginEnabled: boolean;
+  turnstileEnabled: boolean;
+  riskChallengeEnabled: boolean;
+  riskChallengeCooldownMinutes: number;
+  turnstileSiteKey: string;
+  turnstileSecretKey: string;
+  turnstileHostnames: string;
   roomEmptyTtlMs: number;
   roomRestartGraceMs?: number;
   /** 建房冷却（毫秒）；0 = 关闭 */
@@ -132,6 +143,8 @@ export interface RuntimeConfig {
   apihzBaseUrl: string;
   apihzId: string;
   apihzKey: string;
+  apihzWechatEnabled: boolean;
+  apihzQqEnabled: boolean;
   /** 硅基流动 API Key（密钥字段，回显掩码） */
   aiApiKey: string;
   /** AI 服务 Base URL，例如 https://api.siliconflow.cn/v1 */

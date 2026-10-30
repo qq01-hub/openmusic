@@ -13,6 +13,13 @@ import { requireSessionBootstrap } from '../../lib/sessionBootstrap';
 import { signApiUrl } from '../../lib/signedApiUrl';
 import { isBlockedPlaybackUrl, SourceUnavailableError } from '../../lib/audioPlaybackError';
 import { mergeLyricTranslations } from '../../lib/immersiveLyricLines';
+export {
+  filterDisplayLyrics,
+  getActiveLyricLine,
+  getActiveLyricPair,
+  LYRIC_SYNC_LEAD_SEC,
+} from '../../lib/lyricLookup';
+import { filterDisplayLyrics } from '../../lib/lyricLookup';
 
 function getProvider(source: MusicSource) {
   return providers[source];
@@ -136,8 +143,8 @@ export async function getSongUrlInfo(
       duration: result.duration,
     };
   }
-  const wantsProxy = options?.proxy
-    ?? shouldProxyPlaybackUrl(playbackUrl, shouldProxySongPlaybackUrl());
+  // 调用方可选择视觉代理，iOS 增益输出和 HTTPS 混合内容仍按平台规则处理
+  const wantsProxy = shouldProxyPlaybackUrl(playbackUrl, options?.proxy ?? shouldProxySongPlaybackUrl());
   let resolved = wantsProxy ? toProxiedMediaUrl(playbackUrl) : playbackUrl;
   if (resolved.startsWith('/api/')) {
     resolved = await signApiUrl(resolved);
@@ -266,77 +273,6 @@ export function parseLrc(lrc: string): import('../../types').LyricLine[] {
     ...line,
     time: Math.max(0, line.time - offsetSec),
   }));
-}
-
-/** 过滤 LRC 中的制作信息、推广文案等非演唱歌词 */
-const CREDIT_LINE_RE =
-  /^(歌手|演唱|原唱|专辑|来源|OP|SP|版权|未经许可|宣传|策划|统筹|发行|出品方?|监制|配唱|监唱|制作|录音|混音|母带|编曲|作曲|作词|吉他|贝斯|鼓|键盘|和声|弦乐|钢琴|打击乐|营销推广|音乐制作|音乐监制|歌曲监制|和声编写|弦乐编写|混音工程师|录音工程师|母带工程师|制作统筹|人声|弦乐演奏|吉他演奏|贝斯演奏|鼓演奏)\s*[:：]/i;
-
-const PROMO_LINE_RE =
-  /(网易飓风计划|现金激励|流量扶持|业务联系|vip\.163\.com|来自〖|〗)/i;
-
-const NON_LYRIC_LINE_RE = /^(?:乐夏|拜拜|谢谢|再见|主唱|吉他(?:\/和声)?|贝斯|鼓(?:\/和声)?|和声|特邀键盘|声音制作人|音乐混音(?:顾问)?|舞台总监|灯光总监)\b/i;
-
-export function filterDisplayLyrics(lines: import('../../types').LyricLine[]): import('../../types').LyricLine[] {
-  return lines.filter((line) => {
-    const text = line.text.trim();
-    if (!text) return false;
-    if (CREDIT_LINE_RE.test(text)) return false;
-    if (PROMO_LINE_RE.test(text)) return false;
-    if (NON_LYRIC_LINE_RE.test(text)) return false;
-    return true;
-  });
-}
-
-/** 歌词高亮相对播放时间略提前，减轻「歌词慢半拍」听感 */
-export const LYRIC_SYNC_LEAD_SEC = 0.28;
-
-export function getActiveLyricLine(
-  lines: import('../../types').LyricLine[],
-  currentTime: number,
-): import('../../types').LyricLine | null {
-  const displayLines = filterDisplayLyrics(lines);
-  if (displayLines.length === 0) return null;
-
-  const syncTime = currentTime + LYRIC_SYNC_LEAD_SEC;
-  const activeIndex = displayLines.findIndex((line, i) => {
-    const next = displayLines[i + 1];
-    return syncTime >= line.time && (!next || syncTime < next.time);
-  });
-
-  if (activeIndex >= 0) return displayLines[activeIndex];
-  if (syncTime < displayLines[0].time) return null;
-  return displayLines[displayLines.length - 1];
-}
-
-export function getActiveLyricPair(
-  lines: import('../../types').LyricLine[],
-  currentTime: number,
-): { current: string | null; next: string | null } {
-  const displayLines = filterDisplayLyrics(lines);
-  if (displayLines.length === 0) return { current: null, next: null };
-
-  const syncTime = currentTime + LYRIC_SYNC_LEAD_SEC;
-  const activeIndex = displayLines.findIndex((line, i) => {
-    const next = displayLines[i + 1];
-    return syncTime >= line.time && (!next || syncTime < next.time);
-  });
-
-  if (activeIndex >= 0) {
-    return {
-      current: displayLines[activeIndex].text,
-      next: displayLines[activeIndex + 1]?.text ?? null,
-    };
-  }
-
-  if (syncTime < displayLines[0].time) {
-    return { current: null, next: displayLines[0].text };
-  }
-
-  return {
-    current: displayLines[displayLines.length - 1].text,
-    next: null,
-  };
 }
 
 /** 歌词结束后常见纯音乐尾奏预留（秒） */

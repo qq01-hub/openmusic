@@ -5,6 +5,9 @@ import { getSafeAvatarUrl } from '../lib/avatarImage';
 interface RoomStore {
   room: RoomState | null;
   nickname: string;
+  nicknameAccountId: string | null;
+  nicknameDirty: boolean;
+  nicknameMigration: boolean;
   avatar_url: string;
   mySocketId: string | null;
   myConnectionId: string | null;
@@ -20,6 +23,8 @@ interface RoomStore {
   isReconnecting: boolean;
   setRoom: (room: RoomState | null) => void;
   setNickname: (name: string) => void;
+  setNicknameDraft: (name: string) => void;
+  bindAccountNickname: (accountId: string | null, nickname: string) => void;
   /** 仅设置身份 ID；特权角色必须经 syncRolesFromRoom 从房间字段推导 */
   setConnectionInfo: (
     socketId: string | null,
@@ -50,6 +55,9 @@ function deriveRoles(room: RoomState, mySocketId: string) {
 export const useRoomStore = create<RoomStore>((set, get) => ({
   room: null,
   nickname: localStorage.getItem('sjb_nickname') || '',
+  nicknameAccountId: null,
+  nicknameDirty: false,
+  nicknameMigration: false,
   mySocketId: null,
   myConnectionId: null,
   isOwner: false,
@@ -63,7 +71,23 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
   setRoom: (room) => set({ room }),
   setNickname: (nickname) => {
     localStorage.setItem('sjb_nickname', nickname);
-    set({ nickname });
+    set({ nickname, nicknameDirty: false, nicknameMigration: false });
+  },
+  setNicknameDraft: (nickname) => {
+    localStorage.setItem('sjb_nickname', nickname);
+    set({ nickname, nicknameDirty: true, nicknameMigration: false });
+  },
+  bindAccountNickname: (accountId, savedNickname) => {
+    const current = get();
+    const cacheOwner = localStorage.getItem('sjb_nickname_account');
+    if (!accountId && !cacheOwner && !current.nicknameAccountId) return;
+    if (accountId && current.nicknameAccountId === accountId && current.nicknameDirty) return;
+    const cached = accountId && (cacheOwner === null || cacheOwner === accountId)
+      ? localStorage.getItem('sjb_nickname') || '' : '';
+    const nickname = savedNickname || cached;
+    localStorage.setItem('sjb_nickname_account', accountId || '');
+    localStorage.setItem('sjb_nickname', nickname);
+    set({ nicknameAccountId: accountId, nickname, nicknameDirty: Boolean(accountId && !savedNickname && nickname), nicknameMigration: Boolean(accountId && !savedNickname && nickname) });
   },
   setConnectionInfo: (mySocketId, myConnectionId = null) => {
     if (!mySocketId || !myConnectionId) {

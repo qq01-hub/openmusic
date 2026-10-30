@@ -4,6 +4,7 @@ import {
   ROOM_VISUAL_MODE_META,
   type RoomVisualMode,
 } from '../lib/roomVisualPreset';
+import { preloadFoliaStage } from '../lib/foliaStageLoader';
 
 const PRESET_DESC: Record<RoomVisualMode, string> = {
   folia: '15 种歌词主题 · 6 类背景',
@@ -29,6 +30,9 @@ interface Props {
 export default function RoomVisualPresetGrid({ value, onChange }: Props) {
   const [switchingMode, setSwitchingMode] = useState<RoomVisualMode | null>(null);
   const timerRef = useRef<number | null>(null);
+  const warmPreset = (mode: RoomVisualMode) => {
+    if (mode === 'folia') void preloadFoliaStage().catch(() => {});
+  };
 
   useEffect(
     () => () => {
@@ -42,6 +46,7 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
       if (mode === value) return;
       if (timerRef.current !== null) window.clearTimeout(timerRef.current);
       setSwitchingMode(mode);
+      warmPreset(mode);
       timerRef.current = window.setTimeout(() => {
         setSwitchingMode(null);
         timerRef.current = null;
@@ -65,6 +70,8 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
             aria-selected={active}
             className={`preset-card ${active ? 'active' : ''} ${switching ? 'switching' : ''}`}
             onClick={() => handleSelect(mode)}
+            onPointerEnter={() => warmPreset(mode)}
+            onFocus={() => warmPreset(mode)}
           >
             <div className="pc-name">{meta.name}</div>
             <div className="pc-desc">{PRESET_DESC[mode]}</div>

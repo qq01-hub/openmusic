@@ -54,10 +54,12 @@ export interface QueueItem extends Song {
   requestedById?: string;
   addedAt: number;
   likedByIds?: string[];
+  /** 当前播放点赞仅计数，不带入循环队列排序 */
+  currentLikedByIds?: string[];
   /** 当前曲被踩的人（仅对正在播放有效，切歌后清空） */
   dislikedByIds?: string[];
   ownerPriority?: number;
-  /** 管理员插队置顶的操作者昵称 */
+  /** 插队置顶的操作者昵称，房主操作时不填 */
   priorityBy?: string;
   /** 拖拽排序后的锁定序号（服务端排序用，客户端可不展示） */
   manualOrder?: number;
@@ -236,6 +238,7 @@ export interface RoomState {
   /** 仅加入时由服务端按当前用户计算；广播更新请用 isChatMutedForUser */
   chatMuted?: boolean;
   ownerId: string | null;
+  ownerAccountId?: string | null;
   /** 房间初创房主（可通过转让变更；唯一显示「房主」） */
   creatorId?: string | null;
   /** 管理员（房主可设人数上限，默认 5） */
@@ -270,6 +273,8 @@ export interface RoomState {
   nextRandom?: QueueItem | null;
   /** 服务端正在为空队列拉取私人漫游 */
   randomLoading?: boolean;
+  /** 漫游失败提示，等待服务端重试时不显示加载动画 */
+  randomError?: string;
   /** 房间播放音质（网易 / QQ） */
   audioQuality?: RoomAudioQuality;
   /** 播放顺序：顺序 / 随机 / 收藏随机 / 单曲循环 / 列表循环 / 列表内随机 */
@@ -280,6 +285,8 @@ export interface RoomState {
   fmSource?: 'netease' | 'tencent' | 'kugou' | 'qishui';
   /** 漫游关闭前的模式，重新开启时恢复 */
   fmModeBeforeOff?: string;
+  /** 汽水密文是否经同源代理后仍在浏览器本地解密 */
+  qishuiProxyEnabled?: boolean;
   /** 队列为空时仅从这些歌单的合并曲库循环取歌；不存在时使用私人漫游 */
   playlistRoaming?: {
     /** 开启后同名歌曲按网易云、QQ、汽水、酷狗顺序保留一个候选 */
@@ -315,6 +322,8 @@ export interface RoomState {
   chatHistoryVisibleOnJoin?: boolean;
   /** 聊天室是否在昵称左侧显示头像（仅房主可设） */
   chatShowAvatars?: boolean;
+  /** 房间右上角成员列表是否隐藏 IP 归属（仅房主可设，默认显示） */
+  hideIpLocation?: boolean;
   /** 是否在聊天室提示“昵称进入房间” */
   joinNoticeEnabled?: boolean;
   /** 同一用户进房提醒的防重复间隔（秒），默认 180 */
@@ -325,6 +334,8 @@ export interface RoomState {
   roomAiBotName?: string;
   /** 是否允许成员点歌（关闭后仅房主/管理员可点） */
   songRequestEnabled?: boolean;
+  /** 待播歌曲点赞是否提高排序，默认开启 */
+  queueLikeSortEnabled?: boolean;
   /** 是否允许成员为自己的点歌插队（默认关闭，房主/管理员始终可插队） */
   memberJumpEnabled?: boolean;
   /** 是否允许成员拖动进度条（默认关闭，房主/管理员始终可） */

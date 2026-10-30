@@ -1,13 +1,14 @@
 import { getSharedAudio } from './audioElement';
 
 type AudioTask = () => void | Promise<void>;
+type QueuedAudioTask = { run: AudioTask; cancel: () => void };
 
 /**
  * 全局单例音频执行队列：play / pause / seek / load 串行执行，
  * 避免并发操作打断 decode pipeline 导致无声或重播。
  */
 class AudioController {
-  private queue: AudioTask[] = [];
+  private queue: QueuedAudioTask[] = [];
   private running = false;
 
   get audio(): HTMLAudioElement {
@@ -21,13 +22,16 @@ class AudioController {
   /** 入队并等待该任务完成 */
   exec(task: AudioTask): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.queue.push(async () => {
-        try {
-          await task();
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
+      this.queue.push({
+        run: async () => {
+          try {
+            await task();
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
+        },
+        cancel: resolve,
       });
       void this.drain();
     });
@@ -39,7 +43,9 @@ class AudioController {
   }
 
   clearQueue(): void {
-    this.queue.length = 0;
+    // 跳过的任务也必须结束等待，让换曲流程继续检查 generation 并释放加载锁
+    const skipped = this.queue.splice(0);
+    for (const task of skipped) task.cancel();
   }
 
   private async drain(): Promise<void> {
@@ -48,7 +54,7 @@ class AudioController {
     while (this.queue.length > 0) {
       const task = this.queue.shift()!;
       try {
-        await task();
+        await task.run();
       } catch {
         // 继续执行后续任务
       }

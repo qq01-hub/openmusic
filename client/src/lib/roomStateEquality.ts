@@ -48,6 +48,7 @@ function queueItemEqual(a: QueueItem, b: QueueItem): boolean {
     && a.priorityBy === b.priorityBy
     && a.manualOrder === b.manualOrder
     && stringArraysEqual(a.likedByIds, b.likedByIds)
+    && stringArraysEqual(a.currentLikedByIds, b.currentLikedByIds)
     && stringArraysEqual(a.dislikedByIds, b.dislikedByIds);
 }
 
@@ -193,6 +194,7 @@ export function isRoomStateEquivalent(a: RoomState, b: RoomState): boolean {
     && a.chatVisibleSince === b.chatVisibleSince
     && currentSongEqual(a.nextRandom ?? null, b.nextRandom ?? null)
     && a.randomLoading === b.randomLoading
+    && a.randomError === b.randomError
     && audioQualityEqual(a.audioQuality, b.audioQuality)
     && a.playMode === b.playMode
     && a.neteaseFmMode === b.neteaseFmMode
@@ -205,6 +207,7 @@ export function isRoomStateEquivalent(a: RoomState, b: RoomState): boolean {
     && a.roomAiEnabled === b.roomAiEnabled
     && a.roomAiBotName === b.roomAiBotName
     && a.songRequestEnabled === b.songRequestEnabled
+    && a.queueLikeSortEnabled === b.queueLikeSortEnabled
     && a.memberJumpEnabled === b.memberJumpEnabled
     && a.memberSeekEnabled === b.memberSeekEnabled
     && a.memberPauseEnabled === b.memberPauseEnabled

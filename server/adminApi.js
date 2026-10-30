@@ -1,3 +1,6 @@
+import { listAccountSessions, revokeAccountSessionById } from './accountAuth.js';
+import { trimExpiredListTail } from './redisListRetention.js';
+import { createSocialLogin, mountSocialLoginRoutes, SOCIAL_PROVIDERS, SocialLoginError, socialProviderEnabled } from './socialLogin.js';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import {
   listRoomsForAdmin,
@@ -20,7 +23,7 @@ import {
   listPendingPermanentNoticesForUser,
   ackPermanentDecisionNotice,
 } from './permanentApplication.js';
-import { getRedisClient } from './roomStorage.js';
+import { getRedisClient, getRoomWriteQueueStats } from './roomStorage.js';
 import { riskControl, RiskControlError } from './riskControl.js';
 import {
   getMetingUpstreamStatus,
@@ -71,6 +74,8 @@ import {
   isGithubIdBoundToAdmin,
   bindAdminGithub,
   unbindAdminGithub,
+  getAdminSocialBinding,
+  setAdminSocialBinding,
 } from './adminCredentials.js';
 import {
   isLinuxdoConfigured,
@@ -126,27 +131,9 @@ async function pruneExpiredAdminAudit(client, { force = false } = {}) {
   auditPruneAt = now;
   const cutoff = auditCutoffMs(now);
   try {
-    const rows = await client.lRange(ADMIN_AUDIT_KEY, 0, -1);
-    if (!rows.length) return 0;
-    const kept = [];
-    for (const raw of rows) {
-      try {
-        const entry = JSON.parse(raw);
-        if (Number(entry?.at) >= cutoff) kept.push(raw);
-      } catch {
-        // 损坏条目直接丢弃
-      }
-    }
-    const trimmed = kept.length > AUDIT_MAX ? kept.slice(0, AUDIT_MAX) : kept;
-    if (trimmed.length === rows.length) return 0;
-    const multi = client.multi();
-    multi.del(ADMIN_AUDIT_KEY);
-    if (trimmed.length) {
-      // node-redis 支持一次传入数组，避免超大 spread
-      multi.rPush(ADMIN_AUDIT_KEY, trimmed);
-    }
-    await multi.exec();
-    return rows.length - trimmed.length;
+    const result = await trimExpiredListTail(client, ADMIN_AUDIT_KEY, cutoff);
+    if (result.more) auditPruneAt = now - AUDIT_PRUNE_INTERVAL_MS + 1000;
+    return result.removed;
   } catch (err) {
     console.error('admin-audit 过期清理失败:', err?.message || err);
     return 0;
@@ -259,12 +246,12 @@ export function appendAdminAudit(action, detail = {}, ip = '') {
     console.error('admin-audit: Redis 不可用，审计记录未持久化');
     return;
   }
-  void client
+  void client.multi()
     .lPush(ADMIN_AUDIT_KEY, JSON.stringify(entry))
-    .then(async () => {
-      await client.lTrim(ADMIN_AUDIT_KEY, 0, AUDIT_MAX - 1);
-      await pruneExpiredAdminAudit(client);
-    })
+    .lTrim(ADMIN_AUDIT_KEY, 0, AUDIT_MAX - 1)
+    .expire(ADMIN_AUDIT_KEY, AUDIT_RETENTION_DAYS * 86400)
+    .exec()
+    .then(() => pruneExpiredAdminAudit(client))
     .catch((err) => {
       console.error('admin-audit Redis 写入失败:', err?.message || err);
     });
@@ -277,9 +264,9 @@ function audit(action, detail = {}, ip = '') {
 /** 审计筛选大类 → 具体 action（与前端 AUDIT_ACTION_OPTIONS 对应） */
 const AUDIT_ACTION_GROUPS = {
   auth: ['login_ok', 'login_fail', 'logout'],
-  oauth: ['linuxdo_bind', 'linuxdo_unbind', 'github_bind', 'github_unbind'],
+  oauth: ['linuxdo_bind', 'linuxdo_unbind', 'github_bind', 'github_unbind', 'oauth_callback_failed', 'social_bind', 'social_unbind', 'social_fail'],
   account: ['set_credentials', 'set_credentials_fail', 'set_entry_path'],
-  risk: ['risk_account_update', 'risk_policy_update'],
+  risk: ['risk_session_revoke', 'risk_account_update', 'risk_policy_update', 'risk_history_clear', 'risk_history_clear_failed', 'risk_human_challenge_bypass'],
   config: [
     'set_runtime_config',
     'reset_music_api_circuit',
@@ -323,7 +310,7 @@ async function listAuditLogPage({ offset = 0, limit = 10, q = '', action = '' } 
   try {
     await pruneExpiredAdminAudit(client);
     const cutoff = auditCutoffMs();
-    const rows = await client.lRange(ADMIN_AUDIT_KEY, 0, -1);
+    const rows = await client.lRange(ADMIN_AUDIT_KEY, 0, AUDIT_MAX - 1);
     const all = rows.map((raw, index) => {
       try {
         const entry = JSON.parse(raw);
@@ -498,9 +485,11 @@ function resolveRequestOrigin(req) {
 /** Origin 的 host 与请求 Host 一致即视为同源（浏览器无法伪造 Origin，天然防 CSRF） */
 function isSameHostOrigin(req, origin) {
   const host = String(req.headers?.host || '').trim();
-  if (!origin || !host) return false;
+  if (!origin || !host || /[\s/@\\?#]/u.test(host)) return false;
   try {
-    return new URL(origin).host === host;
+    const source = new URL(origin);
+    if (!['http:', 'https:'].includes(source.protocol) || source.username || source.password) return false;
+    return source.host === new URL(`${source.protocol}//${host}`).host;
   } catch {
     return false;
   }
@@ -524,12 +513,7 @@ function createRequireAdminOrigin(allowedOrigins) {
 
     // 未配置 CLIENT_URL：若带 Origin，必须与 Host 同源；无 Origin（如 curl）仅非生产放行
     if (origin) {
-      const host = String(req.headers?.host || '').trim();
-      try {
-        if (new URL(origin).host !== host) {
-          return res.status(403).json({ error: '请求来源不被允许' });
-        }
-      } catch {
+      if (!isSameHostOrigin(req, origin)) {
         return res.status(403).json({ error: '请求来源不被允许' });
       }
       return next();
@@ -587,6 +571,14 @@ export function mountAdminApi(app, {
   issueOAuthState,
 }) {
   const requireAdminOrigin = createRequireAdminOrigin(allowedOrigins);
+
+  app.use('/api/admin', (_req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, private');
+    res.setHeader('CDN-Cache-Control', 'no-store');
+    res.setHeader('Surrogate-Control', 'no-store');
+    res.vary('Cookie');
+    next();
+  });
 
   // 校验当前前端路径是否为管理入口（不返回真实路径，避免泄露）
   app.post('/api/admin/gate', (req, res) => {
@@ -671,6 +663,65 @@ export function mountAdminApi(app, {
     clearAdminSessionCookie(res);
     res.json({ ok: true });
   });
+
+  // 所有扫码写操作复用后台 Origin 检查，绑定要求同一个有效管理员会话
+  app.use('/api/admin/social', requireAdminOrigin);
+  const socialService = createSocialLogin({ getStore: getRedisClient, getConfig: getRuntimeConfig });
+  mountSocialLoginRoutes(app, {
+    basePath: '/api/admin/social',
+    service: socialService,
+    metric: (action, outcome) => {
+      if (outcome !== 'success') audit('social_fail', { via: action, code: outcome });
+    },
+    contextFor: async (req, _res, action) => {
+      const ip = getClientIp?.(req) || req.ip || '';
+      const session = verifySession(req);
+      if (action === 'bind' && (!isAdminEnabled() || !session)) throw new SocialLoginError('ADMIN_AUTH_REQUIRED', '未登录或登录已过期');
+      if (action === 'login') {
+        const block = getLoginBlock(ip);
+        if (block.blocked) throw new SocialLoginError('SOCIAL_LOGIN_RATE_LIMITED', '登录尝试过于频繁，请稍后再试', 429);
+      }
+      return { audience: 'admin', principal: getSessionIdFromRequest(req), ip };
+    },
+    complete: async (req, res, context, identity) => {
+      if (context.action === 'bind') {
+        if (!isAdminEnabled() || !verifySession(req)) throw new SocialLoginError('ADMIN_AUTH_REQUIRED', '未登录或登录已过期');
+        const saved = await setAdminSocialBinding(identity.provider, identity);
+        if (!saved.success) throw new SocialLoginError('SOCIAL_BIND_FAILED', saved.error, 503);
+        audit('social_bind', { via: identity.provider }, context.ip);
+        return { ok: true };
+      }
+      noteLoginAttempt(context.ip);
+      const binding = await getAdminSocialBinding(identity.provider);
+      if (!isAdminEnabled() || !binding || binding.id !== identity.subject) {
+        noteLoginFailure(context.ip);
+        audit('login_fail', { via: identity.provider }, context.ip);
+        throw new SocialLoginError('SOCIAL_ADMIN_DENIED', '无法使用此身份登录，请使用管理员账号密码');
+      }
+      noteLoginSuccess(context.ip);
+      const { sid } = createSession();
+      setAdminSessionCookie(res, sid);
+      audit('login_ok', { via: identity.provider }, context.ip);
+      return { ok: true };
+    },
+  });
+  app.get('/api/admin/social/status', async (req, res) => {
+    const authenticated = isAdminEnabled() && Boolean(verifySession(req));
+    const result = {};
+    for (const provider of SOCIAL_PROVIDERS) {
+      const binding = authenticated ? await getAdminSocialBinding(provider) : null;
+      result[provider] = { enabled: socialProviderEnabled(provider, getRuntimeConfig()), bound: binding ? { username: binding.username, boundAt: binding.boundAt } : null };
+    }
+    res.json(result);
+  });
+  for (const provider of SOCIAL_PROVIDERS) {
+    app.post(`/api/admin/social/${provider}/unbind`, requireAdmin, async (req, res) => {
+      const saved = await setAdminSocialBinding(provider, null);
+      if (!saved.success) return res.status(503).json({ error: saved.error });
+      audit('social_unbind', { via: provider }, getClientIp?.(req) || req.ip || '');
+      return res.json({ ok: true });
+    });
+  }
 
   async function startAdminOAuth(req, res, provider, signState, buildAuthorizeUrl, purpose) {
     try {
@@ -847,6 +898,7 @@ export function mountAdminApi(app, {
       uptimeSec: Math.floor(process.uptime()),
       memoryRssMb: Math.round(mem.rss / 1024 / 1024),
       redisEnabled: isRedisEnabled(),
+      redisWriteQueue: getRoomWriteQueueStats(),
       metingUpstreams: getMetingUpstreamStatus(),
       customMusicApis: getCustomMusicApiStatus(),
       entryPath: getAdminEntryPath(),
@@ -874,6 +926,22 @@ export function mountAdminApi(app, {
   app.get('/api/admin/risk/accounts/:id', requireAdmin, riskHandler(async (req, res) => {
     res.json(await riskControl.detail(req.params.id));
   }));
+  app.get('/api/admin/risk/accounts/:id/sessions', requireAdmin, riskHandler(async (req, res) => {
+    res.json({ items: await listAccountSessions(req.params.id) });
+  }));
+  app.delete('/api/admin/risk/accounts/:id/sessions/:sessionId', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+    if (!reason || reason.length > 200) return res.status(400).json({ error: '请填写 1 至 200 字的撤销原因' });
+    const revoked = await revokeAccountSessionById(req.params.id, req.params.sessionId);
+    if (!revoked) return res.status(404).json({ error: '未找到该账户的会话' });
+    appendAdminAudit('risk_session_revoke', { accountId: req.params.id, reason }, getClientIp?.(req) || req.ip || '');
+    res.json({ ok: true });
+  }));
+  app.put('/api/admin/risk/accounts/:id/human-challenge', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const state = await riskControl.setHumanChallengeBypass(req.params.id, req.body);
+    appendAdminAudit('risk_human_challenge_bypass', { accountId: req.params.id, bypass: state.bypass, reason: state.bypassReason }, getClientIp?.(req) || req.ip || '');
+    res.json({ ok: true, ...state });
+  }));
   app.put('/api/admin/risk/accounts/:id', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
     const decision = await riskControl.setDecision(req.params.id, req.body);
     appendAdminAudit('risk_account_update', { accountId: req.params.id, status: decision.status, tags: decision.tags, reason: decision.reason }, getClientIp?.(req) || req.ip || '');
@@ -882,6 +950,11 @@ export function mountAdminApi(app, {
       io.in(`account:${req.params.id}`).disconnectSockets(true);
     }
     res.json({ ok: true, ...decision });
+  }));
+  app.post('/api/admin/risk/accounts/:id/reset', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const reset = await riskControl.resetRisk(req.params.id, req.body);
+    appendAdminAudit('risk_account_reset', { accountId: req.params.id, latestIp: reset.latestIp, reason: typeof req.body?.reason === 'string' ? req.body.reason.trim() : '' }, getClientIp?.(req) || req.ip || '');
+    res.json(reset);
   }));
   app.get('/api/admin/risk/policy', requireAdmin, riskHandler(async (_req, res) => {
     res.json(await riskControl.getPolicy());
@@ -893,6 +966,17 @@ export function mountAdminApi(app, {
   }));
   app.get('/api/admin/risk/events', requireAdmin, riskHandler(async (_req, res) => {
     res.json({ items: await riskControl.events() });
+  }));
+  app.post('/api/admin/risk/history/clear', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const ip = getClientIp?.(req) || req.ip || '';
+    try {
+      const result = await riskControl.clearHistory(req.body);
+      appendAdminAudit('risk_history_clear', { accounts: result.accounts, clearedAt: result.clearedAt }, ip);
+      res.json(result);
+    } catch (error) {
+      appendAdminAudit('risk_history_clear_failed', { code: error instanceof RiskControlError ? error.code : 'RISK_STORAGE_UNAVAILABLE' }, ip);
+      throw error;
+    }
   }));
 
   app.get('/api/admin/audit', requireAdmin, async (req, res) => {

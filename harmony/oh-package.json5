@@ -1,0 +1,7 @@
+{
+  "name": "openmusic-harmony",
+  "version": "1.0.0",
+  "description": "OpenMusic ArkWeb shell",
+  "modelVersion": "5.0.0",
+  "dependencies": {}
+}

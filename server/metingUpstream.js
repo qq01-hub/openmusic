@@ -7,6 +7,7 @@ import { createMetingResponseCache } from './metingCache.js';
 import { filterSongPayloadByArtist } from './songArtistFilter.js';
 import { incrementMetric } from './logger.js';
 import { createMetingAssertion } from './metingAssertion.js';
+import { isMetingBusinessFailure, normalizeMetingFailure } from './metingError.js';
 
 // METING_API_URL 支持英文逗号分隔多个上游；METING_API_AUTH 同样支持逗号分隔：
 // 与 URL 一一对应；只填一个则应用到所有上游。
@@ -14,7 +15,10 @@ const FAIL_COOLDOWN_MS = 60_000;
 const UPSTREAM_ATTEMPTS = 2;
 const MAX_RECENT_ERRORS = 20;
 const METING_RESPONSE_CACHE_MAX = 2048;
-const METING_RESPONSE_CACHE = createMetingResponseCache({ maxEntries: METING_RESPONSE_CACHE_MAX });
+const METING_RESPONSE_CACHE = createMetingResponseCache({
+  maxEntries: METING_RESPONSE_CACHE_MAX,
+  shouldCache: (snapshot) => snapshot.status >= 200 && snapshot.status < 400,
+});
 
 const METING_CACHE_TTLS = {
   search: 30_000,
@@ -39,8 +43,10 @@ export function getMetingRequestContext() {
 
 /** 避免与 roomManager 循环依赖：由 index 启动时注册 */
 let resolveRoomInternal = null;
-export function registerMetingRoomResolver(fn) {
+let invalidateRoomAccount = null;
+export function registerMetingRoomResolver(fn, onAccountInvalid = null) {
   resolveRoomInternal = typeof fn === 'function' ? fn : null;
+  invalidateRoomAccount = typeof onAccountInvalid === 'function' ? onAccountInvalid : null;
 }
 
 /** 读取房间绑定的对应平台账号和私有凭证。 */
@@ -59,8 +65,9 @@ function getRoomScopedAccount(roomId, server) {
 
 /** 房间会员账号接管全部请求；非会员账号只用于该房间的私人漫游。 */
 function roomNeedsScopedProxy(roomId, server, type = '') {
+  if (getMetingRequestContext().usePublicMeting === true) return false;
   const { account, cookie } = getRoomScopedAccount(roomId, server);
-  if (!account || !cookie) return false;
+  if (!account || account.isValid === false || !cookie) return false;
   const normalizedType = String(type).trim().toLowerCase();
   if (account.hasVip === true || normalizedType === 'fm') return true;
 
@@ -396,8 +403,26 @@ async function requestUpstream(upstream, query, options, timeoutMs) {
     try {
       Object.assign(mergedOptions.headers, createMetingAssertion(upstream.auth, built.url, getMetingRequestContext(), { method: options?.method || 'GET', body: options?.body || '' }));
       const response = await fetchMeting(built.url, mergedOptions, timeoutMs);
+      if (built.scoped && response.status === 422) {
+        let payload;
+        try { payload = await response.json(); } catch { payload = null; }
+        if (payload?.code === 'MUSIC_ACCOUNT_INVALID') {
+          const ctx = getMetingRequestContext();
+          if (invalidateRoomAccount) {
+            await invalidateRoomAccount(ctx.roomId, query.server, built.headers['X-OpenMusic-Cookie']);
+          }
+          return runWithMetingRequestContext(
+            { usePublicMeting: true },
+            () => requestUpstream(upstream, query, options, timeoutMs),
+          );
+        }
+      }
       // 网络抖动和 5xx 快速重试一次；4xx 多为鉴权/参数问题，直接交给切换逻辑。
-      if (response.status >= 500 && attempt + 1 < UPSTREAM_ATTEMPTS) continue;
+      if (response.status >= 500 && attempt + 1 < UPSTREAM_ATTEMPTS) {
+        let payload;
+        try { payload = await response.json(); } catch { payload = null; }
+        if (!isMetingBusinessFailure(payload?.code)) continue;
+      }
       return response;
     } catch (err) {
       lastError = err;
@@ -438,10 +463,11 @@ function isNoUrlPayload(text) {
   try {
     const data = JSON.parse(normalized);
     if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+    if (data.code && data.code !== 'MUSIC_URL_UNAVAILABLE') return false;
     const err = typeof data.error === 'string' ? data.error.trim().toLowerCase() : '';
     if (err === 'no url' || err === 'empty url') return true;
     const url = typeof data.url === 'string' ? data.url.trim() : '';
-    return !url && (err.length > 0 || Object.prototype.hasOwnProperty.call(data, 'url'));
+    return !url && Object.prototype.hasOwnProperty.call(data, 'url');
   } catch {
     return false;
   }
@@ -481,6 +507,7 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
   let notFoundResponse = null;
   let emptySearchResponse = null;
   let emptyUrlResponse = null;
+  let businessFailureResponse = null;
   for (const upstream of candidates) {
     try {
       const response = await requestUpstream(upstream, query, options, timeoutMs);
@@ -507,8 +534,35 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
         }
       }
       if (response.status >= 400) {
-        markFailure(upstream, `上游返回 ${response.status}`, query, response.status);
-        lastError = new Error(`Meting 上游返回 ${response.status}（${upstream.base}）`);
+        let data;
+        try { data = await response.json(); } catch { data = null; }
+        const failure = normalizeMetingFailure(data, response.status);
+        if (isMetingBusinessFailure(failure.code)) {
+          markSoftFailure(upstream, failure.error, query);
+          businessFailureResponse = response;
+          continue;
+        }
+        markFailure(upstream, `${failure.code}：${failure.error}`, query, response.status);
+        lastError = Object.assign(new Error(failure.error), failure);
+        continue;
+      }
+      // 兼容旧镜像的 HTTP 200 业务失败，不计入成功或伪装成空歌曲
+      let payload;
+      try { payload = await response.json(); } catch { payload = null; }
+      if (payload?.success === false || payload?.code === 'MUSIC_ACCOUNT_INVALID'
+        || (payload?.success !== true && typeof payload?.error === 'string')) {
+        const failure = normalizeMetingFailure(payload, response.status);
+        if (isMetingBusinessFailure(failure.code)) {
+          markSoftFailure(upstream, failure.error, query);
+        } else {
+          markFailure(upstream, `${failure.code}：${failure.error}`, query, failure.status);
+        }
+        lastError = Object.assign(new Error(failure.error), failure);
+        continue;
+      }
+      if ((isSearch || query.type === 'fm') && (!payload || typeof payload !== 'object')) {
+        markFailure(upstream, 'METING_INVALID_RESPONSE：音源服务返回了无效响应', query, 502);
+        lastError = Object.assign(new Error('音源服务返回了无效响应'), { code: 'METING_INVALID_RESPONSE', status: 502 });
         continue;
       }
       markSuccess(upstream);
@@ -562,7 +616,7 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
       lastError = err;
     }
   }
-  const metingFallbackResponse = emptySearchResponse || emptyUrlResponse || notFoundResponse;
+  const metingFallbackResponse = emptySearchResponse || emptyUrlResponse || notFoundResponse || businessFailureResponse;
   const customResponse = await fetchCustomMusicApiFallback(query, timeoutMs);
   if (customResponse) return customResponse;
   if (metingFallbackResponse) return metingFallbackResponse;
@@ -576,7 +630,8 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
 export async function fetchMetingApi(query, options = {}, timeoutMs = 10000) {
   syncUpstreams();
   const type = String(query?.type || '').trim().toLowerCase();
-  const ttlMs = METING_CACHE_TTLS[type] || 15_000;
+  // 漫游每批推荐需要重新请求，仅合并并发请求，避免缓存同一批导致已播去重后持续为空
+  const ttlMs = type === 'fm' ? 0 : (METING_CACHE_TTLS[type] || 15_000);
   const key = buildMetingCacheKey(query, options);
   const snapshot = await METING_RESPONSE_CACHE.get(
     key,

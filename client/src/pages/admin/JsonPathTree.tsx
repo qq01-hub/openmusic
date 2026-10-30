@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { CaretDownOutlined, CaretRightOutlined } from '@ant-design/icons';
 import { Button, Tag, Typography } from 'antd';
 
@@ -11,6 +11,8 @@ interface JsonPathTreeProps {
   /** 当前已选中的相对路径，用于高亮 */
   activePath?: string;
 }
+
+const NODE_PAGE_SIZE = 40;
 
 function isContainer(value: unknown): value is Record<string, unknown> | unknown[] {
   return value !== null && typeof value === 'object';
@@ -38,20 +40,30 @@ interface NodeProps extends Omit<JsonPathTreeProps, 'value'> {
   depth: number;
 }
 
-function TreeNode({ label, nodeValue, path, depth, onPick, containerOnly, activePath }: NodeProps) {
+const TreeNode = memo(function TreeNode({ label, nodeValue, path, depth, onPick, containerOnly, activePath }: NodeProps) {
   const [open, setOpen] = useState(depth < 2);
+  const [page, setPage] = useState(0);
   const container = isContainer(nodeValue);
   const selectable = container ? containerOnly !== false : !containerOnly;
   const isActive = Boolean(path) && path === activePath;
 
-  const entries = container
-    ? (Array.isArray(nodeValue)
-        ? nodeValue.map((item, index) => [index, item] as const)
-        : Object.entries(nodeValue))
-    : [];
+  const objectKeys = useMemo(() => (
+    isContainer(nodeValue) && !Array.isArray(nodeValue) ? Object.keys(nodeValue) : []
+  ), [nodeValue]);
+  const count = Array.isArray(nodeValue) ? nodeValue.length : objectKeys.length;
+  const totalPages = Math.max(1, Math.ceil(count / NODE_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages - 1);
+  const start = currentPage * NODE_PAGE_SIZE;
+  const entries: Array<readonly [string | number, unknown]> = !container || !open ? []
+    : Array.from({ length: Math.min(NODE_PAGE_SIZE, count - start) }, (_, offset) => {
+      const index = start + offset;
+      return Array.isArray(nodeValue)
+        ? [index, nodeValue[index]] as const
+        : [objectKeys[index], nodeValue[objectKeys[index]]] as const;
+    });
 
   const typeHint = container
-    ? (Array.isArray(nodeValue) ? `数组 · ${entries.length} 项` : `对象 · ${entries.length} 字段`)
+    ? (Array.isArray(nodeValue) ? `数组 · ${count} 项` : `对象 · ${count} 字段`)
     : '';
 
   return (
@@ -110,9 +122,18 @@ function TreeNode({ label, nodeValue, path, depth, onPick, containerOnly, active
           activePath={activePath}
         />
       ))}
+      {container && open && totalPages > 1 && (
+        <div style={{ marginLeft: 14, display: 'flex', alignItems: 'center', gap: 8, padding: 4 }}>
+          <Button size="small" disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}>上一页</Button>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {start + 1}–{Math.min(start + NODE_PAGE_SIZE, count)} / {count}
+          </Typography.Text>
+          <Button size="small" disabled={currentPage === totalPages - 1} onClick={() => setPage(currentPage + 1)}>下一页</Button>
+        </div>
+      )}
     </div>
   );
-}
+});
 
 export default function JsonPathTree({ value, onPick, containerOnly, activePath }: JsonPathTreeProps) {
   return (

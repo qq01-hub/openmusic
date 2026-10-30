@@ -1,8 +1,11 @@
 import { fetchWithTimeout } from '../api/http';
 import { isSourceUnavailableMessage } from './audioPlaybackError';
+import { toProxiedMediaUrl } from './mediaProxyUrl';
+import { signApiUrl } from './signedApiUrl';
+import { debugLog, debugLine } from './debugTools';
 
 type LocalSource = { url?: unknown; auth?: unknown };
-type WorkerResult = { id: number; data?: ArrayBuffer; contentType?: string; error?: string };
+type WorkerResult = { id: number; data?: ArrayBuffer; contentType?: string; error?: string; downloadMs?: number; decryptMs?: number; bytes?: number };
 
 export type QishuiLocalPlaybackResult =
   | { status: 'ok'; url: string }
@@ -12,8 +15,13 @@ export type QishuiLocalPlaybackResult =
 
 const LOCAL_DECRYPT_TIMEOUT_MS = 20_000;
 const LOCAL_SOURCE_FETCH_TIMEOUT_MS = 5_000;
-/** 只保留当前/下一首 blob；多缓存会让整曲明文长期驻留主线程堆。 */
-const MAX_LOCAL_AUDIO_CACHE = 1;
+/** 当前曲与下一首各保留一个，预取不能撤销仍用于快进的 blob */
+const MAX_LOCAL_AUDIO_CACHE = 2;
+let activePlaybackUrl = '';
+
+export function retainQishuiPlaybackUrl(url: string): void {
+  activePlaybackUrl = url.startsWith('blob:') ? url : '';
+}
 
 export function isQishuiLocalPlaybackUrl(url: string | null | undefined): url is string {
   return Boolean(url && /\/api\/qishui-source(?:\?|$)/i.test(url));
@@ -44,10 +52,8 @@ function remember(key: string, url: string): string {
   blobCache.delete(key);
   blobCache.set(key, url);
   while (blobCache.size > MAX_LOCAL_AUDIO_CACHE) {
-    const oldest = blobCache.keys().next().value;
+    const oldest = [...blobCache.keys()].find((candidate) => candidate !== key && blobCache.get(candidate) !== activePlaybackUrl);
     if (!oldest) break;
-    // 正在写入的 key 不能清：否则刚解密完就被 revoke
-    if (oldest === key) break;
     const oldUrl = blobCache.get(oldest);
     if (oldUrl) URL.revokeObjectURL(oldUrl);
     blobCache.delete(oldest);
@@ -55,16 +61,20 @@ function remember(key: string, url: string): string {
   return url;
 }
 
-function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal): Promise<string> {
+function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal, proxy = false): Promise<string> {
   const run = () => new Promise<string>((resolve, reject) => {
     const id = ++requestId;
     const worker = new Worker(new URL('../workers/qishuiDecryptWorker.ts', import.meta.url), { type: 'module' });
     const abort = () => {
+      window.clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
       worker.terminate();
       reject(new DOMException('汽水本地解密已取消', 'AbortError'));
     };
     const timer = window.setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
       worker.terminate();
+      debugLog('qishui_local_audio_timeout', debugLine({ proxy }));
       reject(new Error('汽水本地解密超时'));
     }, LOCAL_DECRYPT_TIMEOUT_MS);
     if (signal?.aborted) {
@@ -78,6 +88,13 @@ function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal): Promi
       window.clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
       worker.terminate();
+      debugLog('qishui_local_audio_ready', debugLine({
+        proxy,
+        downloadMs: event.data.downloadMs,
+        decryptMs: event.data.decryptMs,
+        bytes: event.data.bytes,
+        failed: !event.data.data,
+      }));
       if (!event.data.data) {
         reject(new Error(event.data.error || '汽水本地解密失败'));
         return;
@@ -90,7 +107,7 @@ function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal): Promi
       worker.terminate();
       reject(new Error(event.message || '汽水本地解密 Worker 失败'));
     };
-    worker.postMessage({ id, url: sourceUrl, auth });
+    worker.postMessage({ id, url: sourceUrl, auth, proxy });
   });
 
   const queued = decryptChain.then(run, run);
@@ -102,6 +119,7 @@ function runWorker(sourceUrl: string, auth: string, signal?: AbortSignal): Promi
 async function resolveLocalPlaybackUrl(
   wrappedUrl: string,
   signal?: AbortSignal,
+  proxy = false,
 ): Promise<QishuiLocalPlaybackResult> {
   const token = sourceToken(wrappedUrl);
   if (!token || typeof Worker === 'undefined' || typeof URL.createObjectURL !== 'function') {
@@ -109,6 +127,7 @@ async function resolveLocalPlaybackUrl(
   }
   if (signal?.aborted) return { status: 'aborted' };
 
+  // 代理只改变密文传输路径，同一会话的明文无需重新下载和解密
   const cacheKey = token;
   const cached = blobCache.get(cacheKey);
   if (cached) {
@@ -124,7 +143,7 @@ async function resolveLocalPlaybackUrl(
     if (signal?.aborted) return { status: 'aborted' };
     // 共享任务被上一任播放路径 abort：本调用仍有效则重开，避免误报失败
     if (shared.status === 'aborted') {
-      return resolveLocalPlaybackUrl(wrappedUrl, signal);
+      return resolveLocalPlaybackUrl(wrappedUrl, signal, proxy);
     }
     return shared;
   }
@@ -148,7 +167,10 @@ async function resolveLocalPlaybackUrl(
       const auth = typeof payload.auth === 'string' ? payload.auth : '';
       if (isSourceUnavailableMessage(sourceUrl)) return { status: 'source-unavailable' };
       if (!sourceUrl || !auth) return { status: 'failed' };
-      blobUrl = await runWorker(sourceUrl, auth, signal);
+      const fetchUrl = proxy
+        ? await signApiUrl(toProxiedMediaUrl(sourceUrl))
+        : sourceUrl;
+      blobUrl = await runWorker(fetchUrl, auth, signal, proxy);
       if (signal?.aborted) {
         URL.revokeObjectURL(blobUrl);
         return { status: 'aborted' };
@@ -170,6 +192,7 @@ async function resolveLocalPlaybackUrl(
 export async function resolveQishuiLocalPlaybackUrl(
   url: string,
   signal?: AbortSignal,
+  proxy = false,
 ): Promise<QishuiLocalPlaybackResult> {
   if (!isQishuiLocalPlaybackUrl(url)) {
     return { status: 'failed' };
@@ -181,25 +204,26 @@ export async function resolveQishuiLocalPlaybackUrl(
     prefetchAbort = null;
     prefetchToken = '';
   }
-  return resolveLocalPlaybackUrl(url, signal);
+  return resolveLocalPlaybackUrl(url, signal, proxy);
 }
 
 /**
  * 仅预取下一首解密结果；同时只保留一个预取任务。
  * 不要对当前曲+多首队列并行整曲解密，否则内存会线性叠加。
  */
-export function prefetchQishuiLocalPlayback(url: string | null | undefined): void {
+export function prefetchQishuiLocalPlayback(url: string | null | undefined, proxy = false): void {
   if (!isQishuiLocalPlaybackUrl(url)) return;
   const token = sourceToken(url);
   if (!token) return;
-  if (blobCache.has(token) || pending.has(token)) return;
-  if (prefetchToken === token) return;
+  const cacheKey = token;
+  if (blobCache.has(cacheKey) || pending.has(cacheKey)) return;
+  if (prefetchToken === cacheKey) return;
 
   prefetchAbort?.abort();
   const controller = new AbortController();
   prefetchAbort = controller;
-  prefetchToken = token;
-  void resolveLocalPlaybackUrl(url, controller.signal).finally(() => {
+  prefetchToken = cacheKey;
+  void resolveLocalPlaybackUrl(url, controller.signal, proxy).finally(() => {
     if (prefetchAbort === controller) {
       prefetchAbort = null;
       prefetchToken = '';

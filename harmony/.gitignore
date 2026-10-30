@@ -1,0 +1,13 @@
+/local.properties
+/.idea/
+/.hvigor/
+/oh_modules/
+/build/
+/entry/build/
+/entry/oh_modules/
+*.p12
+*.cer
+*.p7b
+*.jks
+*.keystore
+/build-profile.local.json5

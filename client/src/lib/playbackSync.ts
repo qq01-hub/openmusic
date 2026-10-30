@@ -21,6 +21,7 @@ import {
 } from './audioUnlock';
 import { debugLine, debugLog } from './debugTools';
 import { recordDriftSample } from './driftHistogram';
+import { seekAudioTo } from './audioSeek';
 
 /**
  * 离散事件同步：
@@ -243,7 +244,7 @@ function explicitHardSeek(
   if (trackId) ensureFinalSyncTrack(trackId);
   finalSyncDone = false;
   lockPlaybackRate(audio);
-  audio.currentTime = target;
+  seekAudioTo(audio, target);
   snapSmoothPlaybackTime(target);
   debugLog('sync_seek_done', debugLine({
     reason,
@@ -284,7 +285,7 @@ function applyAutoPlaybackSync(
 
   const diff = target - audio.currentTime;
   if (diff > 0) {
-    audio.currentTime = target;
+    seekAudioTo(audio, target);
     snapSmoothPlaybackTime(target);
     finalSyncDone = true;
   }
@@ -353,7 +354,7 @@ async function recoverFromEndedAudio(
   finalSyncDone = false;
   lockPlaybackRate(audio);
   audio.pause();
-  audio.currentTime = seekTarget;
+  seekAudioTo(audio, seekTarget);
   snapSmoothPlaybackTime(seekTarget);
 
   const initial = await tryPlayWithAutoplayFallback(audio, Boolean(options.tvMode));

@@ -405,12 +405,12 @@ export default function RoomImmersiveShell({
       }
     };
     window.addEventListener('message', syncFoliaPanel);
-    window.addEventListener('openmusic:folia-open-settings', closeSettingsPanel);
+    window.addEventListener('openmusic:folia-open-settings', openSettingsPanel);
     return () => {
       window.removeEventListener('message', syncFoliaPanel);
-      window.removeEventListener('openmusic:folia-open-settings', closeSettingsPanel);
+      window.removeEventListener('openmusic:folia-open-settings', openSettingsPanel);
     };
-  }, [closeSettingsPanel]);
+  }, [openSettingsPanel]);
 
   return (
     <div className={`room-immersive-mode fixed inset-0 z-40 pointer-events-none${className ? ` ${className}` : ''}`}>

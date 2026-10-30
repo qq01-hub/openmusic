@@ -1,3 +1,4 @@
+import { evalRedisScript } from './redisScripts.js';
 import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 
 const DEVICE_USER_PREFIX = 'openmusic:device:';
@@ -58,23 +59,23 @@ async function persistDeviceBinding(deviceId, userId) {
   if (!did || !uid) return false;
 
   try {
-    const previousUser = await client.get(`${DEVICE_USER_PREFIX}${did}`);
-    if (previousUser && previousUser !== uid) {
-      await client.sRem(`${USER_DEVICES_PREFIX}${previousUser}`, did);
-    }
-    const deviceKey = `${DEVICE_USER_PREFIX}${did}`;
-    const userDevicesKey = `${USER_DEVICES_PREFIX}${uid}`;
-    await client.set(deviceKey, uid, { EX: DEVICE_BINDING_TTL_SEC });
-    await client.sAdd(userDevicesKey, did);
-    await client.expire(userDevicesKey, DEVICE_BINDING_TTL_SEC);
-
-    const devices = await client.sMembers(userDevicesKey);
-    const excess = devices.filter((item) => item !== did).slice(0, Math.max(0, devices.length - MAX_DEVICES_PER_USER));
-    for (const staleDeviceId of excess) {
-      await client.sRem(userDevicesKey, staleDeviceId);
-      const staleKey = `${DEVICE_USER_PREFIX}${staleDeviceId}`;
-      if (await client.get(staleKey) === uid) await client.del(staleKey);
-    }
+    await evalRedisScript(client, `
+      local previous = redis.call('GET', KEYS[1])
+      if previous and previous ~= ARGV[2] then redis.call('SREM', ARGV[4] .. previous, ARGV[1]) end
+      redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
+      redis.call('SREM', KEYS[2], ARGV[1])
+      local excess = redis.call('SCARD', KEYS[2]) - 19
+      if excess > 0 then
+        local old = redis.call('SPOP', KEYS[2], math.min(excess, 100))
+        for _, id in ipairs(old) do
+          local key = ARGV[5] .. id
+          if redis.call('GET', key) == ARGV[2] then redis.call('DEL', key) end
+        end
+      end
+      redis.call('SADD', KEYS[2], ARGV[1])
+      redis.call('EXPIRE', KEYS[2], ARGV[3])
+      return 1
+    `, { keys: [`${DEVICE_USER_PREFIX}${did}`, `${USER_DEVICES_PREFIX}${uid}`], arguments: [did, uid, String(DEVICE_BINDING_TTL_SEC), USER_DEVICES_PREFIX, DEVICE_USER_PREFIX] });
     return true;
   } catch (err) {
     console.error('Redis: 保存设备身份绑定失败:', err.message);
@@ -104,11 +105,16 @@ export async function getUserIdForDevice(deviceId, { authoritative = false } = {
   if (!isRedisEnabled() || !client) throw new Error('设备身份存储暂不可用');
 
   try {
-    const uid = await client.get(`${DEVICE_USER_PREFIX}${did}`);
+    const uid = await evalRedisScript(client, `
+      local owner = redis.call('GET', KEYS[1])
+      if owner then
+        redis.call('EXPIRE', KEYS[1], ARGV[1])
+        redis.call('EXPIRE', ARGV[2] .. owner, ARGV[1])
+      end
+      return owner
+    `, { keys: [`${DEVICE_USER_PREFIX}${did}`], arguments: [String(DEVICE_BINDING_TTL_SEC), USER_DEVICES_PREFIX] });
     const normalized = sanitizeDeviceId(uid);
     if (normalized) {
-      await client.expire(`${DEVICE_USER_PREFIX}${did}`, DEVICE_BINDING_TTL_SEC);
-      await client.expire(`${USER_DEVICES_PREFIX}${normalized}`, DEVICE_BINDING_TTL_SEC);
       rememberDeviceBinding(did, normalized);
       return normalized;
     }

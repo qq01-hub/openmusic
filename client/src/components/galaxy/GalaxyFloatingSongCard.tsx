@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { getCoverUrl } from '../../api/music';
-import { useSmoothPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
+import { readLocalPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
 import { useTrackDuration, clampPlaybackTime } from '../../hooks/useTrackDuration';
 import { useFavorites } from '../../hooks/useFavorites';
 import { useSocket } from '../../hooks/useSocket';
@@ -104,10 +104,7 @@ export default function GalaxyFloatingSongCard() {
   const { toggleFavorite, isFavorite } = useFavorites();
   const { removeSong, requestJump, toggleQueueLike, toggleCurrentDislike, banRoomSong } = useSocket();
   const current = room?.current ?? null;
-  const currentTime = useSmoothPlaybackTime();
   const duration = useTrackDuration(current);
-  const displayTime = clampPlaybackTime(currentTime, duration);
-  const progress = duration > 0 ? displayTime / duration : 0;
   const { camera, gl, pointer } = useThree();
   const cardsRef = useRef<CardSlot[]>([]);
   const drawKeyRef = useRef<string[]>([]);
@@ -147,10 +144,10 @@ export default function GalaxyFloatingSongCard() {
     if (!room) return [];
     const items = [
       ...(room.current ? [{ ...room.current, isCurrent: true }] : []),
-      ...room.queue.map((song) => ({ ...song, isCurrent: false })),
+      ...room.queue.slice(0, MAX_SHELF_ITEMS - (room.current ? 1 : 0)).map((song) => ({ ...song, isCurrent: false })),
     ];
     return items.slice(0, MAX_SHELF_ITEMS);
-  }, [room]);
+  }, [room?.current, room?.queue]);
 
   const dislikeThreshold = useMemo(() => resolveDislikeSkipThreshold(room), [room]);
 
@@ -201,14 +198,14 @@ export default function GalaxyFloatingSongCard() {
       const coverUrl = getCoverUrl(song, 'medium');
       const tag = song.isCurrent ? '正在播放' : index === 1 ? '下一首' : `队列 ${index}`;
       const meta = song.isCurrent
-        ? `${Math.round(progress * 100)}% · ${song.album || '当前曲目'}`
+        ? `0% · ${song.album || '当前曲目'}`
         : `${song.requestedBy || '匿名'} 点歌`;
       const item: FloatingSongCardItem = {
         title: song.name,
         sub: song.artist || '未知歌手',
         coverUrl,
         tag,
-        progress: song.isCurrent ? progress : 0,
+        progress: 0,
         bass: 0,
         meta,
         isCurrent: song.isCurrent,
@@ -216,7 +213,7 @@ export default function GalaxyFloatingSongCard() {
       };
       return { song, item, likedByMe };
     });
-  }, [canControlPlayback, dislikeThreshold, displaySongs, isFavorite, memberJumpEnabled, mySocketId, nickname, progress, actionRevision]);
+  }, [canControlPlayback, dislikeThreshold, displaySongs, isFavorite, memberJumpEnabled, mySocketId, nickname, actionRevision]);
 
   useEffect(() => {
     const nextCount = displayItems.length;
@@ -434,6 +431,9 @@ export default function GalaxyFloatingSongCard() {
 
     const warmVisible = fx.shelfPresence === 'always' || presenceRef.current > 0.04;
     const bands = getCachedGalaxyAudioBands();
+    // 进度只参与画布绘制，避免驱动整组卡片和交互监听重建
+    const displayTime = clampPlaybackTime(readLocalPlaybackTime(current), duration);
+    const progress = duration > 0 ? displayTime / duration : 0;
     const accent =
       fx.shelfAccentColor || (fx.visualTintMode === 'custom' ? fx.visualTintColor : fx.visualTintColor || '#00f5d4');
     const centerIndex = centerSmoothRef.current;
@@ -590,6 +590,10 @@ export default function GalaxyFloatingSongCard() {
 
       const item: FloatingSongCardItem = {
         ...entry.item,
+        progress: entry.song.isCurrent ? progress : 0,
+        meta: entry.song.isCurrent
+          ? `${Math.round(progress * 100)}% · ${entry.song.album || '当前曲目'}`
+          : entry.item.meta,
         bass: entry.song.isCurrent ? bands.bass : 0,
         isShelfCenter: isCenter,
       };

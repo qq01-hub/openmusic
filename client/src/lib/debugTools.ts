@@ -8,7 +8,9 @@ import { getStoredUserAudioQuality } from '../stores/userQualityStore';
 import { getTrackKey } from '../api/music';
 import {
   getQualityLabel,
+  getQualityOptionsForSource,
   getRoomPlaybackQuality,
+  getLowestQuality,
   getUserPlaybackQuality,
   normalizeRoomAudioQuality,
   WEAK_DEVICE_PLAYBACK_QUALITY_CAP,
@@ -43,6 +45,7 @@ import {
   isTrackSourceError,
 } from './songPreloadCache';
 import { getDeviceProbe, isWeakPlaybackDevice } from './weakPlaybackDevice';
+import { getLastPlaybackQualityFallback, getIosQualityMemory, getIosQualityRevision } from './iosPlaybackQuality';
 import { isPlaybackQualityLockedToLowest } from './playbackQualityLock';
 import {
   getSyncState,
@@ -51,6 +54,7 @@ import {
 } from './syncStateMachine';
 import {
   isAudioSessionUnlocked,
+  getAudioOutputDiagnostics,
   isIOS,
   isMobileDevice,
   isRestrictedAutoplayEnv,
@@ -288,6 +292,8 @@ function qualityParts(source: MusicSource | null | undefined) {
   const audioStore = useAudioStore.getState();
   const trackKey = trackKeyOfCurrent(room?.current);
   const actual = trackKey ? (audioStore.actualQualityByTrack[trackKey] ?? null) : null;
+  const iosFallback = getLastPlaybackQualityFallback();
+  const iosMemory = source && isIOS() ? getIosQualityMemory(source) : null;
 
   return {
     roomNetease: roomQuality.netease,
@@ -299,6 +305,17 @@ function qualityParts(source: MusicSource | null | undefined) {
     playbackQualityRequestLabel: request
       ? getQualityLabel(request, source || undefined)
       : null,
+    iosPlaybackFallbackEnabled: isIOS(),
+    iosPlaybackQualityOptions: source && isIOS()
+      ? getQualityOptionsForSource(source).map((option) => option.value).join('>')
+      : null,
+    iosPlaybackLowestQuality: source && isIOS() ? getLowestQuality(source) : null,
+    iosPlaybackFallbackRequested: iosFallback?.requested ?? null,
+    iosPlaybackFallbackAttempted: iosFallback?.attempted ?? null,
+    iosPlaybackFallbackIndex: iosFallback?.index ?? null,
+    iosPlaybackRememberedRequested: iosMemory?.requested ?? null,
+    iosPlaybackRememberedQuality: iosMemory?.playable ?? null,
+    iosPlaybackQualityRevision: source && isIOS() ? getIosQualityRevision(source) : null,
     trackActualQuality: actual,
     weakPlaybackDevice: weak,
     weakQualityCap: weak ? WEAK_DEVICE_PLAYBACK_QUALITY_CAP : null,
@@ -518,6 +535,10 @@ function collectAudioFields(
       audioUpstreamHost: upstreamHostOf(src),
       audioCrossOrigin: audio.crossOrigin || 'default',
       audioPreload: audio.preload,
+      audioOutputState: getAudioOutputDiagnostics(audio).state,
+      audioOutputSampleRate: getAudioOutputDiagnostics(audio).sampleRate,
+      nativeAudioSessionType: getAudioOutputDiagnostics(audio).sessionType,
+      nativeAudioSessionState: getAudioOutputDiagnostics(audio).sessionState,
       audioError: mediaErrorLabel(audio.error),
       audioErrorMessage: audio.error?.message || null,
       trackOriginalUrl: current?.url ? shortSrc(current.url) : null,

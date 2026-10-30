@@ -6,6 +6,27 @@ import NotFoundPage from './components/NotFoundPage';
 import { rememberAdminEntryPath } from './lib/adminEntryShortcut';
 import { lazyWithRetry } from './lib/lazyWithRetry';
 import StartupSplash from './components/StartupSplash';
+
+const STARTUP_SEEN_KEY = 'openmusic:startup-splash-seen-day';
+
+function currentChinaDate() {
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
+function hasSeenStartupToday() {
+  try { return localStorage.getItem(STARTUP_SEEN_KEY) === currentChinaDate(); }
+  catch { return false; }
+}
+
+function markStartupSeenToday() {
+  try { localStorage.setItem(STARTUP_SEEN_KEY, currentChinaDate()); }
+  catch { /* 当前页面仍然正常展示 */ }
+}
 import MusicLoading from './components/MusicLoading';
 const AccountGate = lazyWithRetry(() => import('./components/AccountGate'), 'AccountGate');
 
@@ -59,6 +80,7 @@ function AdminGate() {
         const res = await fetch('/api/admin/gate', {
           method: 'POST',
           credentials: 'same-origin',
+          cache: 'no-store',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path }),
         });
@@ -86,11 +108,14 @@ function AdminGate() {
 export default function App() {
   const location = useLocation();
   const [setupRequired, setSetupRequired] = useState<boolean | null>(null);
-  const [startupEntered, setStartupEntered] = useState(() => location.pathname !== '/');
+  const [startupEntered, setStartupEntered] = useState(() => location.pathname !== '/' || hasSeenStartupToday());
   const [startupSettled, setStartupSettled] = useState(false);
   const [homeReady, setHomeReady] = useState(false);
   const handleHomeReady = useCallback(() => setHomeReady(true), []);
-  const handleStartupEnter = useCallback(() => setStartupEntered(true), []);
+  const handleStartupEnter = useCallback(() => {
+    markStartupSeenToday();
+    setStartupEntered(true);
+  }, []);
   const showStartup = !startupEntered && location.pathname === '/' && setupRequired !== true;
 
   useEffect(() => {

@@ -4,7 +4,7 @@ import { useSocket } from './useSocket';
 import type { FavoriteSong, Song } from '../types';
 import { fetchAccountSession } from '../lib/accountAuth';
 import { isAccountSessionRevisionEvent } from '../lib/accountSessionSignal';
-import { getAccountSessionGeneration } from '../lib/accountAccessSession';
+import { getAccountSessionGeneration, hasAnonymousAccess } from '../lib/accountAccessSession';
 import {
   markFavoritesSyncAttempt,
   markFavoritesSyncFailed,
@@ -16,6 +16,7 @@ import {
 } from '../lib/favoritesSync';
 
 let sharedFavoriteSongs: FavoriteSong[] = [];
+let sharedFavoriteIds = new Set<string>();
 type FavoritesLoadResult = { success: boolean; error?: string };
 let loadPromise: Promise<FavoritesLoadResult> | null = null;
 let loadGeneration = 0;
@@ -71,6 +72,7 @@ function notifyListeners() {
 
 function updateSharedFavorites(songs: FavoriteSong[]) {
   sharedFavoriteSongs = songs;
+  sharedFavoriteIds = new Set(songs.map(songKey));
   notifyListeners();
 }
 
@@ -91,10 +93,10 @@ async function runFavoriteRequest<Result extends { success: boolean; error?: str
   try {
     const account = await fetchAccountSession();
     assertCurrent();
-    if (!account) throw new Error('请先登录账户');
+    if (!account && !hasAnonymousAccess()) throw new Error('请先登录账户');
     const result = await request();
     assertCurrent();
-    if (result.success) apply?.(result, account.id);
+    if (result.success) apply?.(result, account?.id || '');
     return result;
   } catch (error) {
     return { success: false as const, error: error instanceof Error ? error.message : '收藏操作失败，请重试' };
@@ -115,7 +117,7 @@ if (typeof window !== 'undefined') {
 }
 
 export function useFavorites() {
-  const { listFavorites, listFavoriteCategories, createFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
+  const { listFavorites, listFavoriteCategories, createFavoriteCategory, deleteFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set());
   const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>([]);
   const [syncState, setSyncState] = useState<FavoritesSyncState>(() => sharedSyncState);
@@ -124,7 +126,7 @@ export function useFavorites() {
 
   useEffect(() => {
     const listener = () => {
-      setFavoriteIds(new Set(sharedFavoriteSongs.map(songKey)));
+      setFavoriteIds(sharedFavoriteIds);
       setFavoriteSongs(sharedFavoriteSongs);
     };
     listeners.add(listener);
@@ -135,6 +137,7 @@ export function useFavorites() {
         loadGeneration += 1;
         loadPromise = null;
         sharedFavoriteSongs = [];
+        sharedFavoriteIds = new Set();
       }
     };
   }, []);
@@ -157,6 +160,15 @@ export function useFavorites() {
       const account = await fetchAccountSession();
       assertCurrent();
       if (!account) {
+        if (hasAnonymousAccess()) {
+          const [result, categoryResult] = await Promise.all([listFavorites(), listFavoriteCategories()]);
+          assertCurrent();
+          if (!result.success) throw new Error(result.error || '收藏列表加载失败');
+          if (!categoryResult.success) throw new Error(categoryResult.error || '收藏分类加载失败');
+          setCategories(categoryResult.categories || []);
+          updateSharedFavorites(result.favorites || []);
+          return { success: true };
+        }
         updateSharedFavorites([]);
         throw new Error('请先登录账户，原游客收藏会在登录后迁移');
       }
@@ -332,7 +344,7 @@ export function useFavorites() {
   const addFavoriteCategory = useCallback(async (name: string) => {
     return runFavoriteRequest(() => createFavoriteCategory(name), (result, accountId) => {
       if (result.categories) {
-        removeCache(categoriesCacheKey(accountId));
+        if (accountId) removeCache(categoriesCacheKey(accountId));
         setCategories(result.categories);
       }
     });
@@ -343,6 +355,13 @@ export function useFavorites() {
       if (result.favorites) updateSharedFavorites(result.favorites);
     });
   }, [setFavoriteCategory]);
+
+  const deleteCategory = useCallback(async (name: string, keepSongs: boolean) => {
+    return runFavoriteRequest(() => deleteFavoriteCategory(name, keepSongs), (result) => {
+      if (result.favorites) updateSharedFavorites(result.favorites);
+      if (result.categories) setCategories(result.categories);
+    });
+  }, [deleteFavoriteCategory]);
 
   const setCachedFavorite = useCallback(async (song: Song, favorite: boolean) => {
     if (favoriteIds.has(songKey(song)) !== favorite) return toggleFavorite(song);
@@ -371,5 +390,6 @@ export function useFavorites() {
     categories,
     listCategories: listCachedCategories,
     addCategory: addFavoriteCategory,
+    deleteCategory,
   };
 }

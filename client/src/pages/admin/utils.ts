@@ -8,6 +8,7 @@ export async function adminFetch<T>(path: string, options: RequestInit = {}): Pr
   const res = await fetch(path, {
     ...options,
     credentials: 'same-origin',
+    cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
       ...(options.headers || {}),
@@ -61,11 +62,13 @@ export function formatRelativeTime(at: number | null | undefined): string {
 export function formatAuditAction(entry: AdminAuditEntry) {
   switch (entry.action) {
     case 'login_ok': {
+      if (entry.via === 'wechat_scan' || entry.via === 'qq_scan') return `登录成功（${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}）`;
       if (entry.via === 'linuxdo') return `登录成功（Linux.do：${entry.linuxdoUsername || ''}）`;
       if (entry.via === 'github') return `登录成功（GitHub：${entry.githubUsername || ''}）`;
       return `登录成功${entry.username ? ` ${entry.username}` : ''}`;
     }
     case 'login_fail': {
+      if (entry.via === 'wechat_scan' || entry.via === 'qq_scan') return `登录失败（${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}）`;
       if (entry.via === 'linuxdo') return `登录失败（Linux.do：${entry.linuxdoUsername || ''}）`;
       if (entry.via === 'github') return `登录失败（GitHub：${entry.githubUsername || ''}）`;
       return `登录失败${entry.username ? ` ${entry.username}` : ''}`;
@@ -80,6 +83,14 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return `绑定 GitHub 账号${entry.githubUsername ? `（${entry.githubUsername}）` : ''}`;
     case 'github_unbind':
       return '解绑 GitHub 账号';
+    case 'oauth_callback_failed':
+      return `${entry.provider === 'linuxdo' ? 'Linux.do' : 'GitHub'} 授权失败 · ${entry.stage || '未知阶段'} · ${entry.code || 'OAUTH_FAILED'}${entry.upstreamStatus ? ` · HTTP ${entry.upstreamStatus}` : ''}`;
+    case 'social_bind':
+      return `绑定${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}`;
+    case 'social_unbind':
+      return `解绑${entry.via === 'wechat_scan' ? '微信扫码登录' : 'QQ扫码登录'}`;
+    case 'social_fail':
+      return `扫码验证失败 · ${entry.code || 'SOCIAL_LOGIN_UNAVAILABLE'}`;
     case 'set_credentials':
       return `修改管理员账号密码${entry.username ? `（${entry.username}）` : ''}`;
     case 'set_credentials_fail':
@@ -92,6 +103,14 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return `更新账户风控 ${entry.accountId || ''}（${entry.status === 'blocked' ? '限制访问' : entry.status === 'watch' ? '关注' : '正常'}）`;
     case 'risk_policy_update':
       return '更新全局请求额度';
+    case 'risk_session_revoke':
+      return `撤销登录会话 ${entry.accountId || ''}${entry.reason ? ` · ${entry.reason}` : ''}`;
+    case 'risk_human_challenge_bypass':
+      return `${entry.bypass ? '放行' : '撤销放行'}账户异常访问验证 ${entry.accountId || ''}${entry.reason ? ` · ${entry.reason}` : ''}`;
+    case 'risk_history_clear':
+      return '清除全站风控历史数据';
+    case 'risk_history_clear_failed':
+      return `清除风控历史失败${entry.code ? `（${entry.code}）` : ''}`;
     case 'reset_music_api_circuit':
       return `重置音源熔断 ${entry.id || ''}`;
     case 'set_announcement':

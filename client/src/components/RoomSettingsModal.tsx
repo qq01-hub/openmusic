@@ -46,6 +46,7 @@ const MUSIC_ACCOUNT_TAB_ENABLED = true;
 
 export interface SongRequestSettings {
   enabled: boolean;
+  queueLikeSortEnabled: boolean;
   memberJumpEnabled: boolean;
   memberSeekEnabled: boolean;
   memberPauseEnabled: boolean;
@@ -72,6 +73,8 @@ interface Props {
   enabledFmSources?: FmSource[];
   enabledMusicAccountPlatforms?: FmSource[];
   fmModeBeforeOff?: string;
+  qishuiProxyEnabled?: boolean;
+  qishuiProxySaving?: boolean;
   initialTab?: SettingsTab;
   playlistRoaming?: { enabled: boolean; dedupeByName: boolean; playlists: Array<{ id: string; source: FmSource; name: string; url?: string; songs: { id: string; name: string; artist: string; source: string }[] }> } | null;
   fmSaving?: boolean;
@@ -82,6 +85,8 @@ interface Props {
   chatHistorySaving?: boolean;
   chatShowAvatars: boolean;
   chatAvatarsSaving?: boolean;
+  hideIpLocation: boolean;
+  hideIpLocationSaving?: boolean;
   joinNoticeEnabled: boolean;
   joinNoticeCooldownMinutes: number;
   joinNoticeSaving?: boolean;
@@ -104,6 +109,8 @@ interface Props {
   transferSaving?: boolean;
   destroySaving?: boolean;
   roomId?: string;
+  ownerAccountId?: string | null;
+  anonymousLoginEnabled?: boolean;
   protectedFromDestroy?: boolean;
   permanentApplication?: {
     status: 'pending';
@@ -131,11 +138,13 @@ interface Props {
   onMusicAccountUnbind?: (platform: 'netease' | 'tencent' | 'kugou' | 'qishui') => Promise<{ success: boolean; error?: string }>;
   onClose: () => void;
   onSaveFmMode: (mode: string, source?: FmSource) => void;
+  onSaveQishuiProxy?: (enabled: boolean) => void | Promise<void>;
   onSavePlaylistRoaming?: (payload: { platform?: 'netease' | 'qq' | 'kugou' | 'qishui'; input?: string; clear?: boolean; playlistId?: string; playlistSource?: FmSource; playlistName?: string; dedupeByName?: boolean; playlistEnabled?: boolean }) => Promise<{ success: boolean; error?: string }> | void;
   onOpenMemberModal: () => void;
   onSaveAnnouncement: (options: { enabled: boolean; text: string }) => void;
   onSaveChatHistory: (enabled: boolean) => void;
   onSaveChatShowAvatars: (enabled: boolean) => void;
+  onSaveHideIpLocation: (hidden: boolean) => void;
   onSaveJoinNotice: (settings: { enabled: boolean; cooldownMinutes: number }) => void;
   onSaveRoomAi: (settings: { enabled: boolean; botName: string }) => void;
   onSaveSongRequest: (settings: SongRequestSettings) => void;
@@ -296,6 +305,8 @@ export default function RoomSettingsModal({
   enabledFmSources,
   enabledMusicAccountPlatforms,
   fmModeBeforeOff,
+  qishuiProxyEnabled = false,
+  qishuiProxySaving = false,
   initialTab,
   playlistRoaming = null,
   fmSaving = false,
@@ -306,6 +317,8 @@ export default function RoomSettingsModal({
   chatHistorySaving = false,
   chatShowAvatars,
   chatAvatarsSaving = false,
+  hideIpLocation,
+  hideIpLocationSaving = false,
   joinNoticeEnabled,
   joinNoticeCooldownMinutes,
   joinNoticeSaving = false,
@@ -328,6 +341,8 @@ export default function RoomSettingsModal({
   transferSaving = false,
   destroySaving = false,
   roomId,
+  ownerAccountId,
+  anonymousLoginEnabled = false,
   protectedFromDestroy = false,
   permanentApplication = null,
   permanentSaving = false,
@@ -347,11 +362,13 @@ export default function RoomSettingsModal({
   onMusicAccountUnbind,
   onClose,
   onSaveFmMode,
+  onSaveQishuiProxy,
   onSavePlaylistRoaming,
   onOpenMemberModal,
   onSaveAnnouncement,
   onSaveChatHistory,
   onSaveChatShowAvatars,
+  onSaveHideIpLocation,
   onSaveJoinNotice,
   onSaveRoomAi,
   onSaveSongRequest,
@@ -649,13 +666,13 @@ export default function RoomSettingsModal({
         </div>
 
         {tabs.length > 1 && (
-          <div className="flex flex-shrink-0 gap-1 overflow-x-auto border-b border-white/10 px-4 py-2.5">
+          <div className="grid flex-shrink-0 gap-1 overflow-x-auto border-b border-white/10 px-4 py-2.5" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }}>
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex-shrink-0 rounded-lg px-3 py-1.5 text-sm transition-colors ${
+                className={`min-w-0 rounded-lg px-2 py-1.5 text-sm transition-colors ${
                   activeTab === tab.id
                     ? 'bg-white/10 font-medium text-white'
                     : 'text-netease-muted hover:bg-white/5 hover:text-white'
@@ -665,6 +682,10 @@ export default function RoomSettingsModal({
               </button>
             ))}
           </div>
+        )}
+
+        {anonymousLoginEnabled && ownerAccountId && (
+          <p className="border-b border-white/8 px-5 py-2 text-xs text-netease-muted">绑定房间归属账号：{ownerAccountId}</p>
         )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
@@ -954,7 +975,7 @@ export default function RoomSettingsModal({
           )}
 
           {activeTab === 'room' && (
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               <div className="md:col-span-2 rounded-2xl border border-netease-red/20 bg-gradient-to-br from-netease-red/[0.12] via-white/[0.03] to-transparent p-4">
                 <div className="flex items-start gap-3">
                   <div className="mt-0.5 rounded-xl bg-netease-red/15 p-2 text-netease-red">
@@ -969,12 +990,12 @@ export default function RoomSettingsModal({
                 </div>
               </div>
               {isOwner && (
-                <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <div className="mb-2 flex items-center gap-2">
                     <span className="text-sm font-semibold text-white">播放倍速</span>
                   </div>
                   <p className="mb-3 text-xs text-netease-muted">修改后整个房间同步生效，仅房主可修改。可输入 0.1–3 倍，默认 1 倍</p>
-                  <div className="flex items-center gap-2">
+                  <div className="mt-auto flex items-center gap-2 pt-1">
                     <input
                       type="number"
                       min="0.1"
@@ -1002,8 +1023,32 @@ export default function RoomSettingsModal({
                 </section>
               )}
 
+              {isOwner && onSaveQishuiProxy && (
+                <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <Toggle
+                    checked={qishuiProxyEnabled}
+                    disabled={qishuiProxySaving}
+                    onChange={(enabled) => { void onSaveQishuiProxy(enabled); }}
+                    label="汽水同源代理"
+                    description="通过本站转发加密音频，仍由浏览器本地解密，加载速度取决于代理线路；汽水音源内部音量统一降低 30%，滑块显示不变"
+                  />
+                </section>
+              )}
+
               {isOwner && (
-                <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <Toggle
+                    checked={hideIpLocation}
+                    disabled={hideIpLocationSaving}
+                    onChange={onSaveHideIpLocation}
+                    label="不展示 IP 归属"
+                    description="开启后，房间右上角用户列表不显示成员的 IP 归属地"
+                  />
+                </section>
+              )}
+
+              {isOwner && (
+                <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <Toggle
                     checked={adminSelfManageMemberTierEnabled}
                     disabled={adminSelfManageMemberTierSaving || !onSaveAdminSelfManageMemberTier}
@@ -1015,7 +1060,7 @@ export default function RoomSettingsModal({
               )}
 
               {isOwner && (
-                <section className="rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                <section className="flex h-full flex-col rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <div className="mb-2 flex items-center gap-2">
                     <ShieldCheck className="h-4 w-4 text-sky-400" />
                     <h3 className="text-sm font-medium text-white">管理员人数</h3>
@@ -1023,29 +1068,33 @@ export default function RoomSettingsModal({
                   <p className="mb-3 text-xs text-netease-muted">
                     设置本房间可任命的正式管理员上限，默认 5 人
                   </p>
-                  <NumberStepper
-                    value={draftMaxAdmins}
-                    min={1}
-                    max={20}
-                    disabled={maxAdminsSaving}
-                    suffix="人"
-                    onChange={setDraftMaxAdmins}
-                  />
-                  {draftMaxAdmins !== maxAdmins && (
-                    <button
-                      type="button"
-                      disabled={maxAdminsSaving || !onSaveMaxAdmins}
-                      onClick={() => void onSaveMaxAdmins?.(draftMaxAdmins)}
-                      className="mt-3 w-full rounded-xl bg-netease-red py-2.5 text-sm font-medium text-white transition-colors hover:bg-netease-red/90 disabled:opacity-50"
-                    >
-                      {maxAdminsSaving ? '保存中…' : '保存人数上限'}
-                    </button>
-                  )}
+                  <div className="mt-auto">
+                    <NumberStepper
+                      value={draftMaxAdmins}
+                      min={1}
+                      max={20}
+                      disabled={maxAdminsSaving}
+                      suffix="人"
+                      onChange={setDraftMaxAdmins}
+                    />
+                    {draftMaxAdmins !== maxAdmins && (
+                      <button
+                        type="button"
+                        disabled={maxAdminsSaving || !onSaveMaxAdmins}
+                        onClick={() => void onSaveMaxAdmins?.(draftMaxAdmins)}
+                        className="mt-3 w-full rounded-xl bg-netease-red py-2.5 text-sm font-medium text-white transition-colors hover:bg-netease-red/90 disabled:opacity-50"
+                      >
+                        {maxAdminsSaving ? '保存中…' : '保存人数上限'}
+                      </button>
+                    )}
+                  </div>
                 </section>
               )}
 
               {isOwner && (
-                <section className="md:col-span-2 rounded-2xl border border-white/10 bg-white/[0.025] p-4">                  <div className="mb-2 flex items-center gap-2">                    <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                <section className="md:col-span-2 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
+                  <div className="mb-2 flex items-center gap-2">
+                    <ShieldCheck className="h-4 w-4 text-emerald-400" />
                     <h3 className="text-sm font-medium text-white">申请常驻</h3>
                   </div>
                   <p className="mb-3 text-xs text-netease-muted">
@@ -1159,7 +1208,7 @@ export default function RoomSettingsModal({
                 </section>
               )}
 
-              {(wechatUinEnabled || linuxdoEnabled || githubEnabled) && (
+              {anonymousLoginEnabled && (wechatUinEnabled || linuxdoEnabled || githubEnabled) && (
                 <section className="md:col-span-2 space-y-3 rounded-2xl border border-white/10 bg-white/[0.025] p-4">
                   <h3 className="text-sm font-medium text-white">身份绑定</h3>
                   {isOwner ? (
@@ -1633,11 +1682,19 @@ export default function RoomSettingsModal({
                 />
 
                 <Toggle
+                  checked={songRequest.queueLikeSortEnabled}
+                  disabled={songRequestSaving}
+                  onChange={(enabled) => saveSongRequest('queueLikeSortEnabled', enabled)}
+                  label="点赞提高排序"
+                  description="默认开启；关闭后待播歌曲点赞只计数，仍保留插队与手动排序的优先级"
+                />
+
+                <Toggle
                   checked={songRequest.memberJumpEnabled}
                   disabled={songRequestSaving}
                   onChange={(memberJumpEnabled) => saveSongRequest('memberJumpEnabled', memberJumpEnabled)}
                   label="允许成员插队"
-                  description="开启后成员可对自己的点歌插队；房主与管理员始终可插队"
+                  description="默认关闭；开启后全体成员可点歌并插队，也可对自己的待播歌曲插队；房主与管理员始终可用"
                 />
 
                 <Toggle

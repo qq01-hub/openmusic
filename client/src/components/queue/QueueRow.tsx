@@ -1,10 +1,14 @@
-import { memo } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { Trash2, Zap, ThumbsUp, ThumbsDown, AlertTriangle, Ban, GripVertical, Shuffle, Share2 } from 'lucide-react';
 import { getClientId } from '../../lib/clientId';
 import { formatCrossSourceTip } from '../../lib/sourceLabels';
 import type { RoomMemberTier, QueueItem, MusicSource } from '../../types';
+import type { FavoriteSong } from '../../types';
+import { songKey } from '../../api/music';
+import { useFavorites } from '../../hooks/useFavorites';
 import SongCover from '../SongCover';
 import FavoriteButton from '../FavoriteButton';
+import FavoriteCategorySelect from '../FavoriteCategorySelect';
 import QueueText from './QueueText';
 import QueueTip from './QueueTip';
 import MemberQueueFrame from '../MemberQueueFrame';
@@ -28,7 +32,7 @@ interface Props {
   dislikeSkipThreshold?: number;
   /** 房主/管理员可拖拽排序 */
   canReorder?: boolean;
-  /** 队列已拖拽锁定时，点赞不再提高排序 */
+  /** 房间关闭点赞排序或队列已拖拽锁定时，点赞仅计数 */
   likeRaisesOrder?: boolean;
   isDragOver?: boolean;
   rowRef?: React.MutableRefObject<HTMLDivElement | null>;
@@ -82,7 +86,8 @@ function QueueRow({
     song.requestedById === myUserId
     || (!song.requestedById && song.requestedBy === nickname)
   ));
-  const likedByIds = Array.isArray(song.likedByIds) ? song.likedByIds : [];
+  const songLikes = song.isCurrent ? song.currentLikedByIds : song.likedByIds;
+  const likedByIds = Array.isArray(songLikes) ? songLikes : [];
   const likeCount = likedByIds.length;
   const likedByMe = Boolean(myUserId && likedByIds.includes(myUserId));
   const dislikedByIds = Array.isArray(song.dislikedByIds) ? song.dislikedByIds : [];
@@ -94,6 +99,40 @@ function QueueRow({
   const isAdminPriority = Boolean(song.ownerPriority && song.priorityBy);
   const isOwnerPriority = Boolean(song.ownerPriority && !song.priorityBy);
   const allowDrag = canReorder && !song.isCurrent;
+  const { favorites, categories, setFavorite, setFavoriteCategory } = useFavorites();
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
+  const [categorySaving, setCategorySaving] = useState(false);
+  const favoriteSong = favorites.find((item) => songKey(item) === songKey(song));
+
+  const handleFavoriteDoubleClick = useCallback(() => {
+    setCategoryPickerOpen(true);
+  }, []);
+
+  const handleCategoryChange = useCallback(async (category: string) => {
+    if (categorySaving) return;
+    setCategorySaving(true);
+    try {
+      let target: FavoriteSong | undefined = favoriteSong;
+      if (!target) {
+        const added = await setFavorite(song, true);
+        if (!added.success) throw new Error(added.error || '收藏失败');
+        target = (added.favorites || []).find((item) => songKey(item) === songKey(song))
+          || { ...song, category };
+      }
+      const result = await setFavoriteCategory(target, category);
+      if (!result.success) throw new Error(result.error || '分类更新失败');
+      setCategoryPickerOpen(false);
+      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
+        detail: { message: category ? `已加入收藏 · ${category}` : '已加入收藏 · 未分类', type: 'success' },
+      }));
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
+        detail: { message: error instanceof Error ? error.message : '收藏分类保存失败', type: 'error' },
+      }));
+    } finally {
+      setCategorySaving(false);
+    }
+  }, [categorySaving, favoriteSong, setFavorite, setFavoriteCategory, song]);
 
   const dragProps = allowDrag
     ? {
@@ -190,11 +229,26 @@ function QueueRow({
               className="flex-shrink-0 max-w-[4.5rem] rounded-full bg-sky-400/15 px-1.5 py-0 text-[9px] leading-4 text-sky-300 truncate"
             />
           )}
-          <FavoriteButton
-            song={song}
-            className="w-7 h-7 text-netease-muted hover:text-rose-300"
-            iconClassName="w-3.5 h-3.5"
-          />
+          <div className="relative flex flex-shrink-0 items-center">
+            <FavoriteButton
+              song={song}
+              className="w-7 h-7 text-netease-muted hover:text-rose-300"
+              iconClassName="w-3.5 h-3.5"
+              onDoubleClick={handleFavoriteDoubleClick}
+            />
+            {categoryPickerOpen && (
+              <div className="absolute right-0 top-full z-40 mt-1 w-32">
+                <FavoriteCategorySelect
+                  value={favoriteSong?.category || ''}
+                  categories={categories}
+                  songName={song.name}
+                  disabled={categorySaving}
+                  openOnMount
+                  onChange={(category) => { void handleCategoryChange(category); }}
+                />
+              </div>
+            )}
+          </div>
           {onShare && (
             <QueueTip content="分享到聊天">
               <button
@@ -204,6 +258,20 @@ function QueueRow({
                 aria-label="分享到聊天"
               >
                 <Share2 className="h-3.5 w-3.5" />
+              </button>
+            </QueueTip>
+          )}
+          {song.isCurrent && (
+            <QueueTip content={likedByMe ? '取消点赞（仅计数）' : '点赞（仅计数，不影响排序）'}>
+              <button
+                type="button"
+                onClick={() => onLike(song.queueId)}
+                aria-label={likedByMe ? '取消点赞' : '点赞'}
+                aria-pressed={likedByMe}
+                className={`flex min-w-7 items-center justify-center gap-0.5 rounded-lg px-1 py-1 text-[11px] transition-colors ${likedByMe ? 'bg-netease-red/10 text-netease-red' : 'text-netease-muted hover:bg-white/10 hover:text-white'}`}
+              >
+                <ThumbsUp className="h-3.5 w-3.5" />
+                <span>{likeCount}</span>
               </button>
             </QueueTip>
           )}
@@ -229,7 +297,7 @@ function QueueRow({
           {!song.isCurrent && (
             <div className="flex flex-shrink-0 items-center gap-0.5">
               {canLike && (
-                <QueueTip content={likedByMe ? '取消点赞' : (likeRaisesOrder ? '点赞提高排序' : '点赞（拖拽排序优先，不再改序）')}>
+                <QueueTip content={likedByMe ? '取消点赞' : (likeRaisesOrder ? '点赞提高排序' : '点赞（仅计数，房间设置或手动排序优先）')}>
                   <button
                     type="button"
                     onClick={() => onLike(song.queueId)}

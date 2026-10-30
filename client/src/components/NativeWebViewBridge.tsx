@@ -1,3 +1,5 @@
+import { getSharedAudio } from '../lib/audioElement';
+import { isAudioFocusInterrupted } from '../lib/audioFocus';
 import { useEffect, useMemo } from 'react';
 import type { Song } from '../types';
 import { filterDisplayLyrics, getCoverUrl, LYRIC_SYNC_LEAD_SEC, songKey } from '../api/music';
@@ -11,6 +13,8 @@ import { normalizePlayMode, nextPlayMode, PLAY_MODE_META, type PlayMode } from '
 import { useFavorites } from '../hooks/useFavorites';
 import { useSocket } from '../hooks/useSocket';
 import { getNativeBridgeToken } from '../lib/nativeWebView';
+import { hasHarmonyMediaBridge, isHarmonyPlayerCommand, sendHarmonyPlayerState, type HarmonyPlayerState } from '../lib/harmonyMediaSession';
+import { readRoomPureMode } from '../lib/roomPureMode';
 
 interface Props {
   song: Song | null;
@@ -48,6 +52,34 @@ function currentLyricText(song: Song | null, lyrics: ReturnType<typeof useTrackL
   return [active.text, active.translation].filter(Boolean).join(' / ').slice(0, 180);
 }
 
+function harmonyPlayerState(song: Song | null, isPlaying: boolean): HarmonyPlayerState | null {
+  const { room, canControlPlayback } = useRoomStore.getState();
+  if (!song || !room?.current || songKey(song) !== songKey(room.current)) return null;
+  const audio = useAudioStore.getState();
+  const raw = audio.mediaDurationMs != null ? audio.mediaDurationMs / 1000 : Number(song.duration) || 0;
+  const seconds = audio.mediaDurationMs == null && raw > 10000 ? raw / 1000 : raw;
+  const duration = Math.max(0, Math.min(86400, Number.isFinite(seconds) ? seconds : 0));
+  // 后台动画帧可能暂停，上报时重新读取当前队列项的播放时钟，避免旧进度覆盖系统卡片
+  const playbackState = getClientPlaybackState();
+  const rawPosition = playbackState?.trackId === room.current.queueId
+    ? getPlaybackTime(playbackState)
+    : audio.smoothPlaybackTime;
+  const position = Number.isFinite(rawPosition) ? Math.max(0, Math.min(86400, rawPosition)) : 0;
+  const pure = readRoomPureMode();
+  const clean = (text: string) => text.replace(/[\u0000-\u001f]/g, ' ').slice(0, 256);
+  return {
+    trackId: `${room.id}:${room.current.queueId}`,
+    title: pure ? '正在播放' : clean(song.name || '未知歌曲'),
+    artist: pure ? '' : clean(song.artist || ''),
+    playing: isPlaying && !isAudioFocusInterrupted(getSharedAudio()),
+    position: duration > 0 ? Math.min(position, duration) : position,
+    duration,
+    canPause: room.systemMediaPlayBound !== false && canPauseInRoom(room, canControlPlayback),
+    canSkip: room.systemMediaSkipBound !== false && canControlPlayback,
+    canSeek: canSeekInRoom(room, canControlPlayback),
+  };
+}
+
 function sendPlayerState(
   song: Song | null,
   isPlaying: boolean,
@@ -56,6 +88,7 @@ function sendPlayerState(
 ) {
   const bridge = window.flutter_inappwebview;
   const bridgeToken = getNativeBridgeToken();
+  if (hasHarmonyMediaBridge()) sendHarmonyPlayerState(harmonyPlayerState(song, isPlaying));
   if (!bridge || !bridgeToken) return;
   if (!song) {
     void bridge.callHandler('omPlayerState', { title: '', bridgeToken });
@@ -77,7 +110,7 @@ function sendPlayerState(
     title: song.name,
     artist: song.artist,
     cover: new URL(cover, window.location.origin).toString(),
-    playing: isPlaying,
+    playing: isPlaying && !isAudioFocusInterrupted(getSharedAudio()),
     position,
     duration,
     canPause: permissions.canPause,
@@ -92,7 +125,7 @@ function sendPlayerState(
   });
 }
 
-/** Synchronizes the Web room player with the Android media notification. */
+/** 同步网页房间播放器与 Android、HarmonyOS 系统媒体控件 */
 export default function NativeWebViewBridge({ song, isPlaying, togglePlay, skipSong, showLyrics }: Props) {
   const songId = song ? songKey(song) : '';
   const room = useRoomStore((state) => state.room);
@@ -127,6 +160,7 @@ export default function NativeWebViewBridge({ song, isPlaying, togglePlay, skipS
   }, [song, songId, isPlaying, permissions.canPause, permissions.canSkip, permissions.canSeek, extras, lyrics]);
 
   useEffect(() => () => {
+    sendHarmonyPlayerState(null);
     const bridgeToken = getNativeBridgeToken();
     if (window.flutter_inappwebview && bridgeToken) {
       void window.flutter_inappwebview.callHandler('omPlayerState', {
@@ -138,8 +172,21 @@ export default function NativeWebViewBridge({ song, isPlaying, togglePlay, skipS
 
   useEffect(() => {
     const onCommand = (event: Event) => {
-      const detail = (event as CustomEvent<{ action?: string; time?: unknown }>).detail;
-      if (detail?.action === 'play' && permissions.canPause) void togglePlay(true);
+      const detail = (event as CustomEvent<{ source?: string; action?: string; time?: unknown }>).detail;
+      if (detail?.source === 'harmony') {
+        const state = harmonyPlayerState(song, Boolean(useRoomStore.getState().room?.isPlaying));
+        if (!isHarmonyPlayerCommand(detail, state)) return;
+        if (detail.action === 'stopLocal') {
+          useAudioStore.getState().localPlayback?.(false);
+          return;
+        }
+      }
+      if (detail?.action === 'play' && permissions.canPause) {
+        if (useRoomStore.getState().room?.isPlaying) useAudioStore.getState().retryPlayback?.(true);
+        else void togglePlay(true).then((success) => {
+          if (success) useAudioStore.getState().retryPlayback?.(true);
+        });
+      }
       if (detail?.action === 'pause' && permissions.canPause) void togglePlay(false);
       if (detail?.action === 'next' && permissions.canSkip) void skipSong();
       if (detail?.action === 'seek' && permissions.canSeek) {

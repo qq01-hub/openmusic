@@ -7,7 +7,7 @@
  * 但现在已有 worker 保活后，锁屏/系统暂停应当可以在后台生效，因此只保留
  * 「刚切到后台」和「刚回到前台」两个短窗口。
  *
- * audio 元素的 pause 自动续播仍只用「刚进后台」短窗口，避免回前台后与用户点暂停打架。
+ * audio 元素意外 pause 由本机焦点中断保护处理，不再自动续播抢回焦点
  */
 const SYSTEM_SUSPEND_GRACE_MS = 2000;
 /** 回到前台后系统仍可能补发 MediaSession pause，需继续忽略改房态 */
@@ -33,7 +33,7 @@ export function installBackgroundPlaybackGuards(): void {
 
 /**
  * 页面刚进入后台时的系统挂起窗口（仅 hidden）。
- * 供 audio pause/ended 误触续播使用，不可扩大到前台，否则会对抗用户点暂停。
+ * 仅供 ended 误报等兼容处理使用，不可据此在系统 pause 后强制续播
  */
 export function isLikelySystemMediaSuspend(): boolean {
   if (typeof document === 'undefined' || !document.hidden) return false;

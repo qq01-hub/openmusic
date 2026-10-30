@@ -12,6 +12,7 @@ import { createMetingAssertion } from './metingAssertion.js';
 import { getMetingRequestContext } from './metingUpstream.js';
 import { getMetingUpstreamBases } from './metingUpstream.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
+import { normalizeMetingFailure } from './metingError.js';
 
 export const MUSIC_ACCOUNT_PLATFORMS = ['netease', 'tencent', 'kugou', 'qishui'];
 
@@ -66,11 +67,13 @@ function getAdminEndpoint() {
 async function metingAdminFetch(path, { method = 'GET', body, timeoutMs = 20000 } = {}) {
   const { base, auth } = getAdminEndpoint();
   if (!base) {
-    return { ok: false, error: '未配置 METING_API_URL' };
+    return { ok: false, status: 503, code: 'METING_NOT_CONFIGURED', error: '未配置 METING_API_URL' };
   }
   if (!auth) {
     return {
       ok: false,
+      status: 503,
+      code: 'METING_NOT_CONFIGURED',
       error: '未配置 Meting API Token：请在管理后台填写与 Meting「API Token」一致的令牌',
     };
   }
@@ -100,19 +103,20 @@ async function metingAdminFetch(path, { method = 'GET', body, timeoutMs = 20000 
     }
     if (!response.ok) {
       return {
-        ok: false,
-        error: data?.error || `Meting 管理接口返回 ${response.status}`,
-        status: response.status,
-        code: data?.code,
+        ...normalizeMetingFailure(data, response.status),
         data,
       };
     }
-    if (data && data.success === false) {
-      return { ok: false, error: data.error || '操作失败', code: data.code, data };
+    if (data && (data.success === false || data.code === 'MUSIC_ACCOUNT_INVALID')) {
+      return { ...normalizeMetingFailure(data, response.status), data };
+    }
+    if (!data || typeof data !== 'object') {
+      return { ok: false, status: 502, code: 'METING_INVALID_RESPONSE', error: '音源服务返回了无效响应' };
     }
     return { ok: true, data };
   } catch (err) {
-    return { ok: false, error: formatMetingFetchError(err) };
+    const timedOut = /timeout|超时/iu.test(formatMetingFetchError(err));
+    return { ok: false, status: timedOut ? 504 : 502, code: timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_REQUEST_FAILED', error: timedOut ? '音源服务请求超时' : '音源服务连接失败' };
   }
 }
 
@@ -204,8 +208,8 @@ export async function checkMusicQrSession(payload) {
 
 async function metingAdminAsset(path, timeoutMs = 20000) {
   const { base, auth } = getAdminEndpoint();
-  if (!base) return { ok: false, status: 503, error: '未配置 METING_API_URL' };
-  if (!auth) return { ok: false, status: 503, error: '未配置 Meting API Token' };
+  if (!base) return { ok: false, status: 503, code: 'METING_NOT_CONFIGURED', error: '未配置 METING_API_URL' };
+  if (!auth) return { ok: false, status: 503, code: 'METING_NOT_CONFIGURED', error: '未配置 Meting API Token' };
 
   const url = `${base.replace(/\/$/, '')}${path.startsWith('/') ? path : `/${path}`}`;
   try {
@@ -213,11 +217,14 @@ async function metingAdminAsset(path, timeoutMs = 20000) {
       headers: {
         Authorization: `Bearer ${auth}`,
         Accept: '*/*',
+        ...createMetingAssertion(auth, url, getMetingRequestContext()),
       },
     }, timeoutMs);
     const body = Buffer.from(await response.arrayBuffer());
     if (!response.ok) {
-      return { ok: false, status: response.status, error: body.toString('utf8') || `Meting 资源接口返回 ${response.status}` };
+      let payload;
+      try { payload = JSON.parse(body.toString('utf8')); } catch { payload = null; }
+      return normalizeMetingFailure(payload, response.status);
     }
     return {
       ok: true,
@@ -225,7 +232,8 @@ async function metingAdminAsset(path, timeoutMs = 20000) {
       contentType: response.headers.get('content-type') || 'application/octet-stream',
     };
   } catch (err) {
-    return { ok: false, status: 502, error: formatMetingFetchError(err) };
+    const timedOut = /timeout|超时/iu.test(formatMetingFetchError(err));
+    return { ok: false, status: timedOut ? 504 : 502, code: timedOut ? 'UPSTREAM_TIMEOUT' : 'UPSTREAM_REQUEST_FAILED', error: timedOut ? '音源服务请求超时' : '音源服务连接失败' };
   }
 }
 

@@ -193,7 +193,7 @@ async function connectRedis(raw) {
   const parsed = parseRedisInput(raw);
   if (parsed.error) return parsed;
   const { createClient } = await import('redis');
-  const client = createClient(parsed.options);
+  const client = createClient({ ...parsed.options, disableOfflineQueue: true, commandsQueueMaxLength: 128, socket: { ...parsed.options.socket, connectTimeout: 8000, reconnectStrategy: false } });
   client.on('error', () => {});
   try {
     await client.connect();

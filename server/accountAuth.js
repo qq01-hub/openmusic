@@ -1,3 +1,4 @@
+import { evalRedisScript } from './redisScripts.js';
 import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import nodemailer from 'nodemailer';
@@ -5,6 +6,7 @@ import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { ACCOUNT_ACCESS_TTL_SEC, createAccountTokenService } from './accountTokens.js';
 import { riskControl } from './riskControl.js';
+import { isReservedBotNickname } from './chatAiAuth.js';
 
 const scrypt = promisify(scryptCallback);
 
@@ -45,7 +47,7 @@ const REGISTRATION_EMAIL_DOMAINS = new Set([
   'icloud.com', 'me.com', 'mac.com', 'yahoo.com', 'aol.com',
   'proton.me', 'protonmail.com',
 ]);
-const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat']);
+const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat', 'wechat_scan', 'qq_scan']);
 
 export class AccountAuthError extends Error {
   constructor(code, message, status = 400) {
@@ -189,6 +191,7 @@ function publicAccount(account) {
     email: normalized.email,
     emailVerifiedAt: normalized.emailVerifiedAt || null,
     hasPassword: Boolean(normalized.password),
+    nickname: String(normalized.nickname || ''),
     ...(normalized.roomUserId ? { roomUserId: normalized.roomUserId } : {}),
     identities: normalized.identities.map((identity) => ({
       provider: identity.provider,
@@ -336,6 +339,36 @@ export function createAccountAuthService({
     return normalizeAccountRecord(parseStoredJson(await store.get(accountKey(id))));
   }
 
+  async function updateNickname(userId, value, { initializeOnly = false } = {}) {
+    const id = normalizeAccountId(userId);
+    if (!id) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+    const store = ensureStore(getStore, isStoreReady);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+      // 旧设备缓存和重连请求只能补齐昵称，不能覆盖账户中已有的昵称
+      if (initializeOnly && account.nickname) return account;
+      if (typeof value !== 'string' || value.length > 200 || !value.trim()) {
+        throw new AccountAuthError('INVALID_NICKNAME', '请输入有效的昵称', 400);
+      }
+      const nickname = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value.trim())]
+        .slice(0, 20).map(item => item.segment).join('');
+      if (isReservedBotNickname(nickname)) {
+        throw new AccountAuthError('INVALID_NICKNAME', '该昵称已被系统保留，请换一个', 400);
+      }
+      if (account.nickname === nickname) return account;
+      const nextAccount = { ...account, nickname, updatedAt: now() };
+      const saved = Number(await evalRedisScript(store,
+        `if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end `
+          + `redis.call('SET', KEYS[1], ARGV[2]) return 1`,
+        { keys: [accountKey(id)], arguments: [currentRaw, JSON.stringify(nextAccount)] },
+      ));
+      if (saved === 1) return nextAccount;
+    }
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
+  }
+
   async function getRoomIdentityOwnerAccountId(userId) {
     const roomUserId = normalizeRoomUserId(userId);
     if (!roomUserId) return null;
@@ -435,7 +468,7 @@ export function createAccountAuthService({
     };
 
     // Redis Lua 保证“邮箱索引 + 账户记录”一次性写入，避免并发注册留下半成品。
-    const result = await store.eval(
+    const result = await evalRedisScript(store,
       `if redis.call('EXISTS', KEYS[1]) == 1 then return 0 end `
         + `redis.call('SET', KEYS[1], ARGV[1]) `
         + `redis.call('SET', KEYS[2], ARGV[2]) `
@@ -497,7 +530,7 @@ export function createAccountAuthService({
         createdAt,
         updatedAt: createdAt,
       };
-      const result = await store.eval(
+      const result = await evalRedisScript(store,
         `local existing = redis.call('GET', KEYS[1]) `
           + `if existing then return existing end `
           + `if redis.call('EXISTS', KEYS[2]) == 1 then return '__ACCOUNT_ID_COLLISION__' end `
@@ -553,7 +586,7 @@ export function createAccountAuthService({
         identities: [...identities, nextIdentity],
         updatedAt: linkedAt,
       };
-      const result = Number(await store.eval(
+      const result = Number(await evalRedisScript(store,
         `local owner = redis.call('GET', KEYS[1]) `
           + `if owner and owner ~= ARGV[1] then return -1 end `
           + `if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -2 end `
@@ -622,7 +655,7 @@ export function createAccountAuthService({
         roomUserId,
         updatedAt,
       };
-      const result = Number(await store.eval(
+      const result = Number(await evalRedisScript(store,
         `if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end `
           + `local owner = redis.call('GET', KEYS[2]) `
           + `if owner and owner ~= ARGV[2] then return -2 end `
@@ -665,7 +698,7 @@ export function createAccountAuthService({
         identities: account.identities.filter((item) => item.provider !== provider),
         updatedAt,
       };
-      const result = Number(await store.eval(
+      const result = Number(await evalRedisScript(store,
         `local owner = redis.call('GET', KEYS[1]) `
           + `if owner and owner ~= ARGV[1] then return -1 end `
           + `if redis.call('GET', KEYS[2]) ~= ARGV[2] then return -2 end `
@@ -695,6 +728,7 @@ export function createAccountAuthService({
 
   return {
     getAccountById,
+    updateNickname,
     getRoomIdentityOwnerAccountId,
     requestEmailRegistrationCode,
     registerWithEmail,
@@ -703,11 +737,15 @@ export function createAccountAuthService({
     bindExternalIdentity,
     ensureRoomUserId,
     unbindExternalIdentity,
+    listSessions: tokens.listSessions,
+    revokeSessionById: tokens.revokeSessionById,
+    verifyDeviceRequest: tokens.verifyRequest,
     createSession: tokens.issue,
     resolveSession: tokens.resolve,
     inspectSession: tokens.inspect,
     refreshSession: tokens.refresh,
     revokeSession: tokens.revoke,
+    bindDeviceKey: tokens.bindDeviceKey,
     publicAccount,
   };
 }
@@ -720,6 +758,7 @@ export const loginWithEmail = defaultService.loginWithEmail;
 export const loginOrRegisterExternalIdentity = defaultService.loginOrRegisterExternalIdentity;
 export const bindExternalIdentity = defaultService.bindExternalIdentity;
 export const ensureRoomUserId = defaultService.ensureRoomUserId;
+export const updateAccountNickname = defaultService.updateNickname;
 export const getRoomIdentityOwnerAccountId = defaultService.getRoomIdentityOwnerAccountId;
 export const unbindExternalIdentity = defaultService.unbindExternalIdentity;
 export const createAccountSession = defaultService.createSession;
@@ -728,3 +767,9 @@ export const inspectAccountSession = defaultService.inspectSession;
 export const refreshAccountSession = defaultService.refreshSession;
 export const revokeAccountSession = defaultService.revokeSession;
 export { publicAccount };
+
+export const verifyAccountDeviceRequest = defaultService.verifyDeviceRequest;
+export const bindAccountDeviceKey = defaultService.bindDeviceKey;
+
+export const listAccountSessions = defaultService.listSessions;
+export const revokeAccountSessionById = defaultService.revokeSessionById;

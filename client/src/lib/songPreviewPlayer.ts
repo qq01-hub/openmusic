@@ -1,9 +1,10 @@
 import type { SearchResult } from '../types';
 import { getSongUrlInfo, songKey } from '../api/music';
 import { resolveQishuiLocalPlaybackUrl, isQishuiLocalPlaybackUrl } from './qishuiLocalPlayback';
-import { getSharedAudio } from './audioElement';
+import { applyIndependentAudioVolume, getSharedAudio } from './audioElement';
 import { getAudioController } from './audioController';
-import { configureInlineAudio } from './audioUnlock';
+import { configureInlineAudio, tryPlay } from './audioUnlock';
+import { resumeAudioFocus } from './audioFocus';
 import {
   acquireRoomAudio,
   consumeRoomResumeRequest,
@@ -39,7 +40,7 @@ function notify() {
 
 export function applyPreviewVolume(volume: number): void {
   if (!previewAudio) return;
-  previewAudio.volume = Math.min(1, Math.max(0, volume));
+  applyIndependentAudioVolume(previewAudio, volume);
 }
 
 function syncPreviewVolume(): void {
@@ -170,14 +171,20 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
       return;
     }
     if (status === 'paused') {
+      const token = ++loadToken;
       takeOverPreviewAudio();
+      resumeAudioFocus(audio);
       syncPreviewVolume();
       try {
-        await audio.play();
+        const result = await tryPlay(audio);
+        if (token !== loadToken || activeKey !== key) return;
+        if (result !== 'played') throw new Error('preview playback blocked');
         status = 'playing';
         lastError = null;
         notify();
       } catch {
+        if (token !== loadToken || activeKey !== key) return;
+        audio.pause();
         lastError = '无法播放试听';
         status = 'error';
         notify();
@@ -199,6 +206,8 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
   notify();
 
   takeOverPreviewAudio();
+  resumeAudioFocus(audio);
+  syncPreviewVolume();
 
   try {
     const resolved = await getSongUrlInfo(song);
@@ -214,13 +223,15 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
 
     audio.src = url;
     syncPreviewVolume();
-    await audio.play();
+    const result = await tryPlay(audio);
     if (token !== loadToken || activeKey !== key) return;
+    if (result !== 'played') throw new Error('preview playback blocked');
     status = 'playing';
     lastError = null;
     notify();
   } catch (err) {
     if (token !== loadToken) return;
+    audio.pause();
     lastError = err instanceof Error && err.message ? '试听失败，换一首试试' : '试听失败';
     status = 'error';
     notify();

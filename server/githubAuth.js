@@ -1,5 +1,5 @@
 import { getRuntimeConfig, isGithubConfigured } from './runtimeConfig.js';
-import { createOAuthProvider, fetchWithTimeout, sanitizeReturnPath } from './oauthProvider.js';
+import { createOAuthProvider, fetchOAuthJson, sanitizeReturnPath, oauthUpstreamError } from './oauthProvider.js';
 
 // GitHub OAuth2（房主身份绑定 / 找回，后台登录见 adminApi.js 的绑定部分）。
 // GitHub 的授权 / 令牌 / 用户信息接口是公开且长期稳定的固定地址，直接写死；
@@ -37,7 +37,7 @@ export async function exchangeGithubCode(code) {
     client_secret: config.githubClientSecret,
   });
 
-  const response = await fetchWithTimeout(TOKEN_URL, {
+  const data = await fetchOAuthJson(TOKEN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -46,30 +46,21 @@ export async function exchangeGithubCode(code) {
     },
     body: body.toString(),
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`GitHub 令牌接口返回 ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`);
-  }
-  const data = await response.json();
   const accessToken = String(data?.access_token || '').trim();
-  if (!accessToken) throw new Error(data?.error_description || 'GitHub 未返回 access_token');
+  if (!accessToken) throw oauthUpstreamError(200, data?.error || 'OAUTH_RESPONSE_INVALID');
   return accessToken;
 }
 
 export async function fetchGithubProfile(accessToken) {
-  const response = await fetchWithTimeout(USERINFO_URL, {
+  const data = await fetchOAuthJson(USERINFO_URL, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/vnd.github+json',
       'User-Agent': 'OpenMusic',
     },
   });
-  if (!response.ok) {
-    throw new Error(`GitHub 用户信息接口返回 ${response.status}`);
-  }
-  const data = await response.json();
   const id = String(data?.id ?? '').trim();
-  if (!id) throw new Error('GitHub 用户信息缺少 id');
+  if (!id) throw oauthUpstreamError(200, 'OAUTH_RESPONSE_INVALID');
 
   return {
     id,

@@ -15,14 +15,76 @@ function stateSecret() {
   return String(process.env.CLIENT_ID_SECRET || FALLBACK_STATE_SECRET);
 }
 
-export async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
+const OAUTH_DIAGNOSTIC_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT', 'CERT_HAS_EXPIRED', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'OAUTH_HTTP_ERROR', 'OAUTH_RESPONSE_INVALID', 'OAUTH_RESPONSE_TOO_LARGE', 'invalid_client', 'invalid_grant', 'invalid_scope', 'redirect_uri_mismatch', 'bad_verification_code', 'incorrect_client_credentials', 'access_denied', 'ACCOUNT_KEY_UNAVAILABLE', 'ACCOUNT_SESSION_UNAVAILABLE', 'RISK_STORAGE_UNAVAILABLE', 'REDIS_UNAVAILABLE', 'IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND', 'ACCOUNT_RISK_BLOCKED']);
+export function oauthFailureDetails(error, stage) {
+  const candidate = error?.code || error?.cause?.code;
+  return { stage, code: OAUTH_DIAGNOSTIC_CODES.has(candidate) ? candidate : ['AbortError', 'TimeoutError'].includes(error?.name) ? 'TIMEOUT' : 'OAUTH_FAILED', ...(Number.isInteger(error?.upstreamStatus) ? { upstreamStatus: error.upstreamStatus } : {}) };
+}
+export function oauthUpstreamError(status, code = 'OAUTH_HTTP_ERROR') {
+  return Object.assign(new Error('OAuth 上游请求失败'), { code: OAUTH_DIAGNOSTIC_CODES.has(code) ? code : 'OAUTH_RESPONSE_INVALID', upstreamStatus: status });
+}
+
+export function createOAuthFailureReporter({ audit, metric, log = console.error, now = Date.now }) {
+  const lastAudit = new Map();
+  const stages = new Set(['configuration', 'state_signature', 'state_binding', 'token', 'profile', 'account_session']);
+  const localCodes = new Set(['NOT_CONFIGURED', 'INVALID_OR_EXPIRED_STATE', 'MISSING_OR_USED_CHALLENGE', 'TIMEOUT', 'OAUTH_FAILED']);
+  return (provider, failure) => {
+    if (!['linuxdo', 'github'].includes(provider) || !stages.has(failure?.stage)) return;
+    const detail = {
+      provider, stage: failure.stage,
+      code: OAUTH_DIAGNOSTIC_CODES.has(failure.code) || localCodes.has(failure.code) ? failure.code : 'OAUTH_FAILED',
+      ...(Number.isInteger(failure.upstreamStatus) && failure.upstreamStatus >= 100 && failure.upstreamStatus <= 599 ? { upstreamStatus: failure.upstreamStatus } : {}),
+    };
+    metric('oauth_callback_failure_total', { provider, stage: detail.stage, code: detail.code });
+    // 每进程最多 12 个固定槽位，同一提供方和阶段每分钟最多写一条既有审计
+    const key = `${provider}:${detail.stage}`;
+    const timestamp = now();
+    if (lastAudit.has(key) && timestamp - lastAudit.get(key) < 60000) return;
+    lastAudit.set(key, timestamp);
+    log('OAuth callback failed', detail);
+    audit('oauth_callback_failed', detail);
+  };
+}
+
+// 授权码、客户端密钥和 Bearer 凭据不得跟随重定向，响应体也必须受总超时与大小限制
+export async function fetchOAuthJson(url, options = {}, timeoutMs = 10000) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let reader;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(new Error('OAuth 上游请求超时'), { code: 'ETIMEDOUT' }));
+      controller.abort();
+      void reader?.cancel().catch(() => {});
+    }, timeoutMs);
+  });
   try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+    return await Promise.race([timeout, (async () => {
+      const response = await fetch(url, { ...options, redirect: 'error', signal: controller.signal });
+      if (!response.body) throw oauthUpstreamError(response.status, response.ok ? 'OAUTH_RESPONSE_INVALID' : 'OAUTH_HTTP_ERROR');
+      reader = response.body.getReader();
+      const chunks = [];
+      let size = 0;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 262144) {
+            void reader.cancel().catch(() => {});
+            throw oauthUpstreamError(response.status, 'OAUTH_RESPONSE_TOO_LARGE');
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally { reader.releaseLock(); }
+      let data;
+      try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { throw oauthUpstreamError(response.status, response.ok ? 'OAUTH_RESPONSE_INVALID' : 'OAUTH_HTTP_ERROR'); }
+      if (!response.ok) throw oauthUpstreamError(response.status, data?.error || 'OAUTH_HTTP_ERROR');
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw oauthUpstreamError(response.status, 'OAUTH_RESPONSE_INVALID');
+      return data;
+    })()]);
+  } finally { clearTimeout(timer); }
 }
 
 /** 仅允许跳回站内相对路径，避免 state 被用来做开放重定向 */

@@ -1,3 +1,4 @@
+import { evalRedisScript } from './redisScripts.js';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -46,11 +47,18 @@ function guestBootstrapFixture() {
       if (writeFailed) throw new Error('write failed');
       records.set(key, value);
     },
+    eval: async (_script, { keys, arguments: args }) => {
+      if (unavailable) throw new Error('offline');
+      if (keys.length === 1) return redis.get(keys[0]);
+      assert.equal(keys.length, 2, '设备换绑脚本应包含正向与反向键');
+      await redis.set(keys[0], args[1]);
+      return 1;
+    },
     sAdd: async () => {}, sRem: async () => {}, expire: async () => {},
     sMembers: async () => [deviceId],
   };
   const context = vm.createContext({
-    getRedisClient: () => redis, isRedisEnabled: () => true,
+    evalRedisScript, getRedisClient: () => redis, isRedisEnabled: () => true,
     console: { error() {} },
     app: { post: (_path, handler) => { bootstrap = handler; } },
     getRequestIp: () => '127.0.0.1',
@@ -59,6 +67,7 @@ function guestBootstrapFixture() {
     resolveBodyDeviceId: (req) => req.body?.deviceId || '',
     resolveIdentityFromRequest: (req) => req.identity || null,
     resolveAccountFromRequest: async () => null,
+    getRuntimeConfig: () => ({ anonymousLoginEnabled: false }),
     SESSION_RENEW_WITHIN_SEC: 3600,
     createServerClientId: () => { created += 1; return 'guest_new_123'; },
     signClientId: () => 'fixture-signature',
@@ -66,7 +75,7 @@ function guestBootstrapFixture() {
     sendBootstrapResponse: (res, userId) => { issued += 1; return res.json({ clientId: userId }); },
   });
   const deviceSource = readFileSync(new URL('./deviceIdentity.js', import.meta.url), 'utf8')
-    .replace(/^import .*;\r?\n/m, '').replace(/\bexport /g, '');
+    .replace(/^import .*;\r?\n/gm, '').replace(/\bexport /g, '');
   vm.runInContext(deviceSource, context);
   const source = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
   const start = source.indexOf("app.post('/api/session/bootstrap'");

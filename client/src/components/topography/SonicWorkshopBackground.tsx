@@ -179,7 +179,9 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
   useEffect(() => {
     if (!ready) return;
     const audio = getSharedAudio();
-    const pushMedia = () => iframeRef.current?.contentWindow?.postMessage({
+    const pushMedia = () => {
+      if (document.hidden) return;
+      iframeRef.current?.contentWindow?.postMessage({
         type: 'mineradio-sonic-workshop-media',
         media: {
           title: song?.name || '',
@@ -193,6 +195,7 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
           duration: Number.isFinite(audio.duration) ? audio.duration : (song?.duration || 0),
         },
       }, '*');
+    };
     pushMedia();
     const timer = window.setInterval(pushMedia, 250);
     return () => window.clearInterval(timer);
@@ -204,7 +207,7 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
     let lastPush = 0;
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
-      if (now - lastPush < 33) return;
+      if (document.hidden || now - lastPush < 33) return;
       lastPush = now;
       if (isPlaying) resumeGalaxyAudioContext();
       const bands = readGalaxyAudioBands(1 / 30);

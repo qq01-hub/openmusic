@@ -87,26 +87,6 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
       </div>
     </div>
   );
-}, (prev, next) => {
-  if (prev.index !== next.index) return false;
-  const prevSong = prev.data.songs[prev.index];
-  const nextSong = next.data.songs[next.index];
-  if (prevSong !== nextSong) return false;
-  if (prev.data.dragOverQueueId !== next.data.dragOverQueueId) {
-    const qid = nextSong?.queueId;
-    if (prev.data.dragOverQueueId === qid || next.data.dragOverQueueId === qid) return false;
-  }
-  if (prev.data.canControlPlayback !== next.data.canControlPlayback) return false;
-  if (prev.data.memberTiers !== next.data.memberTiers) return false;
-  if (prev.data.sourceStatusMap !== next.data.sourceStatusMap) {
-    const qid = nextSong?.queueId;
-    if (qid) {
-      const ps = prev.data.sourceStatusMap.get(qid);
-      const ns = next.data.sourceStatusMap.get(qid);
-      if (ps !== ns && (ps?.error !== ns?.error || ps?.cross !== ns?.cross)) return false;
-    }
-  }
-  return true;
 });
 
 interface Props {
@@ -126,7 +106,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   const memberJumpEnabled = useRoomStore((s) => Boolean(s.room?.memberJumpEnabled));
   const dislikeSkipThreshold = useRoomStore((s) => resolveDislikeSkipThreshold(s.room));
   const hasManualOrder = useRoomStore((s) => (s.room?.queue || []).some((song) => Number.isFinite(song.manualOrder)));
-  const likeRaisesOrder = !hasManualOrder;
+  const queueLikeSortEnabled = useRoomStore((s) => s.room?.queueLikeSortEnabled !== false);
+  const likeRaisesOrder = queueLikeSortEnabled && !hasManualOrder;
   const { removeSong, requestJump, reorderQueue, toggleQueueLike, toggleCurrentDislike, banRoomSong } = useSocket();
   const [dragFromId, setDragFromId] = useState<string | null>(null);
   const [dragOverQueueId, setDragOverQueueId] = useState<string | null>(null);
@@ -137,14 +118,18 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   const dragFromIdRef = useRef<string | null>(null);
 
   // Single subscription for source error/cross-source changes at the panel level
-  useSourceErrorRevision();
+  const sourceErrorRevision = useSourceErrorRevision();
 
+  const queuedSongs = useMemo<QueueRowSong[]>(
+    () => (queue || []).map((song) => ({ ...song, isCurrent: false })),
+    [queue],
+  );
   const allSongs = useMemo<QueueRowSong[]>(() => {
     return [
       ...(currentSong ? [{ ...currentSong, isCurrent: true }] : []),
-      ...(queue || []).map((s) => ({ ...s, isCurrent: false })),
+      ...queuedSongs,
     ];
-  }, [queue, currentSong]);
+  }, [queuedSongs, currentSong]);
 
   const sourceStatusMap = useMemo(() => {
     const map = new Map<string, SourceStatus>();
@@ -156,7 +141,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
       }
     }
     return map;
-  }, [allSongs]);
+  }, [allSongs, sourceErrorRevision]);
 
   const currentKey = currentSong?.queueId || '';
   const useVirtualList = allSongs.length >= VIRTUAL_THRESHOLD;

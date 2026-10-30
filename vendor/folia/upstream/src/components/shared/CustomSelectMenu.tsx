@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { centeredOptionScrollTop, nearestOptionScrollTop } from '../../utils/customSelectScroll';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Check } from 'lucide-react';
 import { List, useListRef, type RowComponentProps } from 'react-window';
@@ -211,6 +212,8 @@ export const CustomSelectMenu: React.FC<CustomSelectMenuProps> = ({
     const listRef = useListRef(null);
     // react-window has nothing to scroll until after its first commit; it reports its size then.
     const [listReady, setListReady] = useState(false);
+    const initialCentered = useRef(false);
+    const selectedIndex = options.findIndex(option => option.value === value);
     const reducedMotion = useReducedMotionFor('uiMicroMotion');
 
     const rowProps = useMemo(() => ({
@@ -235,12 +238,41 @@ export const CustomSelectMenu: React.FC<CustomSelectMenuProps> = ({
         ),
     );
 
+    // 每次挂载先定位当前值，鼠标和键盘打开均适用，后续悬停不改变滚动位置
+    useLayoutEffect(() => {
+        if (initialCentered.current || selectedIndex < 0) return;
+        let frame = 0;
+        let remaining = LIST_READY_MAX_FRAMES;
+        const center = () => {
+            if (isVirtualized) {
+                const list = listRef.current;
+                if (list?.element && list.element.clientHeight > 0) {
+                    list.scrollToRow({ index: selectedIndex, align: 'center', behavior: 'instant' });
+                    initialCentered.current = true;
+                    return;
+                }
+            } else {
+                const menu = menuRef.current;
+                const row = menu?.querySelector<HTMLElement>(`[data-option-index="${selectedIndex}"]`);
+                if (menu && row && menu.clientHeight > 0) {
+                    menu.scrollTop = centeredOptionScrollTop(row.offsetTop, row.offsetHeight, menu.clientHeight, menu.scrollHeight);
+                    initialCentered.current = true;
+                    return;
+                }
+            }
+            if (remaining-- > 0) frame = requestAnimationFrame(center);
+        };
+        center();
+        return () => cancelAnimationFrame(frame);
+    }, [isVirtualized, listReady, listRef, menuRef, selectedIndex]);
+
     // 键盘移动高亮、或用键盘打开菜单后，把高亮项滚进视野（就近对齐，已经看得见就不动）。
     useEffect(() => {
         if (!followActive || activeIndex < 0 || activeIndex >= options.length) return undefined;
         if (!isVirtualized) {
-            const row = menuRef.current?.querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`);
-            row?.scrollIntoView?.({ block: 'nearest' });
+            const menu = menuRef.current;
+            const row = menu?.querySelector<HTMLElement>(`[data-option-index="${activeIndex}"]`);
+            if (menu && row) menu.scrollTop = nearestOptionScrollTop(row.offsetTop, row.offsetHeight, menu.clientHeight, menu.scrollHeight, menu.scrollTop);
             return undefined;
         }
         // react-window 把容器元素记在自己的 state 里，菜单刚挂上的这一轮里 listRef 可能还拿不到
@@ -307,6 +339,8 @@ export const CustomSelectMenu: React.FC<CustomSelectMenuProps> = ({
                 <div className={compact ? 'p-1' : 'p-1.5'}>
                     <List
                         listRef={listRef}
+                        defaultHeight={listHeight}
+                        defaultScrollOffset={centeredOptionScrollTop(Math.max(0, selectedIndex) * (rowHeight + OPTION_ROW_GAP), rowHeight, listHeight, options.length * (rowHeight + OPTION_ROW_GAP))}
                         rowCount={options.length}
                         rowHeight={rowHeight + OPTION_ROW_GAP}
                         rowComponent={CustomSelectMenuRow}

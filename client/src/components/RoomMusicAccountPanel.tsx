@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getMusicVerificationSandbox } from '../lib/harmonyMediaSession';
 import { Loader2, QrCode, Trash2 } from 'lucide-react';
 import MusicLoading from './MusicLoading';
 import type { RoomMusicAccount, RoomMusicAccounts } from '../types';
@@ -229,7 +230,7 @@ function PlatformCard({
                 <p className="truncate text-[11px] text-white/45">共享署名：{account.providerName}</p>
               )}
               {account.isValid === false && (
-                <p className="text-[11px] text-amber-300/90">可能已失效</p>
+                <p className="text-[11px] text-red-300">账号已无法使用，请重新登录</p>
               )}
               {account.isValid !== false && (
                 <p className={`text-[11px] ${account.canSearchSongs || account.canSearchPlaylists ? 'text-white/45' : 'text-amber-300/90'}`}>
@@ -405,8 +406,8 @@ export default function RoomMusicAccountPanel({
         setStatusText('');
         setError('');
         setErrorPlatform(null);
-        setHint('');
-        setHintPlatform(null);
+        setHint(res.message || '');
+        setHintPlatform(res.message ? platform : null);
         stopPoll();
       } finally {
         bindingRef.current = false;
@@ -687,7 +688,7 @@ export default function RoomMusicAccountPanel({
               ref={secondVerifyFrameRef}
               title="汽水安全验证"
               src={secondVerifyUrl}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+              sandbox={getMusicVerificationSandbox()}
               className="min-h-0 flex-1 border-0"
             />
           </div>

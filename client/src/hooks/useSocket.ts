@@ -1,3 +1,4 @@
+import { createDeviceProof } from '../lib/deviceProof';
 import { useEffect, useRef, useCallback } from 'react';
 
 import { io, Socket } from 'socket.io-client';
@@ -38,6 +39,7 @@ import { bindReportTrackDurationSocket } from '../lib/reportTrackDuration';
 import { planAccountSocketRefresh } from '../lib/socketSessionRefresh';
 import { isAccountSessionRevisionEvent, isAccountTokenRevisionEvent } from '../lib/accountSessionSignal';
 import { fetchAccountSession } from '../lib/accountAuth';
+import { hasAnonymousAccess } from '../lib/accountAccessSession';
 import {
   getClientNetworkInfo,
   type ClientNetworkInfo,
@@ -83,11 +85,27 @@ const USERS_STABILIZE_MS = 18_000;
 let accountSessionStorageListenerBound = false;
 let accountSessionRecovery: Promise<void> | null = null;
 let accountSessionNeedsRecovery = false;
+let humanChallengeRequired = false;
+let socketHandshakeFailure: Error | null = null;
 
 function bindAccountSessionStorageListener() {
   if (accountSessionStorageListenerBound || typeof window === 'undefined') return;
   accountSessionStorageListenerBound = true;
+  window.addEventListener('openmusic:human-check-required', () => {
+    humanChallengeRequired = true;
+    clearReconnectSchedule();
+    if (socket) socket.sendBuffer.length = 0;
+    socket?.disconnect();
+  });
+  window.addEventListener('openmusic:human-check-passed', () => {
+    if (!humanChallengeRequired) return;
+    if (socket) socket.sendBuffer.length = 0;
+    humanChallengeRequired = false;
+    void refreshSocketSession();
+  });
+  window.addEventListener('openmusic:account-session-changed', () => { humanChallengeRequired = false; });
   const onTokenRefresh = () => {
+    if (humanChallengeRequired) return;
     if (accountSessionRecovery || accountSessionNeedsRecovery) return;
     if (socket?.connected || socket?.active || shouldMaintainRoomSession()) void refreshSocketSession();
   };
@@ -117,7 +135,17 @@ function getSocket(): Socket {
 
       withCredentials: true,
 
-      auth: { presenceUpdates: true },
+      auth: callback => {
+        socketHandshakeFailure = null;
+        void fetchAccountSession().then(account => {
+          if (!account && hasAnonymousAccess()) return '';
+          if (!account) throw Object.assign(new Error('请先登录账户'), { code: 'ACCOUNT_AUTH_REQUIRED', status: 401 });
+          return createDeviceProof('SOCKET', '/socket.io');
+        }).then(deviceProof => callback({ presenceUpdates: true, deviceProof })).catch(error => {
+          socketHandshakeFailure = error instanceof Error ? error : new Error('账户服务暂不可用');
+          callback({ presenceUpdates: true });
+        });
+      },
 
       reconnection: true,
 
@@ -136,6 +164,7 @@ function getSocket(): Socket {
 }
 
 function waitForSocketConnect(s: Socket, timeoutMs = SOCKET_CONNECT_TIMEOUT_MS): Promise<void> {
+  if (humanChallengeRequired) return Promise.reject(new Error('请先完成人机验证'));
   if (s.connected) return Promise.resolve();
   try {
     // 若曾因全站封禁关掉自动重连，正常进房时重新打开
@@ -164,6 +193,7 @@ function waitForSocketConnect(s: Socket, timeoutMs = SOCKET_CONNECT_TIMEOUT_MS):
       finish();
     };
     const onConnectError = (error: Error) => {
+      error = socketHandshakeFailure || error;
       const message = String(error?.message || '').trim();
       finish(new Error(message || '无法连接到服务器，请检查网络或服务状态'));
     };
@@ -253,6 +283,7 @@ function emitWithAck<TResponse>(
   fallback: TResponse,
   timeoutMs = SOCKET_ACK_TIMEOUT_MS,
 ): Promise<TResponse> {
+  if (humanChallengeRequired) return Promise.resolve(fallback);
   return new Promise((resolve) => {
     getSocket().timeout(timeoutMs).emit(
       event,
@@ -291,6 +322,7 @@ type JoinAckResponse = {
   clientToken?: string;
   needsSession?: boolean;
   nickname?: string;
+  accountNickname?: string;
 };
 
 type RoomConfigApplyResponse = {
@@ -339,6 +371,7 @@ async function applyCachedOwnerRoomConfigAfterJoin(room: RoomState, socketId?: s
   }
   await applySetting('set_room_song_request', {
     enabled: config.songRequestEnabled,
+    queueLikeSortEnabled: config.queueLikeSortEnabled,
     minStaySec: config.songRequestMinStaySec,
     maxPerUser: config.songRequestMaxPerUser,
     cooldownSec: config.songRequestCooldownSec,
@@ -393,7 +426,7 @@ function applyJoinResponse(session: JoinSession, res: JoinAckResponse) {
   const resolvedNickname = res.nickname?.trim()
     || room.users.find((user) => user.id === res.socketId)?.nickname?.trim();
   if (!isTvSession && resolvedNickname) {
-    useRoomStore.getState().setNickname(resolvedNickname);
+    useRoomStore.getState().setNickname(res.accountNickname?.trim() || resolvedNickname);
     lastJoinSession = { ...session, nickname: resolvedNickname };
   }
 
@@ -515,6 +548,7 @@ function isPermanentRejoinError(error?: string): boolean {
 }
 
 function scheduleRoomRejoin(trigger: string) {
+  if (humanChallengeRequired) return;
   if (!shouldMaintainRoomSession()) return;
   if (reconnectTimer != null) return;
 
@@ -547,6 +581,7 @@ function emitJoinRoom(s: Socket, session: JoinSession): Promise<JoinAckResponse>
 }
 
 async function attemptRoomRejoin(trigger: string) {
+  if (humanChallengeRequired) return;
   const session = getActiveJoinSession();
   const currentRoom = useRoomStore.getState().room;
   if (!session || !currentRoom) {
@@ -563,7 +598,7 @@ async function attemptRoomRejoin(trigger: string) {
     if (accountSessionNeedsRecovery) {
       const account = await fetchAccountSession();
       accountSessionNeedsRecovery = false;
-      if (!account) {
+      if (!account && !hasAnonymousAccess()) {
         useRoomStore.getState().resetSession();
         clearReconnectSchedule();
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
@@ -620,6 +655,7 @@ async function attemptRoomRejoin(trigger: string) {
 
 /** 账户会话切换后刷新 Socket 握手身份；已在房间时复用原会话重新进房。 */
 export async function refreshSocketSession(): Promise<void> {
+  if (humanChallengeRequired) return;
   resetSessionBootstrap();
   const s = getSocket();
   const plan = planAccountSocketRefresh({
@@ -643,6 +679,7 @@ function handleSocketDisconnect(reason: string) {
   debugLog('socket_disconnect', debugLine({ reason }));
   const { mySocketId } = useRoomStore.getState();
   useRoomStore.getState().setConnectionInfo(mySocketId, null);
+  if (humanChallengeRequired) return;
 
   if (!shouldMaintainRoomSession()) return;
 
@@ -927,7 +964,7 @@ export function useSocket() {
           try {
             const account = await fetchAccountSession();
             accountSessionNeedsRecovery = false;
-            if (account) {
+            if (account || hasAnonymousAccess()) {
               await refreshSocketSession();
               return;
             }
@@ -976,9 +1013,25 @@ export function useSocket() {
       window.dispatchEvent(new Event('openmusic:socket-connected'));
       void attemptRoomRejoin('connect');
     });
+    s.on('account_human_check_required', () => window.dispatchEvent(new Event('openmusic:human-check-required')));
+    s.on('server_restarting', () => {
+      accountSessionNeedsRecovery = true;
+      window.dispatchEvent(new Event('openmusic:server-restarting'));
+    });
     s.on('disconnect', handleSocketDisconnect);
     s.on('connect_error', (err) => {
-      const code = (err as Error & { data?: { code?: string } }).data?.code;
+      const code = socketHandshakeFailure
+        ? (socketHandshakeFailure as Error & { code?: string }).code
+        : (err as Error & { data?: { code?: string } }).data?.code;
+      if (code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') {
+        window.dispatchEvent(new Event('openmusic:human-check-required'));
+        return;
+      }
+      if (['ACCOUNT_DEVICE_PROOF_REQUIRED', 'ACCOUNT_DEVICE_PROOF_REPLAY'].includes(code || '')) {
+        s.disconnect();
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+        return;
+      }
       if (['ACCOUNT_AUTH_REQUIRED', 'ACCOUNT_IDENTITY_MISMATCH', 'ACCOUNT_RISK_BLOCKED'].includes(code || '')) {
         s.disconnect();
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
@@ -996,6 +1049,7 @@ export function useSocket() {
 
 
   const connect = useCallback(() => {
+    if (humanChallengeRequired) return;
 
     const s = getSocket();
 
@@ -1027,7 +1081,7 @@ export function useSocket() {
       nickname: string,
       password?: string,
       options: { readOnly?: boolean } = {},
-    ): Promise<{ success: boolean; error?: string; needsPassword?: boolean; room?: RoomState }> => {
+    ): Promise<{ success: boolean; error?: string; needsPassword?: boolean; needsSession?: boolean; room?: RoomState }> => {
       const session: JoinSession = {
         roomId,
         nickname,
@@ -1131,9 +1185,13 @@ export function useSocket() {
 
 
 
-  const addSong = useCallback((song: Song): Promise<{ success: boolean; error?: string }> => {
-    return emitWithAck('add_song', { song }, { success: false, error: '连接超时，请重试' });
+  const addSong = useCallback((song: Song, options?: { jump?: boolean }): Promise<{ success: boolean; error?: string }> => {
+    return emitWithAck('add_song', { song, ...(options?.jump ? { jump: true } : {}) }, { success: false, error: '连接超时，请重试' });
 
+  }, []);
+
+  const addSongs = useCallback((songs: Song[]): Promise<{ success: boolean; added?: number; skipped?: number; failed?: number }> => {
+    return emitWithAck('add_songs', { songs }, { success: false }, 60000);
   }, []);
 
 
@@ -1381,6 +1439,10 @@ export function useSocket() {
     return emitWithAck('set_favorite_category', { song, category }, { success: false, error: '收藏分类保存超时，请重试' });
   }, []);
 
+  const deleteFavoriteCategory = useCallback((name: string, keepSongs: boolean): Promise<{ success: boolean; categories?: string[]; favorites?: FavoriteSong[]; error?: string }> => {
+    return emitWithAck('delete_favorite_category', { name, keepSongs }, { success: false, error: '分类删除超时，请重试' });
+  }, []);
+
   const importFavorites = useCallback((songs: Song[], sourceUserId?: string): Promise<{ success: boolean; favorites?: FavoriteSong[]; imported?: number; dropped?: number; maxFavorites?: number; identitySame?: boolean; error?: string }> => {
     return emitWithAck('import_favorites', { songs, sourceUserId }, { success: false, error: '导入超时，请稍后重试' });
   }, []);
@@ -1393,7 +1455,7 @@ export function useSocket() {
 
 
   const renameUser = useCallback((nickname: string): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
-    return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
+    return emitWithAck<{ success: boolean; error?: string; room?: RoomState; accountNickname?: string }>(
       'rename_user',
       { nickname },
       { success: false, error: '连接超时，请重试' },
@@ -1405,7 +1467,7 @@ export function useSocket() {
           const resolvedNickname = (myUserId
             ? res.room.users.find((user) => user.id === myUserId)?.nickname
             : undefined)?.trim() || nickname.trim();
-          useRoomStore.getState().setNickname(resolvedNickname);
+          useRoomStore.getState().setNickname(res.accountNickname?.trim() || resolvedNickname);
           if (lastJoinSession) {
             lastJoinSession = { ...lastJoinSession, nickname: resolvedNickname };
           }
@@ -1533,6 +1595,20 @@ export function useSocket() {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
       'set_room_fm_mode',
       { mode, source },
+      { success: false, error: '连接超时，请重试' },
+    ).then((res) => {
+      if (res.success && res.room) {
+        applyRoomSnapshot(res.room);
+        cacheCurrentOwnerRoomConfig(res.room);
+      }
+      return res;
+    });
+  }, []);
+
+  const setRoomQishuiProxy = useCallback((enabled: boolean): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+    return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
+      'set_room_qishui_proxy',
+      { enabled },
       { success: false, error: '连接超时，请重试' },
     ).then((res) => {
       if (res.success && res.room) {
@@ -1707,6 +1783,20 @@ export function useSocket() {
     });
   }, []);
 
+  const setRoomHideIpLocation = useCallback((hidden: boolean): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+    return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
+      'set_room_hide_ip_location',
+      { hidden },
+      { success: false, error: '连接超时，请重试' },
+    ).then((res) => {
+      if (res.success && res.room) {
+        applyRoomSnapshot(res.room);
+        cacheCurrentOwnerRoomConfig(res.room);
+      }
+      return res;
+    });
+  }, []);
+
   const setRoomJoinNotice = useCallback((options: {
     enabled: boolean;
     cooldownSec: number;
@@ -1767,6 +1857,7 @@ export function useSocket() {
 
   const setSongRequestEnabled = useCallback((options: {
     enabled?: boolean;
+    queueLikeSortEnabled?: boolean;
     memberJumpEnabled?: boolean;
     memberSeekEnabled?: boolean;
     memberPauseEnabled?: boolean;
@@ -1988,6 +2079,7 @@ export function useSocket() {
     leaveRoom,
 
     addSong,
+    addSongs,
 
     skipSong,
     finishSong,
@@ -2030,6 +2122,7 @@ export function useSocket() {
 
     setFavorite,
     setFavoriteCategory,
+    deleteFavoriteCategory,
     importFavorites,
     createFavoriteShare,
     revokeFavoriteShare,
@@ -2054,6 +2147,7 @@ export function useSocket() {
     cancelRoomPermanent,
 
     setRoomFmMode,
+    setRoomQishuiProxy,
     setRoomPlaylistRoaming,
 
     createMusicAccountQr,
@@ -2072,6 +2166,8 @@ export function useSocket() {
     setChatHistoryVisibleOnJoin,
 
     setChatShowAvatars,
+
+    setRoomHideIpLocation,
 
     setRoomJoinNotice,
     setRoomAiSettings,

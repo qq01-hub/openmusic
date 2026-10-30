@@ -32,14 +32,14 @@ const CARD_WIDTH_CLASS = 'w-[17.5rem] max-w-full flex-shrink-0';
  * 底部进度条支持点击和拖动定位。卡片播放只作用于本机，房间播放器状态不受影响。
  */
 function ChatMusicCard({ song, messageId, preview = false, actions }: Props) {
-  const playback = useChatCardPlaybackState();
+  const thisCardKey = chatCardKey(messageId, song);
+  const playback = useChatCardPlaybackState(thisCardKey);
 
   const cardKey = songKey(song);
   const favoritedNow = Boolean(actions?.favoriteKeys.has(cardKey));
   const inQueue = Boolean(actions?.queueKeys.has(cardKey));
   const favoriteLoading = Boolean(actions?.pendingKeys.has(`fav:${cardKey}`));
   const addingToQueue = Boolean(actions?.pendingKeys.has(`add:${cardKey}`));
-  const thisCardKey = chatCardKey(messageId, song);
   const isThisCard = !preview && playback.cardKey === thisCardKey;
   const isLoading = isThisCard && playback.status === 'loading';
   const isPlaying = isThisCard && playback.status === 'playing';

@@ -1,6 +1,8 @@
 /** 与 audio.src 同步绑定的 queueId，避免内存缓存与真实音源脱节 */
+import { finishAudioSeek } from './audioSeek';
 
 export function bindAudioQueueId(audio: HTMLAudioElement, queueId: string): void {
+  finishAudioSeek(audio);
   audio.dataset.openmusicQueueId = queueId;
 }
 

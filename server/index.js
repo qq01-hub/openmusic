@@ -1,3 +1,12 @@
+import { DeviceProofError, loginDeviceKey, normalizeDeviceKey } from './deviceProof.js';
+import { verifyAccountDeviceRequest, bindAccountDeviceKey } from './accountAuth.js';
+import { createOAuthFailureReporter, oauthFailureDetails } from './oauthProvider.js';
+import { createRiskChallengeBus } from './riskChallengeBus.js';
+import { createRedisMaintenance } from './redisMaintenance.js';
+import { evalRedisScript } from './redisScripts.js';
+import { createProxyTrust, observeProxyHeaders } from './trustedProxy.js';
+import { createTurnstileVerifier } from './turnstile.js';
+import { publicHumanChallengeState } from './riskHumanChallenge.js';
 import './loadEnv.js';
 import { resizeCoverForThumb } from './coverUrl.js';
 import {
@@ -56,9 +65,11 @@ import {
   createWechatUinStore,
 } from './wechatUinAuth.js';
 import { mountAdminApi, appendAdminAudit } from './adminApi.js';
+import { createSocialLogin, mountSocialLoginRoutes, socialProviderEnabled } from './socialLogin.js';
 import { initAdminCredentials } from './adminCredentials.js';
 import { riskControl, RiskControlError } from './riskControl.js';
 import { createAccountAccessMiddleware } from './accountAccess.js';
+import { createAnonymousAccess } from './anonymousAccess.js';
 import { createAccountRequestGuard, createAccountSocketOriginGuard } from './accountRequest.js';
 import { ACCOUNT_REFRESH_COOKIE, AccountTokenError, accountTokenSessionId } from './accountTokens.js';
 import { createWechatAccountLogin, WechatAccountLoginError, WECHAT_ACCOUNT_LOGIN_COOKIE, WECHAT_ACCOUNT_LOGIN_TTL_SEC } from './wechatAccountLogin.js';
@@ -119,6 +130,7 @@ import {
   shouldMuteJoinAnnouncements,
   wasKnownRoomUser,
   setRoomFmMode,
+  setQishuiProxyEnabled,
   setRoomPlayMode,
   setRoomMusicAccountsCache,
   patchRoomMusicAccountCache,
@@ -129,6 +141,7 @@ import {
   setRoomCustomCover,
   setChatHistoryVisibleOnJoin,
   setChatShowAvatars,
+  setRoomHideIpLocation,
   setSongRequestEnabled,
   banRoomSong,
   unbanRoomSong,
@@ -202,7 +215,8 @@ import { fetchNeteaseHotToplist } from './neteaseToplist.js';
 import { createNeteasePlaylistSearchHandler } from './neteasePlaylistSearch.js';
 import { getHotSongs } from './songHotRank.js';
 import { fetchMusicSuggestions } from './musicSuggestions.js';
-import { hasRedisEnvConfig, createFavoriteShare, revokeFavoriteShare, importFavoriteShare, importFavoriteSongs, importFavoriteCategories, listFavoriteSongs, listFavoriteCategories, createFavoriteCategory, previewFavoriteShare, setFavoriteSong, setFavoriteCategory, getRedisClient, addRoomToAccountIndex, listRoomIdsForAccount, retainMigratedFavoriteSource } from './roomStorage.js';
+import { normalizeMetingFailure } from './metingError.js';
+import { hasRedisEnvConfig, createFavoriteShare, revokeFavoriteShare, importFavoriteShare, importFavoriteSongs, importFavoriteCategories, listFavoriteSongs, listFavoriteCategories, createFavoriteCategory, deleteFavoriteCategory, previewFavoriteShare, setFavoriteSong, setFavoriteCategory, getRedisClient, addRoomToAccountIndex, listRoomIdsForAccount, retainMigratedFavoriteSource } from './roomStorage.js';
 import { analyzeFavoritesMigration, filterFavoriteCategories } from './favoritesSync.js';
 import { sanitizeFavoriteSongInput } from './favoriteSongInput.js';
 import {
@@ -277,6 +291,7 @@ import {
   loginOrRegisterExternalIdentity,
   bindExternalIdentity,
   ensureRoomUserId,
+  updateAccountNickname,
   getRoomIdentityOwnerAccountId,
   unbindExternalIdentity,
   createAccountSession,
@@ -288,6 +303,7 @@ import {
   AccountAuthError,
   normalizeEmail,
 } from './accountAuth.js';
+import { createAccountMusicService } from './accountMusic.js';
 
 // 由 mountAdminApi() 返回赋值：房主 OAuth 回调路由与后台 OAuth 回调共用同一个
 // 已在第三方平台注册的 redirect_uri，只能在这一个路由里按 state.purpose 分发，
@@ -297,6 +313,51 @@ let handleGithubAdminCallback = null;
 
 const wechatUinStore = createWechatUinStore();
 const wechatAccountLogin = createWechatAccountLogin({ getStore: getRedisClient });
+const accountMusic = createAccountMusicService({
+  getStore: getRedisClient,
+  getConfig: getRuntimeConfig,
+  share: async ({ platform, cookie, metadata }) => {
+    const result = await contributeMusicAccount(platform, cookie, metadata.providerName || '', metadata.revokeToken || '');
+    return result.ok ? { ...result, data: { ...(result.data || {}), ...metadata }, revokeToken: result.revokeToken } : result;
+  },
+  unshare: async (_accountId, _platform, _cookie, metadata) => {
+    if (!metadata?.revokeToken) return { ok: true };
+    return revokeMusicContribution(metadata.revokeToken);
+  },
+});
+
+async function restoreAccountMusicToRoom(accountId, room, { ownerUserId } = {}) {
+  if (!accountId || !room) return room;
+  try {
+    // 使用服务端房间归属与凭证，公开快照不包含完整的账户归属字段
+    const internal = getRoomInternal(room.id);
+    const ownsRoom = (current) => ownerUserId
+      ? current && !current.ownerAccountId && current.creatorId === ownerUserId
+      : current?.ownerAccountId === accountId;
+    const ownedIds = new Set([room.id, ...(ownerUserId ? listRoomIds() : await listRoomIdsForAccount(accountId))]);
+    for (const id of ownedIds) {
+      const owned = getRoomInternal(id);
+      if (ownsRoom(owned)) await accountMusic.rememberRoom(accountId, owned, { ownerUserId });
+    }
+    await accountMusic.restoreRoom(accountId, internal, (roomId, platform, metadata, options) => {
+      const current = getRoomInternal(roomId);
+      if (!ownsRoom(current)) {
+        throw Object.assign(new Error('房间归属已变化，请重试'), { code: 'ROOM_ACCOUNT_CONFLICT' });
+      }
+      const result = patchRoomMusicAccountCache(roomId, platform, metadata, options);
+      if (result.error) throw new Error('房间会员恢复失败');
+    }, { ownerUserId });
+    if (!ownsRoom(getRoomInternal(room.id))) {
+      throw Object.assign(new Error('房间归属已变化，请重试'), { code: 'ROOM_ACCOUNT_CONFLICT' });
+    }
+    incrementMetric('account_music_restore_total', { outcome: 'success' });
+    return getRoom(room.id);
+  } catch (error) {
+    incrementMetric('account_music_restore_total', { outcome: 'failed', code: error.code || 'storage' });
+    console.error('[Account Music] 房间复用会员失败:', error.code || 'storage');
+    throw error;
+  }
+}
 
 async function clearRoomOwnerBindings(roomId) {
   await Promise.all([
@@ -348,7 +409,8 @@ if (IS_PRODUCTION && !(process.env.CLIENT_ID_SECRET || '').trim()) {
 const app = express();
 // Forwarded IP headers are only trustworthy when the deployment explicitly
 // declares that a reverse proxy is in front of this process.
-app.set('trust proxy', TRUST_PROXY ? 1 : false);
+const isTrustedProxyPeer = createProxyTrust({ enabled: TRUST_PROXY, trustedIps: TRUSTED_PROXY_IPS, normalizeIp: normalizeClientIp });
+app.set('trust proxy', isTrustedProxyPeer);
 const httpServer = createServer(app);
 
 /** 本地调试 Origin（Flutter Web / Vite 等任意端口） */
@@ -422,6 +484,7 @@ app.use(cors({
     'Content-Type',
     'Accept',
     'X-OpenMusic-Request',
+    'X-OpenMusic-Device',
     'Authorization',
     'X-OM-Ts',
     'X-OM-Nonce',
@@ -507,13 +570,17 @@ mountSetupApi(app);
 
 app.use(createAccountRequestGuard({ allowedOrigins: ALLOWED_ORIGINS }));
 app.use(createAccountAccessMiddleware({
+  verifyDevice: req => verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { session: req.accountSession, ip: getRequestIp(req) }),
   resolveAccount: resolveAccountFromRequest,
   resolveIdentity: resolveIdentityFromRequest,
   ensureIdentity: ensureRoomUserId,
   risk: riskControl,
   getIp: getRequestIp,
+  getNetworkContext: req => observeProxyHeaders(req.headers, req.socket?.remoteAddress || '', isTrustedProxyPeer, CLIENT_IP_HEADER),
   withContext: runWithMetingRequestContext,
   metric: incrementMetric,
+  onHumanChallenge: suspendAccountSocketsForHumanChallenge,
+  resolveAnonymous: resolveAnonymousAccount,
 }));
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
@@ -551,19 +618,20 @@ function getHeaderIp(headers, name) {
   if (!key) return '';
   const raw = headers[key];
   const value = Array.isArray(raw) ? raw[0] : raw;
-  return normalizeClientIp(value);
+  const ip = normalizeClientIp(value);
+  return isIP(ip) ? ip : '';
 }
 
 /**
  * CDN 回源真实客户端 IP 头（有 CDN 时必填）。
- * Cloudflare: CF-Connecting-IP；EdgeOne: iqp
+ * Cloudflare: CF-Connecting-IP；EdgeOne: EO-Connecting-IP
  */
 const CLIENT_IP_HEADER = String(process.env.CLIENT_IP_HEADER || '').trim().toLowerCase();
 
 function getClientIpFromHeaders(headers = {}, remoteAddress = '') {
   // 只有 TCP 对端在显式可信代理列表中时才接受转发头，避免直连客户端伪造 XFF/X-Real-IP 绕过限流。
   const normalizedRemoteAddress = normalizeClientIp(remoteAddress || '');
-  const trustForwarded = TRUST_PROXY && TRUSTED_PROXY_IPS.has(normalizedRemoteAddress);
+  const trustForwarded = isTrustedProxyPeer(normalizedRemoteAddress);
   if (!trustForwarded) {
     return normalizedRemoteAddress;
   }
@@ -572,6 +640,11 @@ function getClientIpFromHeaders(headers = {}, remoteAddress = '') {
   if (CLIENT_IP_HEADER) {
     const customIp = getHeaderIp(headers, CLIENT_IP_HEADER);
     if (customIp) return customIp;
+    // 兼容旧部署指引的 iqp；未配置 CDN 头时不自动信任客户端透传的头
+    if (CLIENT_IP_HEADER === 'iqp') {
+      const edgeOneIp = getHeaderIp(headers, 'eo-connecting-ip');
+      if (edgeOneIp) return edgeOneIp;
+    }
   }
 
   // Nginx 覆盖写入的 X-Real-IP 优先于可被伪造的 XFF 首段
@@ -583,7 +656,10 @@ function getClientIpFromHeaders(headers = {}, remoteAddress = '') {
   if (rawForwarded) {
     const parts = String(rawForwarded).split(',').map((part) => part.trim()).filter(Boolean);
     // 可信代理追加在末尾；取最后一段
-    if (parts.length > 0) return normalizeClientIp(parts[parts.length - 1]);
+    if (parts.length > 0) {
+      const ip = normalizeClientIp(parts[parts.length - 1]);
+      if (isIP(ip)) return ip;
+    }
   }
 
   return normalizeClientIp(remoteAddress || '');
@@ -710,6 +786,7 @@ const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
 const limitAccountLoginEmail = createRateLimiter({ windowMs: 15 * 60_000, max: 12 });
 const limitAccountLoginEmailIp = createRateLimiter({ windowMs: 5 * 60_000, max: 6 });
 const limitAccountRefresh = createRateLimiter({ windowMs: 60_000, max: 60 });
+const limitAccountNickname = createRateLimiter({ windowMs: 60_000, max: 20 });
 const accountLoginFailures = new Map();
 const ACCOUNT_LOGIN_FAILURE_WINDOW_MS = 15 * 60_000;
 const ACCOUNT_LOGIN_MAX_DELAY_MS = 2_000;
@@ -1108,7 +1185,7 @@ async function localizeQishuiPayload(payload, metingQuery, req) {
     return { ...payload, url: browserMetingMediaUrl(payload?.url) };
   }
   if (!isConfiguredMetingUrl(payload.url)) return { ...payload, url: '' };
-  const token = createQishuiSourceToken(payload.url, req?.account?.id || '');
+  const token = createQishuiSourceToken(payload.url, req?.riskAccount?.id || req?.account?.id || '');
   const path = `/api/qishui-source?t=${encodeURIComponent(token)}`;
   const origin = requestPublicOrigin(req);
   return { ...payload, url: origin ? `${origin}${path}` : path };
@@ -1181,7 +1258,7 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
         thumbPx > 0 ? resizeCoverForThumb(resolved, thumbPx) : resolved,
         res,
         fetchWithTimeout,
-        { thumbPx: 0, requireAllowlist: true },
+        { thumbPx: 0, requireAllowlist: true, imageOnly: true },
       );
     } catch (err) {
       console.error('Meting pic resolve error:', err?.message || err);
@@ -1227,12 +1304,14 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
   }
 
   const contentType = response.headers.get('content-type') || '';
+  if (!response.ok) {
+    if (structuredLyrics) incrementMetric('structured_lyrics_total', { result: 'upstream_error' });
+    let payload;
+    try { payload = await response.json(); } catch { payload = null; }
+    const failure = normalizeMetingFailure(payload, response.status);
+    return res.status(failure.status).json({ success: false, error: failure.error, code: failure.code });
+  }
   if (metingType === 'lrc' && metingQuery.format === 'json') {
-    if (!response.ok) {
-      await response.body?.cancel();
-      incrementMetric('structured_lyrics_total', { result: 'upstream_error' });
-      return res.status(response.status >= 400 ? response.status : 502).json({ error: 'lyric upstream unavailable', code: 'LYRIC_UPSTREAM_ERROR' });
-    }
     try {
       const { normalizeStructuredLyrics, readStructuredLyricResponse } = await import('./structuredLyrics.js');
       const lyrics = normalizeStructuredLyrics(await readStructuredLyricResponse(response));
@@ -1334,7 +1413,7 @@ app.post('/api/music-account-contribution/qr/create', async (req, res) => {
     platform,
     purpose: 'contribution',
   });
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '二维码生成失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '二维码生成失败' });
   return res.json({ success: true, data: result.data });
 });
 
@@ -1349,7 +1428,7 @@ app.post('/api/music-account-contribution/qr/check', async (req, res) => {
     ownerId: identity.userId,
     purpose: 'contribution',
   });
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '扫码状态查询失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '扫码状态查询失败' });
   return res.json({ success: true, data: result.data });
 });
 
@@ -1361,7 +1440,7 @@ app.post('/api/music-account-contribution/qr/verify/start', async (req, res) => 
     ownerId: identity.userId,
     purpose: 'contribution',
   });
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '汽水验证初始化失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '汽水验证初始化失败' });
   return res.json({ success: true, data: result.data });
 });
 
@@ -1373,7 +1452,7 @@ app.post('/api/music-account-contribution/qr/verify/request', async (req, res) =
     ownerId: identity.userId,
     purpose: 'contribution',
   }, req.body?.request || {});
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '汽水验证请求失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '汽水验证请求失败' });
   return res.json({ success: true, ...result.data });
 });
 
@@ -1385,7 +1464,7 @@ app.post('/api/music-account-contribution/qr/verify/complete', async (req, res) 
     ownerId: identity.userId,
     purpose: 'contribution',
   });
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '汽水验证完成失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '汽水验证完成失败' });
   return res.json({ success: true, data: result.data });
 });
 
@@ -1397,7 +1476,7 @@ app.get('/api/music-account-contribution/qr/verify/:asset', async (req, res) => 
   const asset = String(req.params.asset || '');
   if (!['security_host.html', 'react.js', 'react-dom.js', 'sdk-glue.js', 'bdms.js'].includes(asset)) return res.status(404).end();
   const result = await fetchManagedQishuiVerificationAsset(asset);
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '汽水验证资源获取失败' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '汽水验证资源获取失败' });
   res.set('Content-Type', result.contentType);
   res.set('Cache-Control', 'no-store');
   return res.send(Buffer.from(result.body));
@@ -1455,7 +1534,7 @@ app.post('/api/music-account-contribution/revoke', async (req, res) => {
     return res.status(429).json({ success: false, error: '操作频繁，请稍后再试' });
   }
   const result = await revokeMusicContribution(req.body?.revokeToken);
-  if (!result.ok) return res.status(result.status || 400).json({ success: false, error: result.error || '取消共享失败' });
+  if (!result.ok) return res.status(result.status || 400).json({ success: false, code: result.code, error: result.error || '取消共享失败' });
   return res.json({ success: true, message: result.message || '共享已取消' });
 });
 
@@ -1466,7 +1545,7 @@ app.get('/api/music-account-contribution/shared', async (req, res) => {
     return res.json({ success: true, data: [] });
   }
   const result = await fetchMusicContributions(Math.min(Number(req.query.limit) || 20, 50));
-  if (!result.ok) return res.status(result.status || 502).json({ success: false, error: result.error || '共享记录暂时不可用' });
+  if (!result.ok) return res.status(result.status || 502).json({ success: false, code: result.code, error: result.error || '共享记录暂时不可用' });
   return res.json({ success: true, data: result.data });
 });
 
@@ -1659,6 +1738,16 @@ app.get('/api/music/quality-capabilities', async (req, res) => {
 });
 
 app.get('/api/meting', async (req, res) => {
+  if (req.publicMetingCover) {
+    const rate = await distributedSocketRateLimiter.consume({ scope: 'http:public-cover', principal: `ip:${getRequestIp(req)}`, windowMs: 60_000, max: 240 });
+    if (!rate.allowed) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil(rate.retryAfterMs / 1000))));
+      return res.status(rate.unavailable ? 503 : 429).json({ error: '封面请求暂时繁忙，请稍后重试', code: rate.unavailable ? 'COVER_UNAVAILABLE' : 'COVER_RATE_LIMITED' });
+    }
+    const { server, id } = req.query;
+    if (!isMusicSourceEnabled(server, getRuntimeConfig().musicSourcesEnabled)) return res.status(503).json({ error: '该音源已关闭' });
+    return proxyMetingResponse({ server, id, type: 'pic' }, res, Math.min(2048, Number(req.query.size) || 320), 'pic', req);
+  }
   const identity = requireSessionIdentity(req, res);
   if (!identity) return;
 
@@ -1684,11 +1773,11 @@ app.get('/api/meting', async (req, res) => {
   } catch (err) {
     const message = formatMetingFetchError(err);
     console.error('Meting proxy error:', message);
-    // 业务无链 / 上游 403 不应伪装成连通性故障，否则客户端会无限按「网络问题」重试
-    if (/no\s*url|空播放|未返回有效媒体|不可播外链/i.test(message)) {
-      return res.status(403).json({ error: 'no url' });
+    if (err?.code && Number(err.status) >= 400 && Number(err.status) <= 599) {
+      return res.status(err.status).json({ success: false, error: message, code: err.code });
     }
-    if (/上游返回 403/.test(message)) {
+    // 仅明确无链才作为曲目业务失败，不能把任意上游 403 当作歌曲无源
+    if (/no\s*url|空播放|未返回有效媒体|不可播外链/i.test(message)) {
       return res.status(403).json({ error: 'no url' });
     }
     if (/未配置 METING_API_URL/.test(message)) {
@@ -1758,7 +1847,7 @@ app.get('/api/qishui-source', async (req, res) => {
   if (!isMusicSourceEnabled('qishui', getRuntimeConfig().musicSourcesEnabled)) return res.status(503).json({ error: '汽水音源已关闭' });
 
   const token = String(req.query.t || '').trim();
-  const rawUrl = token ? await resolveQishuiSourceToken(token, req.account.id) : '';
+  const rawUrl = token ? await resolveQishuiSourceToken(token, req.riskAccount?.id || req.account?.id || '') : '';
   if (!rawUrl || !isQishuiPlayUrl(rawUrl) || !isConfiguredMetingUrl(rawUrl)) {
     return res.status(400).json({ error: '汽水播放会话无效或已过期' });
   }
@@ -1845,7 +1934,9 @@ app.get('/api/media-proxy', async (req, res) => {
     }
 
     await serveUpstreamMedia(fetchUrl, res, fetchWithTimeout, {
+      method: req.method,
       range: req.headers.range,
+      ifRange: req.headers['if-range'],
       thumbPx,
       requireAllowlist: true,
     });
@@ -2095,7 +2186,9 @@ async function issueAccountOAuthState(req, res, provider, signState, payload) {
   const store = getRedisClient();
   if (!isRedisEnabled() || !store) throw new AccountAuthError('REDIS_UNAVAILABLE', '账户登录存储暂不可用，请稍后重试', 503);
   const token = randomBytes(32).toString('base64url');
-  const state = signState({ ...payload, nonce: randomBytes(24).toString('base64url') });
+  const deviceKey = payload.purpose === 'account-login'
+    ? (req.headers?.['x-openmusic-device'] !== undefined ? loginDeviceKey(req) : readLoginDeviceCookie(req)) : undefined;
+  const state = signState({ ...payload, ...(deviceKey ? { deviceKey } : {}), nonce: randomBytes(24).toString('base64url') });
   try {
     const saved = await store.set(accountOAuthChallengeKey(provider, token), createHash('sha256').update(state).digest('hex'), { NX: true, EX: 600 });
     if (saved !== 'OK') throw new Error('challenge not saved');
@@ -2113,7 +2206,7 @@ async function consumeAccountOAuthState(req, res, provider, state) {
   if (!isRedisEnabled() || !store) throw new AccountAuthError('REDIS_UNAVAILABLE', '账户登录存储暂不可用，请稍后重试', 503);
   let consumed;
   try {
-    consumed = await store.eval(`if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end; return redis.call('DEL', KEYS[1])`, {
+    consumed = await evalRedisScript(store, `if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end; return redis.call('DEL', KEYS[1])`, {
       keys: [accountOAuthChallengeKey(provider, token)],
       arguments: [createHash('sha256').update(state).digest('hex')],
     });
@@ -2145,22 +2238,32 @@ function resolveAccountRefreshToken(req) {
 }
 
 function accountSessionMetadata(session) {
-  return { expiresAt: session.expiresAt, refreshExpiresAt: session.refreshExpiresAt, serverTime: Date.now() };
+  return { deviceMigrationRequired: session.deviceMigrationRequired === true, deviceKeyId: session.deviceKeyId, sessionId: session.sessionId, expiresAt: session.expiresAt, refreshExpiresAt: session.refreshExpiresAt, serverTime: Date.now() };
 }
 
 async function resolveAccountFromRequest(req) {
   if (req.account) return req.account;
   const token = resolveAccountSessionToken(req);
   if (!token) return null;
-  return resolveAccountSession(token);
+  const session = await inspectAccountSession(token);
+  req.accountSession = session;
+  return session?.account || null;
+}
+
+async function resolveAnonymousAccount(req) {
+  return createAnonymousAccess({
+    getConfig: getRuntimeConfig,
+    resolveIdentity: resolveIdentityFromRequest,
+    getIdentityOwner: getRoomIdentityOwnerAccountId,
+  })(req);
 }
 
 async function createTrackedAccountSession(req, account, method, registration = false) {
   await riskControl.recordLogin(account, {
     ip: getRequestIp(req), method, registration,
-    userAgent: req.headers['user-agent'] || '',
+    userAgent: req.headers['user-agent'] || '', humanVerifiedAt: req.humanVerifiedAt || 0,
   });
-  return createAccountSession(account.id);
+  return createAccountSession(account.id, req.oauthDeviceKey || req.loginDeviceKey || optionalLoginDeviceKey(req), { allowLegacy: true });
 }
 
 /** 将账户会话绑定到稳定的房间 userId，并把当前设备切换到该身份。 */
@@ -2228,8 +2331,15 @@ async function syncAccountRoomIdentity(req, res, account) {
   const roomMigration = currentIdentity?.userId && (currentIdentity.userId === roomUserId || migrateGuest)
     ? claimRoomsForAccountIdentity(currentIdentity.userId, roomUserId, account.id)
     : { claimedRoomIds: [], conflictedRoomIds: [] };
+  if (currentIdentity?.userId && (!sourceIdentityOwnerId || sourceIdentityOwnerId === account.id)
+    && (currentIdentity.userId === roomUserId || migrateGuest)) {
+    await accountMusic.migrateAnonymous(account.id, currentIdentity.userId);
+  }
   if (roomMigration.claimedRoomIds.length > 0) {
     await Promise.all(roomMigration.claimedRoomIds.map((roomId) => addRoomToAccountIndex(account.id, roomId)));
+    for (const roomId of roomMigration.claimedRoomIds) {
+      await accountMusic.rememberRoom(account.id, getRoomInternal(roomId));
+    }
     for (let index = 0; index < roomMigration.claimedRoomIds.length; index += 1) incrementMetric('account_room_migration_total', { outcome: 'claimed' });
   }
   if (roomMigration.conflictedRoomIds.length > 0) {
@@ -2290,13 +2400,24 @@ function setGuestHandoffCookie(res, sourceUserId, targetUserId) {
 
 async function requireAccountSession(req, res) {
   const account = await resolveAccountFromRequest(req);
-  if (account) {
+  if (account && !account.anonymous) {
     await riskControl.assertAllowed(account.id);
     return account;
   }
   clearAccountSessionCookie(res);
   res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
   return null;
+}
+
+async function requireRiskSession(req, res) {
+  const account = await resolveAccountFromRequest(req) || await resolveAnonymousAccount(req);
+  if (!account) {
+    res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
+    return null;
+  }
+  await riskControl.assertAllowed(account.id);
+  if (!account.anonymous) await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
+  return account;
 }
 
 function appendAccountAuthResult(returnPath, result) {
@@ -2346,9 +2467,10 @@ function sendPublicRegistrationError(res, error) {
 function sendAccountAuthError(res, error) {
   if (error instanceof WechatAccountLoginError) {
     if (error.status === 429) res.setHeader('Retry-After', '60');
-    return res.status(error.status).json({ error: error.message, code: error.code });
+    return res.status(error.status).json({ error: error.message, code: error.code,
+      ...(error instanceof WechatAccountLoginError && error.stage ? { stage: error.stage } : {}) });
   }
-  if (error instanceof AccountTokenError) {
+  if (error instanceof AccountTokenError || error instanceof DeviceProofError) {
     if (error.retryAfter) res.setHeader('Retry-After', String(error.retryAfter));
     return res.status(error.status).json({ error: error.message, code: error.code });
   }
@@ -2358,6 +2480,16 @@ function sendAccountAuthError(res, error) {
   }
   console.error('账户认证请求失败:', error?.message || error);
   return res.status(500).json({ error: '账户服务暂不可用，请稍后重试', code: 'ACCOUNT_SERVICE_ERROR' });
+}
+
+function logWechatAccountFailure(error, stage = 'request') {
+  if (!(error instanceof WechatAccountLoginError)) return;
+  console.error('微信账户官方验证失败', {
+    stage: error.stage || stage,
+    code: error.code,
+    ...(Number.isSafeInteger(error.officialCode) ? { officialCode: error.officialCode } : {}),
+    ...(Number.isInteger(error.upstreamStatus) ? { upstreamStatus: error.upstreamStatus } : {}),
+  });
 }
 
 function recordAccountAuthMetric(action, outcome) {
@@ -2397,8 +2529,8 @@ function requireSessionIdentity(req, res) {
 function sendBootstrapResponse(res, userId, iat, token, deviceId = null) {
   setIdentityCookieHeaders(res, userId, token, deviceId);
   res.setHeader('Cache-Control', 'no-store, private');
-  if (!res.req.account) return res.json({ authenticated: false, loginRequired: true });
   const runtime = getRuntimeConfig();
+  if (!res.req.account && !runtime.anonymousLoginEnabled) return res.json({ authenticated: false, loginRequired: true });
   const payload = {
     clientId: userId,
     features: {
@@ -2446,7 +2578,7 @@ app.post('/api/session/bootstrap', async (req, res) => {
     const now = Math.floor(Date.now() / 1000);
 
     const existing = resolveIdentityFromRequest(req);
-    if (existing) {
+    if (existing && (!getRuntimeConfig().anonymousLoginEnabled || !await getRoomIdentityOwnerAccountId(existing.userId))) {
       // 已认证：可用 body deviceId 对齐绑定；恢复路径不依赖 body
       const deviceId = cookieDeviceId || bodyDeviceId || createServerClientId();
       if (!await linkDeviceToUser(deviceId, existing.userId)) throw new Error('设备绑定未持久化');
@@ -2458,8 +2590,8 @@ app.post('/api/session/bootstrap', async (req, res) => {
 
     // 无身份 Cookie：仅允许 HttpOnly openmusic_did 恢复同一 userId
     if (cookieDeviceId) {
-      const boundUserId = await getUserIdForDevice(cookieDeviceId);
-      if (boundUserId) {
+      const boundUserId = await getUserIdForDevice(cookieDeviceId, { authoritative: getRuntimeConfig().anonymousLoginEnabled });
+      if (boundUserId && (!getRuntimeConfig().anonymousLoginEnabled || !await getRoomIdentityOwnerAccountId(boundUserId))) {
         if (!await linkDeviceToUser(cookieDeviceId, boundUserId)) throw new Error('设备绑定未持久化');
         const signIat = now;
         return sendBootstrapResponse(
@@ -2497,7 +2629,115 @@ app.post('/api/session/bootstrap', async (req, res) => {
 });
 
 // ---------- 普通用户账户：邮箱验证码注册 / 账号密码登录 ----------
-// 账户会话与设备身份分离，未登录身份仅用于登录引导
+// 账户会话与设备身份分离，匿名访问由后台运行配置裁决
+
+const verifyTurnstile = createTurnstileVerifier({ getConfig: getRuntimeConfig });
+const verifyRiskTurnstile = createTurnstileVerifier({ getConfig: getRuntimeConfig, action: 'risk_challenge' });
+
+function readLoginDeviceCookie(req) {
+  try {
+    const raw = parseCookieHeader(req.headers?.cookie || '').openmusic_login_device || '';
+    if (!raw) return undefined;
+    const [payload, signature] = raw.split('.');
+    const expected = createHmac('sha256', CLIENT_ID_SECRET).update(`login-device:${payload}`).digest('base64url');
+    if (!signature || signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) throw new Error();
+    const data = JSON.parse(Buffer.from(payload, 'base64url'));
+    if (!Number.isSafeInteger(data.at) || Math.abs(Date.now() - data.at) > 600000) throw new Error();
+    return normalizeDeviceKey(data.key);
+  } catch { throw new AccountAuthError('ACCOUNT_DEVICE_PROOF_REQUIRED', '请从登录页面重新开始授权', 401); }
+}
+
+function optionalLoginDeviceKey(req) {
+  return req.headers?.['x-openmusic-device'] === undefined ? undefined : loginDeviceKey(req);
+}
+
+app.post('/api/auth/device-login', (req, res) => {
+  if (!limitAccountRefresh(`device-login:${getRequestIp(req)}`)) return res.status(429).json({ code: 'ACCOUNT_DEVICE_RATE_LIMITED', error: '设备验证过于频繁，请稍后重试' });
+  try {
+    const key = loginDeviceKey(req);
+    const payload = Buffer.from(JSON.stringify({ key, at: Date.now() })).toString('base64url');
+    const signature = createHmac('sha256', CLIENT_ID_SECRET).update(`login-device:${payload}`).digest('base64url');
+    appendSetCookieHeaders(res, [`openmusic_login_device=${payload}.${signature}; Path=/api/auth; Max-Age=600; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || req.secure) ? '; Secure' : ''}`]);
+    return res.json({ ok: true });
+  } catch (error) { return res.status(error.status || 400).json({ code: error.code || 'ACCOUNT_DEVICE_PROOF_REQUIRED', error: '设备验证失败，请重新登录' }); }
+});
+
+app.post('/api/auth/device-migrate', async (req, res) => {
+  if (!limitAccountRefresh(`device-migrate:${getRequestIp(req)}`)) return res.status(429).json({ code: 'ACCOUNT_DEVICE_RATE_LIMITED', error: '设备升级过于频繁，请稍后重试' });
+  try {
+    const token = resolveAccountSessionToken(req);
+    const deviceKey = loginDeviceKey(req);
+    const session = await bindAccountDeviceKey(token, deviceKey, { refreshToken: resolveAccountRefreshToken(req) });
+    if (session.accessToken) setAccountSessionCookie(res, session);
+    recordAccountAuthMetric('device_migrate', 'success');
+    return res.json({ ok: true, session: accountSessionMetadata(session) });
+  } catch (error) {
+    recordAccountAuthMetric('device_migrate', error.code || 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.get('/api/auth/human-challenge', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.vary('Cookie');
+  try {
+    const account = await requireRiskSession(req, res);
+    if (!account) return;
+    const config = getRuntimeConfig();
+    const state = await riskControl.humanChallengeStatus(account.id);
+    return res.json(publicHumanChallengeState(state, config));
+  } catch (error) { return sendAccountAuthError(res, error); }
+});
+
+app.post('/api/auth/human-challenge', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.vary('Cookie');
+  try {
+    const account = await requireRiskSession(req, res);
+    if (!account) return;
+    const config = getRuntimeConfig();
+    if (!config.riskChallengeEnabled || !config.turnstileEnabled) return res.status(409).json({ code: 'HUMAN_CHECK_DISABLED', error: '异常访问验证当前未启用' });
+    const ip = getRequestIp(req);
+    const rate = await distributedSocketRateLimiter.consume({ scope: 'risk-human-check', principal: `account:${account.id}`, windowMs: 60000, max: 10 });
+    if (!rate.allowed) return res.status(rate.unavailable ? 503 : 429).json({ code: 'HUMAN_CHECK_UNAVAILABLE', error: '验证暂不可用或过于频繁，请稍后重试' });
+    const state = await riskControl.humanChallengeStatus(account.id);
+    if (!state.pending || state.bypass || state.challengeId !== req.body?.challengeId) return res.status(409).json({ code: 'HUMAN_CHECK_CHANGED', error: '验证状态已变化，请重新加载' });
+    const verifiedAt = await verifyRiskTurnstile(req.body?.turnstileToken, ip, state.challengeId);
+    if (!verifiedAt) return res.status(503).json({ code: 'HUMAN_CHECK_UNAVAILABLE', error: '验证配置已变化，请重新加载' });
+    const result = await riskControl.completeHumanChallenge(account.id, state.challengeId);
+    incrementMetric('risk_human_check_total', { outcome: 'passed' });
+    return res.json({ ok: true, ...publicHumanChallengeState(result, getRuntimeConfig()) });
+  } catch (error) {
+    incrementMetric('risk_human_check_total', { outcome: 'rejected' });
+    if (['HUMAN_CHECK_REQUIRED', 'HUMAN_CHECK_FAILED', 'HUMAN_CHECK_UNAVAILABLE'].includes(error.code)) return res.status(error.status || 503).json({ code: error.code, error: error.message });
+    return sendAccountAuthError(res, error);
+  }
+});
+
+async function verifyAccountChallenge(req, res) {
+  if (!getRuntimeConfig().turnstileEnabled) return true;
+  try {
+    const ip = getRequestIp(req);
+    const rate = await distributedSocketRateLimiter.consume({ scope: 'human-check', principal: `ip:${ip}`, windowMs: 60000, max: 20 });
+    if (!rate.allowed) {
+      incrementMetric('human_check_total', { outcome: rate.unavailable ? 'unavailable' : 'rate_limited' });
+      res.setHeader('Retry-After', '60');
+      res.status(rate.unavailable ? 503 : 429).json({ error: '人机校验暂不可用或过于频繁，请稍后重试', code: rate.unavailable ? 'HUMAN_CHECK_UNAVAILABLE' : 'HUMAN_CHECK_RATE_LIMITED' });
+      return false;
+    }
+    req.humanVerifiedAt = await verifyTurnstile(req.body?.turnstileToken, ip);
+    incrementMetric('human_check_total', { outcome: 'verified' });
+    return true;
+  } catch (error) {
+    incrementMetric('human_check_total', { outcome: error.code === 'HUMAN_CHECK_UNAVAILABLE' ? 'unavailable' : 'rejected' });
+    res.status(error.status || 503).json({ error: error.code?.startsWith('HUMAN_CHECK_') ? error.message : '人机校验暂不可用', code: error.code?.startsWith('HUMAN_CHECK_') ? error.code : 'HUMAN_CHECK_UNAVAILABLE' });
+    return false;
+  }
+}
 
 app.post('/api/auth/email/code', async (req, res) => {
   const ip = getRequestIp(req);
@@ -2512,6 +2752,7 @@ app.post('/api/auth/email/code', async (req, res) => {
   }
 
   try {
+    if (!await verifyAccountChallenge(req, res)) return;
     const result = await requestEmailRegistrationCode({ email: req.body?.email });
     appendAdminAudit('account_email_code_request', {
       outcome: 'accepted',
@@ -2536,6 +2777,8 @@ app.post('/api/auth/email/code', async (req, res) => {
 
 app.post('/api/auth/email/register', async (req, res) => {
   try {
+    req.loginDeviceKey = optionalLoginDeviceKey(req);
+    if (!await verifyAccountChallenge(req, res)) return;
     const account = await registerWithEmail({
       email: req.body?.email,
       password: req.body?.password,
@@ -2574,6 +2817,8 @@ app.post('/api/auth/email/login', async (req, res) => {
 
   await applyAccountLoginPenalty(email);
   try {
+    req.loginDeviceKey = optionalLoginDeviceKey(req);
+    if (!await verifyAccountChallenge(req, res)) return;
     const account = await loginWithEmail({
       email: req.body?.email,
       password: req.body?.password,
@@ -2595,10 +2840,14 @@ app.post('/api/auth/email/login', async (req, res) => {
 });
 
 app.get('/api/auth/session', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store, private');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.vary('Cookie');
   const token = resolveAccountSessionToken(req);
   if (!token) {
     recordAccountAuthMetric('session', 'anonymous');
-    return res.json({ authenticated: false, account: null, refreshAvailable: Boolean(resolveAccountRefreshToken(req)) });
+    return res.json({ authenticated: false, account: null, anonymousAllowed: getRuntimeConfig().anonymousLoginEnabled, deviceSessionId: resolveAccountRefreshToken(req).split('.')[0], refreshAvailable: Boolean(resolveAccountRefreshToken(req)) });
   }
 
   try {
@@ -2606,12 +2855,12 @@ app.get('/api/auth/session', async (req, res) => {
     if (!session) {
       clearAccountSessionCookie(res);
       recordAccountAuthMetric('session', 'expired');
-      return res.json({ authenticated: false, account: null, refreshAvailable: Boolean(resolveAccountRefreshToken(req)) });
+      return res.json({ authenticated: false, account: null, anonymousAllowed: getRuntimeConfig().anonymousLoginEnabled, deviceSessionId: resolveAccountRefreshToken(req).split('.')[0], refreshAvailable: Boolean(resolveAccountRefreshToken(req)) });
     }
     const account = session.account;
     await riskControl.sessionStatus(account.id);
     await syncAccountRoomIdentity(req, res, account);
-    recordAccountAuthMetric('session', 'authenticated');
+    recordAccountAuthMetric('session', session.deviceMigrationRequired ? 'legacy_compatible' : 'authenticated');
     return res.json({ authenticated: true, account: publicAccount(account), session: accountSessionMetadata(session) });
   } catch (error) {
     recordAccountAuthMetric('session', error instanceof AccountAuthError ? error.code : 'error');
@@ -2627,6 +2876,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     return res.status(429).json({ error: '续期过于频繁，请稍后重试', code: 'ACCOUNT_REFRESH_RATE_LIMITED' });
   }
   try {
+    await verifyAccountDeviceRequest(resolveAccountRefreshToken(req), req, { refresh: true, ip });
     const session = await refreshAccountSession(resolveAccountRefreshToken(req), async (account) => {
       const result = await riskControl.consume(account, { ip, kind: 'api', operation: 'refresh' });
       if (!result.allowed && (result.code !== 'ACCOUNT_RISK_BLOCKED' || result.limited)) {
@@ -2645,7 +2895,7 @@ app.post('/api/auth/refresh', async (req, res) => {
     return res.json({ ok: true, account: publicAccount(account), session: accountSessionMetadata(session) });
   } catch (error) {
     recordAccountAuthMetric('refresh', error.code || 'error');
-    if (error.status === 401) {
+    if (error.status === 401 && !(error instanceof DeviceProofError)) {
       clearAccountSessionCookie(res, true);
       void riskControl.recordAuthFailure({ ip, code: error.code }).catch(() => incrementMetric('risk_storage_error_total', { operation: 'refresh_failure' }));
     }
@@ -2679,12 +2929,37 @@ app.post('/api/auth/logout', async (req, res) => {
 });
 
 app.get('/api/auth/providers', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, private, max-age=0');
+  res.setHeader('CDN-Cache-Control', 'no-store');
+  res.setHeader('Cloudflare-CDN-Cache-Control', 'no-store');
   res.json({
+    turnstile: { enabled: getRuntimeConfig().turnstileEnabled, siteKey: getRuntimeConfig().turnstileEnabled ? getRuntimeConfig().turnstileSiteKey : '' },
     linuxdo: isLinuxdoConfigured(),
     github: isGithubConfigured(),
+    wechat_scan: socialProviderEnabled('wechat_scan', getRuntimeConfig()),
+    qq_scan: socialProviderEnabled('qq_scan', getRuntimeConfig()),
     // 账户微信登录复用文件传输助手扫码；会话证明由服务端签发。
     wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
   });
+});
+
+app.post('/api/auth/nickname', async (req, res) => {
+  try {
+    const account = await requireAccountSession(req, res);
+    if (!account) return;
+    if (!limitAccountNickname(`nickname:${account.id}`)) {
+      recordAccountAuthMetric('nickname', 'rate_limited');
+      return res.status(429).json({ error: '修改昵称过于频繁，请稍后再试', code: 'NICKNAME_RATE_LIMITED' });
+    }
+    const updated = await updateAccountNickname(account.id, req.body?.nickname, { initializeOnly: req.body?.initializeOnly === true });
+    void riskControl.recordNickname(account.id, updated.nickname)
+      .catch(() => incrementMetric('risk_storage_error_total', { operation: 'nickname' }));
+    recordAccountAuthMetric('nickname', 'success');
+    return res.json({ ok: true, account: publicAccount(updated) });
+  } catch (error) {
+    recordAccountAuthMetric('nickname', error.code || 'error');
+    return sendAccountAuthError(res, error);
+  }
 });
 
 app.post('/api/auth/identities/:provider/unbind', async (req, res) => {
@@ -2700,14 +2975,50 @@ app.post('/api/auth/identities/:provider/unbind', async (req, res) => {
   }
 });
 
+mountSocialLoginRoutes(app, {
+  basePath: '/api/auth/social',
+  service: createSocialLogin({ getStore: getRedisClient, getConfig: getRuntimeConfig }),
+  metric: recordAccountAuthMetric,
+  contextFor: async (req, res, action) => {
+    const account = action === 'bind' ? await requireAccountSession(req, res) : null;
+    if (action === 'bind' && !account) return null;
+    if (account) await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
+    return {
+      audience: 'account',
+      principal: createHash('sha256').update(`${account?.id || ''}:${resolveAccountSessionToken(req) || ''}`).digest('hex'),
+      ip: getRequestIp(req),
+      account,
+    };
+  },
+  complete: async (req, res, context, identity) => {
+    let account;
+    if (context.action === 'bind') {
+      const current = await resolveAccountFromRequest(req);
+      if (!current || current.id !== context.account.id) throw new AccountAuthError('ACCOUNT_AUTH_REQUIRED', '账户会话已变化，请重新绑定', 401);
+      await riskControl.assertAllowed(current.id);
+      account = await bindExternalIdentity(context.account.id, identity);
+    } else {
+      req.loginDeviceKey = optionalLoginDeviceKey(req);
+      const result = await loginOrRegisterExternalIdentity(identity);
+      account = result.account;
+      const token = await createTrackedAccountSession(req, account, identity.provider, result.created);
+      await syncAccountRoomIdentity(req, res, account);
+      await replaceAccountSession(req, res, token);
+    }
+    return { ok: true, account: publicAccount(account) };
+  },
+});
+
 app.post('/api/auth/wechat/start', async (req, res) => {
   if (!WECHAT_ACCOUNT_AUTH_ENABLED) return res.status(503).json({ error: '微信账户登录暂未开放', code: 'WECHAT_ACCOUNT_AUTH_DISABLED' });
   try {
     const session = await wechatAccountLogin.start(getRequestIp(req), readWechatAccountLoginCookie(req));
     setWechatAccountLoginCookie(res, session.token);
-    return res.json({ qrUrl: `/api/auth/wechat/qr?v=${Date.now()}`, expiresAt: session.expiresAt });
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ qrUrl: `/api/auth/wechat/qr?flow=${session.flowId}`, flowId: session.flowId, expiresAt: session.expiresAt });
   } catch (error) {
     recordAccountAuthMetric('wechat_start', error.code || 'error');
+    logWechatAccountFailure(error, 'start');
     return sendAccountAuthError(res, error);
   }
 });
@@ -2715,18 +3026,23 @@ app.post('/api/auth/wechat/start', async (req, res) => {
 app.get('/api/auth/wechat/qr', async (req, res) => {
   if (!WECHAT_ACCOUNT_AUTH_ENABLED) return res.status(503).json({ error: '微信账户登录暂未开放', code: 'WECHAT_ACCOUNT_AUTH_DISABLED' });
   try {
-    const image = await wechatAccountLogin.qr(readWechatAccountLoginCookie(req));
+    res.setHeader('Cache-Control', 'no-store, private');
+    const image = await wechatAccountLogin.qr(readWechatAccountLoginCookie(req), req.query.flow);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     return res.type(image.contentType).send(image.buffer);
-  } catch (error) { return sendAccountAuthError(res, error); }
+  } catch (error) {
+    logWechatAccountFailure(error, 'qr');
+    return sendAccountAuthError(res, error);
+  }
 });
 
 app.post('/api/auth/wechat/poll', async (req, res) => {
   if (!WECHAT_ACCOUNT_AUTH_ENABLED) return res.status(503).json({ error: '微信账户登录暂未开放', code: 'WECHAT_ACCOUNT_AUTH_DISABLED' });
   try {
-    return res.json(await wechatAccountLogin.poll(readWechatAccountLoginCookie(req)));
+    return res.json(await wechatAccountLogin.poll(readWechatAccountLoginCookie(req), req.body?.flowId));
   } catch (error) {
     recordAccountAuthMetric('wechat_poll', error.code || 'error');
+    logWechatAccountFailure(error, 'poll');
     return sendAccountAuthError(res, error);
   }
 });
@@ -2741,32 +3057,39 @@ app.post('/api/auth/wechat/account', async (req, res) => {
   }
   try {
     const action = req.body?.action === 'bind' ? 'bind' : 'login';
+    if (action === 'login') req.loginDeviceKey = optionalLoginDeviceKey(req);
     const current = action === 'bind' ? await requireAccountSession(req, res) : null;
     if (action === 'bind' && !current) return;
-    const uin = await wechatAccountLogin.consume(readWechatAccountLoginCookie(req));
+    if (action === 'bind') await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
+    const account = await wechatAccountLogin.complete(readWechatAccountLoginCookie(req), async ({ uin, nickname: wechatNickname }) => {
+      const nickname = String(wechatNickname || '').trim();
+      const profile = { username: nickname || `微信用户 ${uin.slice(-4)}` };
+      let account;
+      if (action === 'bind') {
+        account = await bindExternalIdentity(current.id, {
+          provider: 'wechat',
+          subject: uin,
+          profile,
+        });
+      } else {
+        const result = await loginOrRegisterExternalIdentity({
+          provider: 'wechat',
+          subject: uin,
+          profile,
+        });
+        account = result.account;
+        const token = await createTrackedAccountSession(req, account, 'wechat', result.created);
+        await syncAccountRoomIdentity(req, res, account);
+        await replaceAccountSession(req, res, token);
+      }
+      return account;
+    }, req.body?.flowId);
     setWechatAccountLoginCookie(res, '');
-    let account;
-    if (action === 'bind') {
-      account = await bindExternalIdentity(current.id, {
-        provider: 'wechat',
-        subject: uin,
-        profile: { username: `微信用户 ${uin.slice(-4)}` },
-      });
-    } else {
-      const result = await loginOrRegisterExternalIdentity({
-        provider: 'wechat',
-        subject: uin,
-        profile: { username: `微信用户 ${uin.slice(-4)}` },
-      });
-      account = result.account;
-      const token = await createTrackedAccountSession(req, account, 'wechat', result.created);
-      await syncAccountRoomIdentity(req, res, account);
-      await replaceAccountSession(req, res, token);
-    }
     recordAccountAuthMetric(`wechat_${action}`, 'success');
     return res.json({ ok: true, account: publicAccount(account) });
   } catch (error) {
     recordAccountAuthMetric('wechat', error.code || 'error');
+    logWechatAccountFailure(error, 'account');
     return sendAccountAuthError(res, error);
   }
 });
@@ -2800,6 +3123,7 @@ app.get('/api/auth/linuxdo/start', async (req, res) => {
   if (purpose === 'account-login') {
     try {
       const state = await issueAccountOAuthState(req, res, 'linuxdo', signLinuxdoState, { purpose, returnPath });
+      if (req.headers['x-openmusic-device'] !== undefined) return res.json({ url: buildLinuxdoAuthorizeUrl(state) });
       return res.redirect(buildLinuxdoAuthorizeUrl(state));
     } catch (error) {
       return sendAccountAuthError(res, error);
@@ -2810,8 +3134,10 @@ app.get('/api/auth/linuxdo/start', async (req, res) => {
     try {
       const account = await requireAccountSession(req, res);
       if (!account) return;
+      await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
       const state = await issueAccountOAuthState(req, res, 'linuxdo', signLinuxdoState, { purpose, accountId: account.id, returnPath });
-      return res.redirect(buildLinuxdoAuthorizeUrl(state));
+      if (req.headers['x-openmusic-device'] === undefined) return res.redirect(buildLinuxdoAuthorizeUrl(state));
+      return res.json({ url: buildLinuxdoAuthorizeUrl(state) });
     } catch (error) {
       return sendAccountAuthError(res, error);
     }
@@ -2844,33 +3170,39 @@ app.get('/api/auth/linuxdo/start', async (req, res) => {
   }
 });
 
+const reportOAuthFailure = createOAuthFailureReporter({ audit: appendAdminAudit, metric: incrementMetric });
+
 app.get('/api/auth/linuxdo/callback', async (req, res) => {
   const fail = (returnPath, reason) => res.redirect(`${sanitizeReturnPath(returnPath)}?linuxdo=${reason}`);
 
-  if (!isLinuxdoConfigured()) return fail('/', 'error');
+  if (!isLinuxdoConfigured()) { reportOAuthFailure('linuxdo', { stage: 'configuration', code: 'NOT_CONFIGURED' }); return fail('/', 'error'); }
   if (!limitLinuxdoAuth(`linuxdo-callback:${getRequestIp(req)}`)) {
     return res.status(429).send('请求过于频繁，请稍后再试');
   }
 
   const state = verifyLinuxdoState(req.query?.state);
-  if (!state) return fail('/', 'error');
+  if (!state) { reportOAuthFailure('linuxdo', { stage: 'state_signature', code: 'INVALID_OR_EXPIRED_STATE' }); return fail('/', 'error'); }
   const returnPath = sanitizeReturnPath(state.returnPath);
   const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
     ? res.redirect(appendAccountAuthResult(returnPath, `linuxdo_${reason}`))
     : fail(returnPath, reason);
 
   try {
-    if (!await consumeAccountOAuthState(req, res, 'linuxdo', req.query?.state)) return failForPurpose('expired');
+    if (!await consumeAccountOAuthState(req, res, 'linuxdo', req.query?.state)) { reportOAuthFailure('linuxdo', { stage: 'state_binding', code: 'MISSING_OR_USED_CHALLENGE' }); return failForPurpose('expired'); }
   } catch (error) {
+    reportOAuthFailure('linuxdo', oauthFailureDetails(error, 'state_binding'));
     return sendAccountAuthError(res, error);
   }
 
   let profile;
+  let oauthStage = 'token';
   try {
+    if (typeof req.query?.code !== 'string' || !req.query.code || req.query.code.length > 4096) throw Object.assign(new Error('OAuth code missing'), { code: 'access_denied' });
     const accessToken = await exchangeLinuxdoCode(req.query?.code);
+    oauthStage = 'profile';
     profile = await fetchLinuxdoProfile(accessToken);
   } catch (err) {
-    console.error('Linux.do OAuth 失败:', err?.message || err);
+    reportOAuthFailure('linuxdo', oauthFailureDetails(err, oauthStage));
     return failForPurpose('error');
   }
 
@@ -2899,6 +3231,7 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
           profile,
         });
         account = result.account;
+      req.oauthDeviceKey = state.deviceKey === undefined ? undefined : normalizeDeviceKey(state.deviceKey);
         const token = await createTrackedAccountSession(req, account, 'linuxdo', result.created);
         await syncAccountRoomIdentity(req, res, account);
         await replaceAccountSession(req, res, token);
@@ -2909,6 +3242,7 @@ app.get('/api/auth/linuxdo/callback', async (req, res) => {
         state.purpose === 'account-bind' ? 'linuxdo_bound' : 'linuxdo_logged_in',
       ));
     } catch (error) {
+      reportOAuthFailure('linuxdo', oauthFailureDetails(error, 'account_session'));
       const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
         ? 'linuxdo_conflict'
         : 'linuxdo_error';
@@ -2991,6 +3325,7 @@ app.get('/api/auth/github/start', async (req, res) => {
   if (purpose === 'account-login') {
     try {
       const state = await issueAccountOAuthState(req, res, 'github', signGithubState, { purpose, returnPath });
+      if (req.headers['x-openmusic-device'] !== undefined) return res.json({ url: buildGithubAuthorizeUrl(state) });
       return res.redirect(buildGithubAuthorizeUrl(state));
     } catch (error) {
       return sendAccountAuthError(res, error);
@@ -3001,8 +3336,10 @@ app.get('/api/auth/github/start', async (req, res) => {
     try {
       const account = await requireAccountSession(req, res);
       if (!account) return;
+      await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
       const state = await issueAccountOAuthState(req, res, 'github', signGithubState, { purpose, accountId: account.id, returnPath });
-      return res.redirect(buildGithubAuthorizeUrl(state));
+      if (req.headers['x-openmusic-device'] === undefined) return res.redirect(buildGithubAuthorizeUrl(state));
+      return res.json({ url: buildGithubAuthorizeUrl(state) });
     } catch (error) {
       return sendAccountAuthError(res, error);
     }
@@ -3037,30 +3374,34 @@ app.get('/api/auth/github/start', async (req, res) => {
 app.get('/api/auth/github/callback', async (req, res) => {
   const fail = (returnPath, reason) => res.redirect(`${sanitizeGithubReturnPath(returnPath)}?github=${reason}`);
 
-  if (!isGithubConfigured()) return fail('/', 'error');
+  if (!isGithubConfigured()) { reportOAuthFailure('github', { stage: 'configuration', code: 'NOT_CONFIGURED' }); return fail('/', 'error'); }
   if (!limitGithubAuth(`github-callback:${getRequestIp(req)}`)) {
     return res.status(429).send('请求过于频繁，请稍后再试');
   }
 
   const state = verifyGithubState(req.query?.state);
-  if (!state) return fail('/', 'error');
+  if (!state) { reportOAuthFailure('github', { stage: 'state_signature', code: 'INVALID_OR_EXPIRED_STATE' }); return fail('/', 'error'); }
   const returnPath = sanitizeGithubReturnPath(state.returnPath);
   const failForPurpose = (reason) => state.purpose === 'account-login' || state.purpose === 'account-bind'
     ? res.redirect(appendAccountAuthResult(returnPath, `github_${reason}`))
     : fail(returnPath, reason);
 
   try {
-    if (!await consumeAccountOAuthState(req, res, 'github', req.query?.state)) return failForPurpose('expired');
+    if (!await consumeAccountOAuthState(req, res, 'github', req.query?.state)) { reportOAuthFailure('github', { stage: 'state_binding', code: 'MISSING_OR_USED_CHALLENGE' }); return failForPurpose('expired'); }
   } catch (error) {
+    reportOAuthFailure('github', oauthFailureDetails(error, 'state_binding'));
     return sendAccountAuthError(res, error);
   }
 
   let profile;
+  let oauthStage = 'token';
   try {
+    if (typeof req.query?.code !== 'string' || !req.query.code || req.query.code.length > 4096) throw Object.assign(new Error('OAuth code missing'), { code: 'access_denied' });
     const accessToken = await exchangeGithubCode(req.query?.code);
+    oauthStage = 'profile';
     profile = await fetchGithubProfile(accessToken);
   } catch (err) {
-    console.error('GitHub OAuth 失败:', err?.message || err);
+    reportOAuthFailure('github', oauthFailureDetails(err, oauthStage));
     return failForPurpose('error');
   }
 
@@ -3089,6 +3430,7 @@ app.get('/api/auth/github/callback', async (req, res) => {
           profile,
         });
         account = result.account;
+      req.oauthDeviceKey = state.deviceKey === undefined ? undefined : normalizeDeviceKey(state.deviceKey);
         const token = await createTrackedAccountSession(req, account, 'github', result.created);
         await syncAccountRoomIdentity(req, res, account);
         await replaceAccountSession(req, res, token);
@@ -3099,6 +3441,7 @@ app.get('/api/auth/github/callback', async (req, res) => {
         state.purpose === 'account-bind' ? 'github_bound' : 'github_logged_in',
       ));
     } catch (error) {
+      reportOAuthFailure('github', oauthFailureDetails(error, 'account_session'));
       const result = error instanceof AccountAuthError && ['IDENTITY_ALREADY_BOUND', 'PROVIDER_ALREADY_BOUND'].includes(error.code)
         ? 'github_conflict'
         : 'github_error';
@@ -3314,8 +3657,7 @@ app.get('/api/rooms', async (req, res) => {
       res.setHeader('Retry-After', String(Math.max(1, Math.ceil(rate.retryAfterMs / 1000))));
       return res.status(rate.unavailable ? 503 : 429).json({ error: '大厅暂时繁忙，请稍后重试', code: rate.unavailable ? 'LOBBY_UNAVAILABLE' : 'LOBBY_RATE_LIMITED' });
     }
-    const rooms = await listRooms('', { resolveCovers: false });
-    return res.json(rooms.map((room) => ({ ...room, customCoverUrl: '', currentSong: room.currentSong ? { ...room.currentSong, pic: '' } : null })));
+    return res.json(await listRooms(''));
   }
   const identity = resolveIdentityFromRequest(req);
   res.json(await listRooms(identity?.userId || ''));
@@ -3346,6 +3688,8 @@ app.post('/api/rooms', async (req, res) => {
   const name = req.body?.name;
   const password = req.body?.password;
   const account = await resolveAccountFromRequest(req);
+  const musicOwner = account || await resolveAnonymousAccount(req);
+  if (!musicOwner) return res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
   const accountRoomUserId = account ? await syncAccountRoomIdentity(req, res, account) : null;
   const identity = resolveIdentityFromRequest(req);
   const creatorId = accountRoomUserId || identity?.userId;
@@ -3363,10 +3707,23 @@ app.post('/api/rooms', async (req, res) => {
     if (reused?.error) {
       return res.status(400).json({ error: reused.error });
     }
-    const room = reused || idleOwned;
+    let room = reused || idleOwned;
     if (account?.id) {
       const bound = setRoomOwnerAccountId(room.id, creatorId, account.id);
       if (!bound.error) await addRoomToAccountIndex(account.id, room.id);
+      if (!bound.error) {
+        try {
+          room = await restoreAccountMusicToRoom(account.id, room);
+        } catch {
+          return res.status(503).json({ error: '房间已创建，但账户会员恢复失败，请稍后重新创建以重试', code: 'ACCOUNT_MUSIC_RESTORE_FAILED', roomId: room.id });
+        }
+      }
+    } else {
+      try {
+        room = await restoreAccountMusicToRoom(musicOwner.id, room, { ownerUserId: creatorId });
+      } catch {
+        return res.status(503).json({ error: '房间已创建，但设备 Cookie 音乐缓存恢复失败，请稍后重新创建以重试', code: 'MUSIC_COOKIE_CACHE_RESTORE_FAILED', roomId: room.id });
+      }
     }
     recordRoomCreate({
       ip: createIp,
@@ -3440,6 +3797,20 @@ app.post('/api/rooms', async (req, res) => {
   });
 
   if (account?.id && room?.id) await addRoomToAccountIndex(account.id, room.id);
+  if (account?.id && room?.id) {
+    try {
+      return res.json(await restoreAccountMusicToRoom(account.id, room));
+    } catch {
+      return res.status(503).json({ error: '房间已创建，但账户会员恢复失败，请稍后重新创建以重试', code: 'ACCOUNT_MUSIC_RESTORE_FAILED', roomId: room.id });
+    }
+  }
+  if (room?.id) {
+    try {
+      return res.json(await restoreAccountMusicToRoom(musicOwner.id, room, { ownerUserId: creatorId }));
+    } catch {
+      return res.status(503).json({ error: '房间已创建，但设备 Cookie 音乐缓存恢复失败，请稍后重新创建以重试', code: 'MUSIC_COOKIE_CACHE_RESTORE_FAILED', roomId: room.id });
+    }
+  }
 
   res.json(room);
 });
@@ -3486,7 +3857,40 @@ app.post('/api/account/rooms/:id/claim', async (req, res) => {
     return res.status(status).json({ error: result.error, code: status === 409 ? 'ROOM_ACCOUNT_CONFLICT' : 'ROOM_CLAIM_FORBIDDEN' });
   }
   await addRoomToAccountIndex(account.id, room.id);
+  await accountMusic.rememberRoom(account.id, getRoomInternal(room.id));
   return res.json({ success: true, changed: Boolean(result.changed) });
+});
+
+app.get('/api/account/music-accounts', async (req, res) => {
+  const account = await requireAccountSession(req, res);
+  if (!account) return;
+  try {
+    return res.json({ accounts: await accountMusic.list(account.id) });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || '读取账户会员信息失败', code: error.code || 'ACCOUNT_MUSIC_READ_FAILED' });
+  }
+});
+
+app.post('/api/account/music-accounts/:platform/shared', async (req, res) => {
+  const account = await requireAccountSession(req, res);
+  if (!account) return;
+  try {
+    const shared = req.body?.shared === true;
+    const metadata = await accountMusic.setShared(account.id, req.params.platform, shared);
+    return res.json({ success: true, account: metadata });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || '更新账户会员共享失败', code: error.code || 'ACCOUNT_MUSIC_SHARE_FAILED' });
+  }
+});
+
+app.delete('/api/account/music-accounts/:platform', async (req, res) => {
+  const account = await requireAccountSession(req, res);
+  if (!account) return;
+  try {
+    return res.json({ success: true, accounts: await accountMusic.remove(account.id, req.params.platform) });
+  } catch (error) {
+    return res.status(error.status || 500).json({ error: error.message || '删除账户会员信息失败', code: error.code || 'ACCOUNT_MUSIC_DELETE_FAILED' });
+  }
 });
 
 app.post('/api/account/favorites/sync', async (req, res) => {
@@ -3626,17 +4030,6 @@ function resolveAndroidApkPath() {
   return null;
 }
 
-function resolveIosIpaPath() {
-  const candidates = [
-    path.join(__dirname, 'downloads/openmusic.ipa'),
-    path.join(clientDist, 'downloads/openmusic.ipa'),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
 function resolveWindowsDesktopClientPath() {
   const candidates = [
     path.join(__dirname, 'downloads/openmusic-desktop-setup.exe'),
@@ -3658,17 +4051,6 @@ function sendAndroidApk(req, res) {
   res.download(apkPath, 'openmusic.apk');
 }
 
-function sendIosIpa(req, res) {
-  const ipaPath = resolveIosIpaPath();
-  if (!ipaPath) {
-    return res.status(404).type('text/plain; charset=utf-8').send(
-      'IPA 尚未部署。请将 GitHub Actions 构建的 openmusic.ipa 上传到 server/downloads/openmusic.ipa，并用 Sideloadly 安装。',
-    );
-  }
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.download(ipaPath, 'openmusic.ipa');
-}
-
 function sendWindowsDesktopClient(req, res) {
   const clientPath = resolveWindowsDesktopClientPath();
   if (!clientPath) {
@@ -3681,7 +4063,6 @@ function sendWindowsDesktopClient(req, res) {
 }
 
 app.get('/downloads/openmusic.apk', sendAndroidApk);
-app.get('/downloads/openmusic.ipa', sendIosIpa);
 app.get('/downloads/openmusic-desktop-setup.exe', sendWindowsDesktopClient);
 
 mountWechatFileHelperProxy(app, fetchWithTimeout, {
@@ -3869,17 +4250,32 @@ function disconnectSocketsForAccountSession(token, reason = 'session_invalidated
   }
 }
 
+let riskChallengeBus;
+
+function suspendAccountSocketsForHumanChallenge(accountId) {
+  const sockets = io.in(`account:${accountId}`);
+  sockets.emit('account_human_check_required');
+  sockets.disconnectSockets(true);
+}
+
 async function verifySocketAccountSession(socket) {
-  const key = socketToAccountSessionKey.get(socket.id);
-  if (!key) return { valid: false };
-  const token = resolveAccountSessionToken({ headers: socket.handshake?.headers || {} });
-  if (!token || accountSessionSocketKey(token) !== key) return { valid: false };
   try {
+    if (socket.data.anonymous) {
+      const account = await resolveAnonymousAccount({ headers: socket.handshake?.headers || {} });
+      if (!account || account.id !== socket.data.accountId) return { valid: false };
+      await riskControl.assertAllowed(account.id, { human: true });
+      return { valid: true, account };
+    }
+    const key = socketToAccountSessionKey.get(socket.id);
+    if (!key) return { valid: false };
+    const token = resolveAccountSessionToken({ headers: socket.handshake?.headers || {} });
+    if (!token || accountSessionSocketKey(token) !== key) return { valid: false };
     const account = await resolveAccountSession(token);
     if (!account || account.id !== socket.data.accountId) return { valid: false };
-    await riskControl.assertAllowed(account.id);
+    await riskControl.assertAllowed(account.id, { human: true });
     return { valid: true, account };
   } catch (error) {
+    if (error.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') return { valid: false, humanRequired: true };
     if ((error instanceof AccountAuthError && error.code === 'REDIS_UNAVAILABLE') || ['RISK_STORAGE_UNAVAILABLE', 'ACCOUNT_SESSION_UNAVAILABLE', 'ACCOUNT_KEY_UNAVAILABLE'].includes(error.code)) {
       return { valid: false, unavailable: true };
     }
@@ -3919,7 +4315,8 @@ function monitorSocketAccountSession(socket) {
     deadline = setTimeout(() => invalidate('session_unavailable'), 5000);
     try {
       const session = await verifySocketAccountSession(socket);
-      if (!session.valid) invalidate(session.unavailable ? 'session_unavailable' : 'session_invalidated');
+      if (session.humanRequired) { stop(); suspendAccountSocketsForHumanChallenge(socket.data.accountId); }
+      else if (!session.valid) invalidate(session.unavailable ? 'session_unavailable' : 'session_invalidated');
     } catch {
       invalidate('session_unavailable');
     } finally {
@@ -4327,17 +4724,31 @@ async function advanceEndedRoomNow(roomId, expectedQueueId = '') {
 
 io.use(async (socket, next) => {
   try {
+    if (!riskChallengeBus?.isReady()) {
+      throw Object.assign(new Error('风控通知服务暂不可用'), { code: 'RISK_STORAGE_UNAVAILABLE' });
+    }
     const session = await inspectAccountSession(resolveAccountSessionToken({ headers: socket.handshake.headers }));
     const account = session?.account;
     if (!account) {
+      const anonymous = await resolveAnonymousAccount({ headers: socket.handshake.headers });
+      if (anonymous) {
+        await riskControl.assertAllowed(anonymous.id, { human: true });
+        const identity = resolveIdentityFromCookies(socket.handshake.headers.cookie || '');
+        socket.data.anonymous = true;
+        socket.data.accountId = anonymous.id;
+        socket.data.accountExpiresAt = Math.min(identity.expiresAt * 1000, Date.now() + 24 * 60 * 60 * 1000);
+        return next();
+      }
       const error = new Error('请先登录账户');
       error.data = { code: 'ACCOUNT_AUTH_REQUIRED' };
       return next(error);
     }
-    await riskControl.assertAllowed(account.id);
+    await verifyAccountDeviceRequest(resolveAccountSessionToken({ headers: socket.handshake.headers }), { method: 'SOCKET', originalUrl: '/socket.io', headers: { 'x-openmusic-device': socket.handshake.auth?.deviceProof } }, { session, ip: getClientIp(socket) });
+    await riskControl.assertAllowed(account.id, { human: true });
     const identity = resolveIdentityFromCookies(socket.handshake.headers.cookie || '');
     const roomUserId = account.roomUserId || await ensureRoomUserId(account.id);
     if (!identity || identity.userId !== roomUserId) throw new AccountAuthError('ACCOUNT_IDENTITY_MISMATCH', '请刷新账户会话', 401);
+    socket.join(`account-session:${session.sessionId}`);
     socket.data.accountId = account.id;
     socket.data.accountExpiresAt = session.expiresAt;
     next();
@@ -4363,23 +4774,25 @@ io.on('connection', (socket) => {
         : null;
       callback?.({
         success: false,
-        error: session.unavailable ? '账户会话暂不可验证，请稍后重试' : '账户会话已失效，请刷新页面后重试',
-        code: session.unavailable ? 'ACCOUNT_SESSION_UNAVAILABLE' : 'ACCOUNT_SESSION_INVALID',
+        error: session.humanRequired ? '请先完成人机验证' : session.unavailable ? '账户会话暂不可验证，请稍后重试' : '账户会话已失效，请刷新页面后重试',
+        code: session.humanRequired ? 'ACCOUNT_HUMAN_CHECK_REQUIRED' : session.unavailable ? 'ACCOUNT_SESSION_UNAVAILABLE' : 'ACCOUNT_SESSION_INVALID',
       });
-      if (!session.unavailable) socket.disconnect(true);
+      if (session.humanRequired) suspendAccountSocketsForHumanChallenge(socket.data.accountId);
+      else if (!session.unavailable) socket.disconnect(true);
       return;
     }
     const event = String(packet?.[0] || '');
     try {
       const ip = getClientIpFromHeaders(socket.handshake.headers, socket.handshake.address);
-      const music = ['add_song', 'skip_song', 'finish_song', 'music_account_qr_create', 'music_account_qr_check', 'music_account_bind', 'set_room_fm_mode', 'set_room_playlist_roaming'].includes(event);
+      const music = ['skip_song', 'finish_song', 'music_account_qr_create', 'music_account_qr_check', 'music_account_bind', 'set_room_fm_mode', 'set_room_playlist_roaming'].includes(event);
       const operation = event.startsWith('music_account_qr') ? 'qr' : 'queue';
       const result = await riskControl.consume(session.account, { ip, kind: 'socket', operation: music ? operation : '', music, userAgent: socket.handshake.headers['user-agent'] || '' });
       incrementMetric('account_request_total', { kind: 'socket', outcome: result.allowed ? 'allowed' : result.code });
       if (!result.allowed) {
         const callback = typeof packet?.[packet.length - 1] === 'function' ? packet[packet.length - 1] : null;
         callback?.({ success: false, error: '账户访问受限或请求额度已用尽', code: result.code });
-        if (result.status === 403) socket.disconnect(true);
+        if (result.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') suspendAccountSocketsForHumanChallenge(socket.data.accountId);
+        else if (result.status === 403) socket.disconnect(true);
         return;
       }
     } catch {
@@ -4550,7 +4963,22 @@ io.on('connection', (socket) => {
     });
     const clientIp = boundClientNetwork.ip || getClientIp(socket);
     const location = boundClientNetwork.location || fallbackLocationForIp(clientIp);
-    const joinedRoom = addUser(id, userId, nickname, {
+    let accountNickname = '';
+    if (!readOnly && !socket.data.anonymous) {
+      try {
+        const saved = await updateAccountNickname(
+          socket.data.accountId,
+          priorUser?.nickname || joinInternalBefore?.userNicknames?.get(userId) || nickname || `听友${randomBytes(3).toString('hex')}`,
+          { initializeOnly: true },
+        );
+        accountNickname = saved.nickname;
+      } catch (error) {
+        incrementMetric('account_nickname_error_total', { operation: 'join', reason: error.code || 'storage' });
+        callback?.({ success: false, error: error instanceof AccountAuthError ? error.message : '昵称存储暂不可用，请稍后重试', code: error.code || 'NICKNAME_STORAGE_UNAVAILABLE' });
+        return;
+      }
+    }
+    const joinedRoom = addUser(id, userId, accountNickname || nickname, {
       readOnly: Boolean(readOnly),
       connectionId: socket.id,
       location,
@@ -4606,6 +5034,7 @@ io.on('connection', (socket) => {
       roomAi: getPublicRoomAiConfig(getRuntimeConfig(), joinInternal),
       socketId: userId,
       connectionId: socket.id,
+      accountNickname,
       nickname: joinUser?.nickname
         || roomPayload.users?.find((user) => user.id === userId)?.nickname
         || String(nickname || '').trim(),
@@ -4657,7 +5086,7 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('rename_user', ({ nickname }, callback) => {
+  socket.on('rename_user', async ({ nickname }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'rename', callback)) return;
 
@@ -4668,7 +5097,19 @@ io.on('connection', (socket) => {
     }
 
     const userId = getSocketUserId(socket);
-    const result = renameUser(roomId, userId, nickname);
+    if (!getRoomInternal(roomId)?.users.has(userId)) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+    let account;
+    try {
+      if (!socket.data.anonymous) account = await updateAccountNickname(socket.data.accountId, nickname);
+    } catch (error) {
+      incrementMetric('account_nickname_error_total', { operation: 'rename', reason: error.code || 'storage' });
+      callback?.({ success: false, error: error instanceof AccountAuthError ? error.message : '昵称保存失败，请稍后重试', code: error.code || 'NICKNAME_STORAGE_UNAVAILABLE' });
+      return;
+    }
+    const result = renameUser(roomId, userId, account ? account.nickname : nickname);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;
@@ -4677,7 +5118,7 @@ io.on('connection', (socket) => {
     void riskControl.recordNickname(socket.data.accountId, getRoomInternal(roomId)?.users.get(userId)?.nickname || '')
       .catch(() => incrementMetric('risk_storage_error_total', { operation: 'nickname' }));
     broadcastRoomUpdate(roomId);
-    callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
+    callback?.({ success: true, room: getViewerRoomPayload(socket, roomId), accountNickname: account?.nickname });
   });
 
   socket.on('set_user_avatar', ({ avatar_url }, callback) => {
@@ -4889,6 +5330,23 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
+  socket.on('set_room_qishui_proxy', ({ enabled } = {}, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'set_room_qishui_proxy', callback)) return;
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+    const result = setQishuiProxyEnabled(roomId, getSocketUserId(socket), enabled, socket.id);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+    broadcastRoomUpdate(roomId);
+    callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
+  });
+
   /** 房主：创建网易/QQ 扫码会话（Cookie 最终写入 Meting） */
   socket.on('music_account_qr_create', async ({ platform } = {}, callback) => {
     if (rejectReadOnly(socket, callback)) return;
@@ -4914,7 +5372,7 @@ io.on('connection', (socket) => {
       purpose: 'room',
     });
     if (!result.ok) {
-      callback?.({ success: false, error: result.error });
+      callback?.({ success: false, error: result.error, code: result.code });
       return;
     }
     callback?.({ success: true, data: result.data });
@@ -4942,7 +5400,7 @@ io.on('connection', (socket) => {
     const result = await checkManagedMusicQrSession(context);
     if (!result.ok) {
       await releaseManagedMusicQrCredential(context);
-      callback?.({ success: false, error: result.error });
+      callback?.({ success: false, error: result.error, code: result.code });
       return;
     }
     callback?.({ success: true, data: result.data });
@@ -4999,10 +5457,38 @@ io.on('connection', (socket) => {
       });
       if (!result.ok) {
         await releaseManagedMusicQrCredential(context);
-        callback?.({ success: false, error: result.error });
+        callback?.({ success: false, error: result.error, code: result.code });
         return;
       }
       const plat = credential.platform;
+      const stillOwner = () => getRoomInternal(roomId) === room
+        && room.creatorId === ownerId && socketToRoom.get(socket.id) === roomId;
+      if (!stillOwner()) {
+        await releaseManagedMusicQrCredential(context);
+        callback?.({ success: false, error: '房间归属或连接已变化，请重新扫码', code: 'ROOM_ACCOUNT_CONFLICT' });
+        return;
+      }
+      if (socket.data.accountId) {
+        try {
+          await accountMusic.save(socket.data.accountId, plat, result.data, result.cookie || credential.cookie);
+        } catch (error) {
+          incrementMetric('account_music_save_total', { outcome: 'failed', code: error.code || 'storage' });
+          console.error('[Account Music] 账户会员保存失败:', error.code || 'storage');
+          await releaseManagedMusicQrCredential(context);
+          callback?.({
+            success: false,
+            error: socket.data.anonymous ? '设备 Cookie 音乐缓存保存失败，请稍后重试' : '账户会员保存失败，请稍后重试，暂不能保证新建房间自动恢复',
+            code: socket.data.anonymous ? 'MUSIC_COOKIE_CACHE_SAVE_FAILED' : 'ACCOUNT_MUSIC_SAVE_FAILED',
+          });
+          return;
+        }
+        incrementMetric('account_music_save_total', { outcome: 'success' });
+      }
+      if (!stillOwner()) {
+        await releaseManagedMusicQrCredential(context);
+        callback?.({ success: false, error: '房间归属或连接已变化，请重试', code: 'ROOM_ACCOUNT_CONFLICT' });
+        return;
+      }
       patchRoomMusicAccountCache(roomId, plat, result.data, {
         localCookie: result.cookie || credential.cookie,
       });
@@ -5012,7 +5498,9 @@ io.on('connection', (socket) => {
       callback?.({
         success: true,
         account: result.data,
-        message: result.message,
+        message: socket.data.anonymous
+          ? [result.message, '已按设备 Cookie 身份加密保存，同一身份新建房间可恢复，清除 Cookie 或换设备后不能自动找回'].filter(Boolean).join('；')
+          : result.message,
         room: getViewerRoomPayload(socket, roomId),
       });
     } catch (err) {
@@ -5048,6 +5536,21 @@ io.on('connection', (socket) => {
         );
       }
       localAccounts = getRoomInternal(roomId)?.musicAccounts || localAccounts;
+    }
+    if (socket.data.anonymous ? !room.ownerAccountId : room.ownerAccountId === socket.data.accountId) {
+      try {
+        await accountMusic.rememberRoom(socket.data.accountId, getRoomInternal(roomId), {
+          ownerUserId: socket.data.anonymous ? getSocketUserId(socket) : undefined,
+        });
+      } catch (error) {
+        incrementMetric('account_music_save_total', { outcome: 'failed', code: error.code || 'storage' });
+        callback?.({
+          success: false,
+          error: socket.data.anonymous ? '设备 Cookie 音乐缓存保存失败，请稍后刷新重试' : '房间会员可用，但账户备份失败，请稍后刷新重试',
+          code: socket.data.anonymous ? 'MUSIC_COOKIE_CACHE_SAVE_FAILED' : 'ACCOUNT_MUSIC_SAVE_FAILED',
+        });
+        return;
+      }
     }
     const result = await fetchRoomMusicAccounts(roomId);
     if (!result.ok) {
@@ -5108,7 +5611,7 @@ io.on('connection', (socket) => {
       getMusicAccountProviderName(room, getSocketUserId(socket)),
     );
     if (!result.ok) {
-      callback?.({ success: false, error: result.error });
+      callback?.({ success: false, error: result.error, code: result.code });
       return;
     }
     const nextAccount = shared
@@ -5160,6 +5663,14 @@ io.on('connection', (socket) => {
       const result = await unbindRoomMusicAccount(roomId, platform);
       if (!result.ok) {
         callback?.({ success: false, error: result.error });
+        return;
+      }
+    }
+    if (socket.data.anonymous) {
+      try {
+        await accountMusic.remove(socket.data.accountId, plat);
+      } catch {
+        callback?.({ success: false, error: '设备 Cookie 音乐缓存清理失败，请稍后重试', code: 'MUSIC_COOKIE_CACHE_SAVE_FAILED' });
         return;
       }
     }
@@ -5279,6 +5790,31 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
+  socket.on('set_room_hide_ip_location', ({ hidden } = {}, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'set_room_hide_ip_location', callback)) return;
+
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+
+    const result = setRoomHideIpLocation(
+      roomId,
+      getSocketUserId(socket),
+      hidden,
+      socket.id,
+    );
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+
+    broadcastRoomUpdate(roomId);
+    callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
+  });
+
   socket.on('set_room_join_notice', ({ enabled, cooldownSec } = {}, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_join_notice', callback)) return;
@@ -5364,7 +5900,7 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId), maxAdmins: result.maxAdmins });
   });
 
-  socket.on('set_room_song_request', ({ enabled, minStaySec, maxPerUser, cooldownSec, queueMaxLength, memberJumpEnabled, memberSeekEnabled, memberPauseEnabled, systemMediaPlayBound, systemMediaSkipBound, dislikeSkipMode, dislikeSkipThreshold, dislikeSkipPercent, clearSongsOnLeaveEnabled, clearSongsOnLeaveDelaySec, deferOfflineRequesterSongs }, callback) => {
+  socket.on('set_room_song_request', ({ enabled, queueLikeSortEnabled, minStaySec, maxPerUser, cooldownSec, queueMaxLength, memberJumpEnabled, memberSeekEnabled, memberPauseEnabled, systemMediaPlayBound, systemMediaSkipBound, dislikeSkipMode, dislikeSkipThreshold, dislikeSkipPercent, clearSongsOnLeaveEnabled, clearSongsOnLeaveDelaySec, deferOfflineRequesterSongs }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_song_request', callback)) return;
 
@@ -5376,6 +5912,7 @@ io.on('connection', (socket) => {
 
     const result = setSongRequestEnabled(roomId, getSocketUserId(socket), {
       enabled,
+      queueLikeSortEnabled,
       minStaySec,
       maxPerUser,
       cooldownSec,
@@ -5771,8 +6308,46 @@ io.on('connection', (socket) => {
     callback?.({ success: true });
   });
 
+  socket.on('add_songs', async (payload, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    const { songs } = socketPayload(payload);
+    if (!Array.isArray(songs) || !songs.length || songs.length > 100) {
+      callback?.({ success: false, error: '每批点歌限 1 至 100 首', code: 'INVALID_PAYLOAD' });
+      return;
+    }
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) { callback?.({ success: false, error: '未加入房间' }); return; }
+    if (socket.data.bulkAdding) { callback?.({ success: false, error: '上一批歌曲正在添加' }); return; }
+    const cleaned = songs.map(sanitizeClientSong);
+    if (cleaned.some(item => item.error)) { callback?.({ success: false, error: '歌曲参数无效', code: 'INVALID_PAYLOAD' }); return; }
+    socket.data.bulkAdding = true;
+    let added = 0;
+    let skipped = 0;
+    let failed = 0;
+    try {
+      const userId = getSocketUserId(socket);
+      for (const item of cleaned) {
+        if (!socket.connected || socketToRoom.get(socket.id) !== roomId) { failed += cleaned.length - added - skipped - failed; break; }
+        const user = getRoomInternal(roomId)?.users.get(userId);
+        if (!user) { failed += cleaned.length - added - skipped; break; }
+        const result = await addToQueue(roomId, item.song, { id: userId, nickname: user?.nickname || '匿名' }, { connectionId: socket.id });
+        if (result.error) {
+          if (result.error.includes('已经在歌单')) skipped++;
+          else { failed += cleaned.length - added - skipped; break; }
+        } else { added++; emitSystemChat(roomId, result.systemMessage); }
+      }
+      callback?.({ success: failed === 0, added, skipped, failed });
+    } catch {
+      callback?.({ success: false, added, skipped, failed: cleaned.length - added - skipped, error: '批量点歌暂未完成，请稍后重试' });
+    } finally {
+      socket.data.bulkAdding = false;
+      const room = getRoomInternal(roomId);
+      if (added && room) emitRoomAndPlayback(roomId, getRoom(roomId));
+    }
+  });
+
   socket.on('add_song', async (payload, callback) => {
-    const { song } = socketPayload(payload);
+    const { song, jump } = socketPayload(payload);
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'add_song', callback)) return;
 
@@ -5782,6 +6357,10 @@ io.on('connection', (socket) => {
       return;
     }
 
+    if (jump !== undefined && typeof jump !== 'boolean') {
+      callback?.({ success: false, error: '插队参数无效', code: 'INVALID_PAYLOAD' });
+      return;
+    }
     const clean = sanitizeClientSong(song);
     if (clean.error) {
       callback?.({ success: false, error: clean.error });
@@ -5794,7 +6373,7 @@ io.on('connection', (socket) => {
     const result = await addToQueue(roomId, clean.song, {
       id: userId,
       nickname: user?.nickname || '匿名',
-    });
+    }, { jump: jump === true, connectionId: socket.id });
     if (result.error) {
       callback?.({ success: false, error: result.error, ...(result.code ? { code: result.code } : {}) });
       return;
@@ -5997,7 +6576,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    // 点赞会改队列排序：只推 queue/current，不下发整包 users；高频点击合并广播
+    // 待播点赞参与排序，当前曲点赞仅计数；只推 queue/current 并合并高频广播
     emitQueueSnapshot(roomId);
     emitSystemChat(roomId, result.systemMessage);
     callback?.({ success: true, liked: result.liked });
@@ -6426,6 +7005,23 @@ io.on('connection', (socket) => {
     callback?.(result.error ? { success: false, error: result.error } : { success: true, ...result });
   });
 
+  socket.on('delete_favorite_category', async (payload, callback) => {
+    if (rejectRateLimited(socket, limitSocketAction, 'delete_favorite_category', callback)) return;
+    const identity = resolveIdentityFromCookies(socket.handshake?.headers?.cookie || '');
+    if (!identity?.userId) {
+      incrementMetric('favorite_category_delete_total', { outcome: 'auth_rejected' });
+      return callback?.({ success: false, error: '会话未就绪，请刷新页面后重试', code: 'AUTH_REQUIRED' });
+    }
+    const { name, keepSongs } = socketPayload(payload);
+    if (typeof name !== 'string' || typeof keepSongs !== 'boolean') {
+      incrementMetric('favorite_category_delete_total', { outcome: 'invalid_input' });
+      return callback?.({ success: false, error: '收藏分类参数无效', code: 'INVALID_FAVORITE_CATEGORY' });
+    }
+    const result = await deleteFavoriteCategory(identity.userId, name, keepSongs);
+    incrementMetric('favorite_category_delete_total', { outcome: result.error ? 'failed' : 'success' });
+    callback?.(result.error ? { success: false, error: result.error, code: result.code } : { success: true, ...result });
+  });
+
   socket.on('set_favorite', async (payload, callback) => {
     const { song, favorite } = socketPayload(payload);
     if (rejectRateLimited(socket, limitSocketAction, 'set_favorite', callback)) return;
@@ -6608,7 +7204,7 @@ async function checkAutoAdvance() {
       const internal = getRoomInternal(roomId);
       if (!internal || internal.users.size === 0) continue;
 
-      if (internal.randomLoading && !internal.current) {
+      if ((internal.randomLoading || internal.randomError) && !internal.current) {
         const retried = await retryStuckRandomLoading(roomId);
         if (retried) {
           emitRoomAndPlayback(roomId, retried);
@@ -6632,8 +7228,15 @@ setInterval(() => {
   void checkAutoAdvance();
 }, AUTO_ADVANCE_INTERVAL_MS);
 
-registerMetingRoomResolver(getRoomInternal);
+registerMetingRoomResolver(getRoomInternal, (roomId, platform, failedCookie) => {
+  if (!failedCookie || getRoomMusicAccountCookie(roomId, platform) !== failedCookie) return;
+  const account = getRoomInternal(roomId)?.musicAccounts?.[platform];
+  if (!account) return;
+  patchRoomMusicAccountCache(roomId, platform, { ...account, isValid: false }, { localCookie: null });
+  broadcastRoomUpdate(roomId);
+});
 await initRooms();
+const redisMaintenance = createRedisMaintenance({ getClient: getRedisClient, isRoomKnown: roomExists });
 
 const setupRequired = isSetupRequired();
 if (!isRedisEnabled()) {
@@ -6644,6 +7247,21 @@ if (!isRedisEnabled()) {
     process.exit(1);
   }
 } else {
+  riskChallengeBus = createRiskChallengeBus({
+    client: getRedisClient(), onChallenge: id => {
+      const config = getRuntimeConfig();
+      if (config.riskChallengeEnabled && config.turnstileEnabled) suspendAccountSocketsForHumanChallenge(id);
+    },
+    onSessionRevoked: sid => {
+      io.local.to(`account-session:${sid}`).emit('account_session_invalidated', { reason: 'session_revoked', stopReconnect: true });
+      io.local.in(`account-session:${sid}`).disconnectSockets(true);
+    },
+    onUnavailable: () => { io.local.disconnectSockets(true); },
+    onRecovered: () => { io.local.disconnectSockets(true); },
+    metric: incrementMetric,
+  });
+  await riskChallengeBus.start();
+  redisMaintenance.start();
   await initSiteAnnouncement();
   await initDonations();
   await initSiteBans();
@@ -6668,6 +7286,7 @@ let shuttingDown = false;
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  riskChallengeBus?.stop();
   console.log(`${signal}: 正在优雅退出，通知客户端重连并刷写房间…`);
 
   const forceTimer = setTimeout(() => {
@@ -6677,8 +7296,10 @@ async function gracefulShutdown(signal) {
   forceTimer.unref?.();
 
   try {
-    // 先断开 Socket，让客户端立刻进入重连；再关 HTTP
+    await redisMaintenance.stop();
+    // 先通知发布重启，再断开连接，旧客户端可忽略新增事件继续普通重连
     try {
+      io.emit('server_restarting');
       io.close();
     } catch (err) {
       console.warn('关闭 Socket.IO 失败:', err?.message || err);

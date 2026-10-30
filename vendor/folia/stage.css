@@ -1,5 +1,8 @@
 html, body, #root, .folia-stage { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 .folia-stage { position: relative; }
+.folia-safe-stage { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; padding: 24px; text-align: center; background: #12141c; color: #f4f2ea; }
+.folia-safe-stage strong { font-size: clamp(22px, 4vw, 52px); }
+.folia-safe-stage span { color: #c9c2d6; font-size: 13px; }
 @layer base {
   :where([data-paper-shader]) { isolation: isolate; position: relative; }
   :where([data-paper-shader]) canvas {
@@ -123,3 +126,23 @@ html, body, #root, .folia-stage { width: 100%; height: 100%; margin: 0; overflow
   .folia-controls { animation: none; }
   .folia-controls nav button { transition: none; }
 }
+
+/* 宿主视觉设置中的内嵌控制项，不再创建独立浮层窗口 */
+.folia-controls.folia-controls--embedded {
+  position: static;
+  z-index: auto;
+  width: 100%;
+  height: auto;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  animation: none;
+}
+.folia-controls--embedded .folia-controls-body { flex: none; overflow: visible; padding: 0 0 8px; }

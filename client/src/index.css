@@ -2,6 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
+.home-room-grid-item {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 244px;
+}
+
+.chat-message-render-boundary {
+  content-visibility: auto;
+  contain: layout paint style;
+}
+
 :root {
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
   color-scheme: dark;
@@ -2788,6 +2798,16 @@ body.immersive-mode #hand-canvas {
   border-radius: 3px;
 }
 
+.fx-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  flex-shrink: 0;
+}
+
+.fx-panel-toolbar .fx-panel-tabs { flex: 1; min-width: 0; margin: 0; }
+
 .fx-panel-tabs {
   flex-shrink: 0;
   z-index: 4;
@@ -3552,6 +3572,7 @@ body.immersive-mode #hand-canvas {
     min-width: 58px;
     padding: 0 10px;
   }
+  .fx-panel-toolbar .fx-panel-tabs button { min-width: 42px; padding: 0 8px; }
 
   .fx-toggle-grid {
     grid-template-columns: 1fr;

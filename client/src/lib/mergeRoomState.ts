@@ -40,7 +40,8 @@ export function mergeRoomState(incoming: RoomState, current: RoomState | null): 
   if (incoming.current === current.current
     || (incoming.current && current.current && incoming.current.queueId === current.current.queueId
       && incoming.current.id === current.current.id
-      && incoming.current.requestedBy === current.current.requestedBy)) {
+      && incoming.current.requestedBy === current.current.requestedBy
+      && stringArraysEqual(incoming.current.currentLikedByIds, current.current.currentLikedByIds))) {
     merged.current = current.current;
   }
   if (memberTiersEqual(incoming.memberTiers, current.memberTiers)) {

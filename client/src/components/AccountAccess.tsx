@@ -1,4 +1,9 @@
+import HumanVerification from './HumanVerification';
+import SocialLoginScan from './SocialLoginScan';
+import SocialProviderIcon from './SocialProviderIcon';
+import { socialProviders, socialLabels, type SocialProvider } from '../lib/socialLogin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { wechatLoginRetryDelay } from '../lib/wechatLoginRetry';
 import {
   ArrowLeft,
   Check,
@@ -11,6 +16,7 @@ import {
   Mail,
   MessageCircle,
   ShieldCheck,
+  Trash2,
   Unlink,
   UserRound,
   Users,
@@ -41,15 +47,21 @@ import { headerPillCls } from '../lib/homeHeaderActions';
 import { getAccountAccessBackView } from '../lib/accountAccessNavigation';
 import { refreshSocketSession } from '../hooks/useSocket';
 import { announceAccountSessionChanged } from '../lib/accountSessionSignal';
+import { hasAnonymousAccess } from '../lib/accountAccessSession';
+import { fetchAccountMusicAccounts, setAccountMusicShared, deleteAccountMusicAccount } from '../api/accountMusic';
+import { listAccountRooms } from '../api/accountRooms';
+import type { AccountRoomSummary, RoomMusicAccounts } from '../types';
 
-const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false };
+const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false, wechat_scan: false, qq_scan: false };
 
-type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'wechat-login' | 'wechat-bind' | 'manage';
+type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'wechat-login' | 'wechat-bind' | 'manage' | `${SocialProvider}-login` | `${SocialProvider}-bind`;
 
 const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: string; description: string }> = {
   linuxdo: { label: 'Linux Do', description: '社区身份' },
   github: { label: 'GitHub', description: '开发者身份' },
-  wechat: { label: '微信', description: '使用微信扫码登录' },
+  wechat: { label: '微信文件传输助手登录', description: '通过文件传输助手确认身份' },
+  wechat_scan: { label: '微信扫码登录', description: '使用微信扫码确认身份' },
+  qq_scan: { label: 'QQ扫码登录', description: '使用 QQ 扫码确认身份' },
 };
 
 function LinuxDoMark() {
@@ -58,6 +70,7 @@ function LinuxDoMark() {
 
 function ProviderIcon({ provider }: { provider: Exclude<AccountIdentityProvider, 'email'> }) {
   if (provider === 'github') return <Github className="h-5 w-5" />;
+  if (provider === 'wechat_scan' || provider === 'qq_scan') return <SocialProviderIcon provider={provider} />;
   if (provider === 'wechat') return <MessageCircle className="h-5 w-5" />;
   return <LinuxDoMark />;
 }
@@ -79,6 +92,9 @@ function WechatAccountScan({
     const controller = new AbortController();
     let timer: number | undefined;
     let expiresAt = 0;
+    let failures = 0;
+    let confirmed = false;
+    let flowId: string | undefined;
     setQrUrl(null);
     setError('');
     setStatus('正在准备安全二维码…');
@@ -93,24 +109,35 @@ function WechatAccountScan({
     const poll = async () => {
       try {
         if (Date.now() >= expiresAt) throw new Error('二维码已过期，请重新获取');
-        const result = await pollWechatAccountLogin(controller.signal);
+        const result = confirmed ? { status: 'confirmed' as const } : await pollWechatAccountLogin(controller.signal, flowId);
         if (cancelled) return;
         if (result.status === 'expired') throw new Error('二维码已过期，请重新获取');
         if (result.status === 'confirmed') {
+          confirmed = true;
           setQrUrl(null);
           setStatus('正在完成账户验证…');
-          const account = await completeWechatAccount(action, controller.signal);
+          const account = await completeWechatAccount(action, controller.signal, flowId);
           if (!cancelled) onComplete(account);
           return;
         }
         if (result.status === 'scanned') setStatus('已扫码，请在手机上确认');
+        failures = 0;
         timer = window.setTimeout(() => void poll(), 1600);
-      } catch (reason) { fail(reason); }
+      } catch (reason) {
+        if (cancelled) return;
+        const delay = wechatLoginRetryDelay(reason, failures);
+        if (delay !== null && Date.now() + delay < expiresAt) {
+          failures += 1;
+          setStatus(confirmed ? '账户验证暂时繁忙，正在重试…' : '网络暂时波动，正在重新确认…');
+          timer = window.setTimeout(() => void poll(), delay);
+        } else fail(reason);
+      }
     };
 
     void startWechatAccountLogin(controller.signal).then((session) => {
       if (cancelled) return;
       expiresAt = session.expiresAt;
+      flowId = session.flowId;
       setQrUrl(session.qrUrl);
       setStatus('请使用微信扫一扫');
       timer = window.setTimeout(() => void poll(), 1600);
@@ -136,7 +163,7 @@ function WechatAccountScan({
       </div>
       <p role="status" aria-live="polite" className="mt-5 text-[15px] font-semibold text-white">{status}</p>
       <p className="mt-1.5 max-w-xs text-xs leading-5 text-netease-muted">
-        通过文件传输助手确认微信身份，由本站服务端向微信核验 UIN，完成后建议在手机微信顶部退出文件传输助手
+        在手机上确认，完成后建议退出文件传输助手
       </p>
       {error && <p className="mt-3 text-sm text-amber-200">{error}</p>}
       {error && (
@@ -164,8 +191,11 @@ export default function AccountAccess({
   const [open, setOpen] = useState(required);
   const [view, setView] = useState<View>('welcome');
   const dialogRef = useRef<HTMLDivElement>(null);
+  const authRecheckPending = useRef(false);
   const [account, setAccount] = useState<AccountProfile | null>(null);
   const [providers, setProviders] = useState<AccountProviderStatus>(EMPTY_PROVIDERS);
+  const [providerError, setProviderError] = useState('');
+  const providerRequest = useRef<Promise<AccountProviderStatus> | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -173,22 +203,60 @@ export default function AccountAccess({
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [codeCooldown, setCodeCooldown] = useState(0);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [challengeAttempt, setChallengeAttempt] = useState(0);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [musicAccounts, setMusicAccounts] = useState<RoomMusicAccounts>({ netease: null, tencent: null, kugou: null, qishui: null });
+  const [accountRooms, setAccountRooms] = useState<AccountRoomSummary[]>([]);
+  const [accountDataLoading, setAccountDataLoading] = useState(false);
 
   const setPanelOpen = useCallback((next: boolean) => {
     setOpen(next);
     onOpenChange?.(next);
   }, [onOpenChange]);
 
-  const refresh = useCallback(async () => {
-    const [session, status] = await Promise.all([
-      fetchAccountSession(),
-      fetchAccountProviders(),
-    ]);
-    setAccount(session);
-    setProviders(status);
-    return session;
+  const refreshProviders = useCallback(() => {
+    if (!providerRequest.current) {
+      providerRequest.current = fetchAccountProviders()
+        .then(status => { setProviders(status); setProviderError(''); return status; })
+        .catch(reason => { setProviderError('登录方式加载失败，请重试'); throw reason; })
+        .finally(() => { providerRequest.current = null; });
+    }
+    return providerRequest.current;
   }, []);
+
+  const refresh = useCallback(async () => {
+    const [session, status] = await Promise.allSettled([
+      fetchAccountSession(),
+      refreshProviders(),
+    ]);
+    if (session.status === 'rejected') throw session.reason;
+    setAccount(session.value);
+    if (session.value) {
+      setAccountDataLoading(true);
+      void Promise.all([fetchAccountMusicAccounts(), listAccountRooms()])
+        .then(([accounts, rooms]) => { setMusicAccounts(accounts); setAccountRooms(rooms); })
+        .catch(() => undefined)
+        .finally(() => setAccountDataLoading(false));
+    } else {
+      setMusicAccounts({ netease: null, tencent: null, kugou: null, qishui: null });
+      setAccountRooms([]);
+    }
+    if (status.status === 'fulfilled') setError('');
+    return session.value;
+  }, [refreshProviders]);
+
+  useEffect(() => {
+    if (!open) return;
+    const refresh = () => { void refreshProviders().catch(() => undefined); };
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('online', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('online', refresh);
+    };
+  }, [open, refreshProviders]);
 
   useEffect(() => {
     const oauthResult = consumeAccountAuthReturn();
@@ -203,29 +271,38 @@ export default function AccountAccess({
           setPanelOpen(true);
         }
       })
-      .catch((reason) => { setProviders(EMPTY_PROVIDERS); setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试'); })
+      .catch((reason) => { setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试'); })
       .finally(() => setLoading(false));
   }, [refresh, setPanelOpen]);
 
   useEffect(() => {
-    if (loading || account || !allowAutoPrompt || open) return;
+    if (loading || account || error || !allowAutoPrompt || open || hasAnonymousAccess()) return;
     setView('methods');
     setPanelOpen(true);
-  }, [account, allowAutoPrompt, loading, open, setPanelOpen]);
+  }, [account, error, allowAutoPrompt, loading, open, setPanelOpen]);
 
   useEffect(() => {
+    let active = true;
     const showLogin = () => {
-      setAccount(null);
-      setError('');
-      setView('welcome');
-      setPanelOpen(true);
+      if (authRecheckPending.current) return;
+      authRecheckPending.current = true;
+      // 先确认真实账户状态，身份 Cookie 重签或服务重启不直接弹出登录
+      void refresh().then(current => {
+        if (!active || current || hasAnonymousAccess()) return;
+        setAccount(null); setError(''); setView('welcome'); setPanelOpen(true);
+      }).catch(() => { if (active) setError('服务连接暂不可用，请等待恢复后重试'); })
+        .finally(() => { authRecheckPending.current = false; });
     };
     const update = () => { void refresh().catch(() => setError('账户状态暂不可用，请重试')); };
+    const onNicknameSaveFailed = () => { setToast({ message: '已恢复登录，昵称尚未保存，请稍后重新保存', type: 'error' }); };
     window.addEventListener('openmusic:account-auth-required', showLogin);
     window.addEventListener('openmusic:account-session-changed', update);
+    window.addEventListener('openmusic:account-nickname-save-failed', onNicknameSaveFailed);
     return () => {
+      active = false;
       window.removeEventListener('openmusic:account-auth-required', showLogin);
       window.removeEventListener('openmusic:account-session-changed', update);
+      window.removeEventListener('openmusic:account-nickname-save-failed', onNicknameSaveFailed);
     };
   }, [refresh, setPanelOpen]);
 
@@ -270,12 +347,13 @@ export default function AccountAccess({
       setError(register ? '请填写邮箱、至少 8 位密码和 6 位验证码' : '请填写邮箱和至少 8 位密码');
       return;
     }
+    if (providers.turnstile?.enabled && !turnstileToken) { setError('请先完成人机校验'); return; }
     setSubmitting(true);
     setError('');
     try {
       const next = register
-        ? await registerAccountWithEmail(email, password, code)
-        : await loginAccountWithEmail(email, password);
+        ? await registerAccountWithEmail(email, password, code, turnstileToken)
+        : await loginAccountWithEmail(email, password, turnstileToken);
       await refreshSocketSession();
       announceAccountSessionChanged();
       setAccount(next);
@@ -285,6 +363,7 @@ export default function AccountAccess({
       setError(reason instanceof Error ? reason.message : '登录失败');
     } finally {
       setSubmitting(false);
+      setTurnstileToken(''); setChallengeAttempt(value => value + 1);
     }
   };
 
@@ -293,16 +372,18 @@ export default function AccountAccess({
       setError('请先填写邮箱地址');
       return;
     }
+    if (providers.turnstile?.enabled && !turnstileToken) { setError('请先完成人机校验'); return; }
     setSubmitting(true);
     setError('');
     try {
-      const result = await requestAccountEmailCode(email);
+      const result = await requestAccountEmailCode(email, turnstileToken);
       setCodeCooldown(result.resendAfterSec);
       setToast({ message: '验证码已发送', type: 'success' });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '验证码发送失败');
     } finally {
       setSubmitting(false);
+      setTurnstileToken(''); setChallengeAttempt(value => value + 1);
     }
   };
 
@@ -336,17 +417,56 @@ export default function AccountAccess({
       announceAccountSessionChanged();
       void refreshSocketSession().catch(() => setToast({ message: '账户已退出，连接清理未完成，请刷新页面', type: 'error' }));
       setAccount(null);
+      setMusicAccounts({ netease: null, tencent: null, kugou: null, qishui: null });
+      setAccountRooms([]);
       setView('methods');
-      setToast({ message: '已退出账户，请重新登录后使用', type: 'success' });
+      setToast({ message: '已退出账户', type: 'success' });
     } finally {
       setSubmitting(false);
     }
   };
 
+  const musicPlatformLabels: Record<keyof RoomMusicAccounts, string> = {
+    netease: '网易云',
+    tencent: 'QQ 音乐',
+    kugou: '酷狗音乐',
+    qishui: '汽水音乐',
+  };
+
+  const toggleAccountMusic = async (platform: keyof RoomMusicAccounts, shared: boolean) => {
+    setSubmitting(true);
+    setError('');
+    try {
+      const next = await setAccountMusicShared(platform, shared);
+      setMusicAccounts(current => ({ ...current, [platform]: next }));
+      setToast({ message: shared ? `${musicPlatformLabels[platform]}会员已打开共享` : `${musicPlatformLabels[platform]}会员已关闭共享`, type: 'success' });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '会员共享更新失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const removeAccountMusic = async (platform: keyof RoomMusicAccounts) => {
+    if (!window.confirm(`删除已保存的${musicPlatformLabels[platform]}会员信息吗`)) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      setMusicAccounts(await deleteAccountMusicAccount(platform));
+      setToast({ message: `${musicPlatformLabels[platform]}会员信息已删除，原房间不受影响`, type: 'success' });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '会员信息删除失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const scanProvider = socialProviders.find(provider => view.startsWith(`${provider}-`));
   const title = view === 'manage'
     ? '账户与安全'
+    : scanProvider ? socialLabels[scanProvider]
     : view.startsWith('wechat')
-      ? '微信扫码'
+      ? '微信文件传输助手登录'
       : view === 'email-register'
         ? '创建账户'
         : view === 'email-login'
@@ -397,6 +517,19 @@ export default function AccountAccess({
           </button>}
         </div>
 
+        {providerError && (
+          <div role="alert" className="mb-4 flex items-center justify-between gap-3 rounded-xl bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">
+            <span>{providerError}</span>
+            <button type="button" onClick={() => { void refreshProviders().catch(() => undefined); }} className="shrink-0 underline underline-offset-4">重试</button>
+          </div>
+        )}
+        {error && (view === 'welcome' || view === 'methods') && (
+          <div role="alert" className="mb-4 rounded-xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">
+            <p>{error}</p>
+            <button type="button" onClick={() => { void refresh().catch(reason => setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试')); }} className="mt-2 underline underline-offset-4">重新检查账户</button>
+          </div>
+        )}
+
         {view === 'welcome' && (
           <div className="pb-1 pt-3 sm:pt-5">
             <div className="flex items-center gap-5 sm:gap-6">
@@ -407,7 +540,7 @@ export default function AccountAccess({
               </div>
               <h3 className="text-[26px] font-semibold leading-snug tracking-tight text-white sm:text-3xl">好音乐<br />值得一起听</h3>
             </div>
-            <p className="mt-6 text-sm leading-7 text-netease-muted">加入一个房间，把喜欢的歌放给彼此听<br />登录后，你的收藏与房间也会一直在这里</p>
+            <p className="mt-6 text-sm leading-7 text-netease-muted">登录后，和朋友一起点歌、收藏好音乐</p>
             <div className="my-6 flex flex-wrap gap-x-6 gap-y-3 border-y border-white/[0.08] py-4 text-xs text-netease-muted">
               <span className="inline-flex items-center gap-2"><Users className="h-4 w-4 text-white/70" aria-hidden />一起点歌</span>
               <span className="inline-flex items-center gap-2"><Heart className="h-4 w-4 text-white/70" aria-hidden />收藏随行</span>
@@ -421,16 +554,34 @@ export default function AccountAccess({
 
         {view === 'methods' && (
           <div className="space-y-3">
+            {socialProviders.map(provider => providers[provider] && (
+              <button key={provider} type="button" onClick={() => setView(`${provider}-login`)} className="flex min-h-16 w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]">
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider={provider} /></span>
+                <span className="flex-1 text-sm font-semibold text-white">{socialLabels[provider]}</span>
+                <ChevronRight className="h-4 w-4 text-white/25" />
+              </button>
+            ))}
+            {providers.wechat && (
+              <button
+                type="button"
+                onClick={() => setView('wechat-login')}
+                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]"
+              >
+                <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider="wechat" /></span>
+                <span className="flex-1 text-sm font-semibold text-white">微信文件传输助手登录</span>
+                <ChevronRight className="h-4 w-4 text-white/25" />
+              </button>
+            )}
             <button type="button" onClick={() => setView('email-login')} className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085]">
               <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-black"><Mail className="h-5 w-5" /></span>
               <span className="flex-1"><span className="block text-sm font-semibold text-white">邮箱</span><span className="mt-0.5 block text-xs text-netease-muted">密码登录或验证码注册</span></span>
               <ChevronRight className="h-4 w-4 text-white/25" />
             </button>
-            {(['linuxdo', 'github', 'wechat'] as const).map((provider) => providers[provider] && (
+            {(['linuxdo', 'github'] as const).map((provider) => providers[provider] && (
               <button
                 key={provider}
                 type="button"
-                onClick={() => provider === 'wechat' ? setView('wechat-login') : startAccountOAuth(provider, 'login')}
+                onClick={() => void startAccountOAuth(provider, 'login').catch(error => setError(error.message))}
                 className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.045] p-4 text-left transition hover:bg-white/[0.085] disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-white/[0.045]"
               >
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/[0.08] text-white"><ProviderIcon provider={provider} /></span>
@@ -438,11 +589,11 @@ export default function AccountAccess({
                 <ChevronRight className="h-4 w-4 text-white/25" />
               </button>
             ))}
-            <p className="border-t border-white/10 pt-4 text-xs leading-5 text-netease-muted">选择你习惯的方式登录，之后也可以在账户中绑定其他登录方式</p>
+            <p className="border-t border-white/10 pt-4 text-xs leading-5 text-netease-muted">已有账户？请用原方式登录，再绑定其他方式</p>
           </div>
         )}
 
-        {required && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
+        {required && !scanProvider && view !== 'wechat-login' && view !== 'wechat-bind' && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
 
         {(view === 'email-login' || view === 'email-register') && (
           <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); void submitEmail(view === 'email-register'); }}>
@@ -451,6 +602,7 @@ export default function AccountAccess({
             {view === 'email-register' && (
               <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">邮箱验证码</span><span className="flex gap-2"><input inputMode="numeric" value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} className="home-modal-input min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm tracking-[0.2em] text-white outline-none transition focus:border-white/28" placeholder="6 位验证码" /><button type="button" disabled={submitting || codeCooldown > 0} onClick={() => void sendCode()} className="rounded-xl border border-white/10 bg-white/[0.07] px-4 text-xs font-medium text-white disabled:opacity-45">{codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}</button></span></label>
             )}
+            {providers.turnstile?.enabled && <HumanVerification key={`${view}:${challengeAttempt}`} siteKey={providers.turnstile.siteKey} onToken={setTurnstileToken} />}
             {error && <p className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</p>}
             <button type="submit" disabled={submitting} className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white py-3.5 text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-50">{submitting && <Loader2 className="h-4 w-4 animate-spin" />}{view === 'email-register' ? '创建并登录' : '登录'}</button>
             <button type="button" onClick={() => { setError(''); setView(view === 'email-register' ? 'email-login' : 'email-register'); }} className="w-full py-2 text-sm text-netease-muted transition hover:text-white">{view === 'email-register' ? '已有账户？返回登录' : '没有账户？使用邮箱注册'}</button>
@@ -460,18 +612,49 @@ export default function AccountAccess({
         {(view === 'wechat-bind' || view === 'wechat-login') && (
           <WechatAccountScan action={view === 'wechat-bind' ? 'bind' : 'login'} onComplete={finishWechat} />
         )}
+        {scanProvider && <SocialLoginScan provider={scanProvider} action={view.endsWith('-bind') ? 'bind' : 'login'} onComplete={result => {
+          if (!result.account) { setError('账户响应异常，请重新登录'); setView('methods'); return; }
+          finishWechat(result.account);
+          setToast({ message: view.endsWith('-bind') ? '身份绑定成功' : '扫码登录成功', type: 'success' });
+        }} />}
 
         {view === 'manage' && account && (
           <div>
             <div className="mb-6 flex items-center gap-4 rounded-2xl border border-white/8 bg-white/[0.04] p-4">
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black"><ShieldCheck className="h-5 w-5" /></span>
-              <div className="min-w-0"><p className="truncate text-[15px] font-semibold text-white">{account.email || 'OpenMusic 账户'}</p><p className="mt-1 text-xs text-netease-muted">已启用 {account.identities.length} 种身份 · 数据不会按邮箱自动合并</p></div>
+              <div className="min-w-0"><p className="truncate text-[15px] font-semibold text-white">{account.email || 'OpenMusic 账户'}</p><p className="mt-1 text-xs text-netease-muted">已绑定 {account.identities.length} 种登录方式</p></div>
             </div>
             <div className="space-y-2.5">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div><p className="text-sm font-medium text-white">音乐会员</p><p className="mt-1 text-xs text-netease-muted">新建房间时会自动使用已保存的会员账号</p></div>
+                  {accountDataLoading && <Loader2 className="h-4 w-4 animate-spin text-white/45" />}
+                </div>
+                <div className="space-y-2">
+                  {(Object.keys(musicPlatformLabels) as Array<keyof RoomMusicAccounts>).map((platform) => {
+                    const musicAccount = musicAccounts[platform];
+                    if (!musicAccount) return null;
+                    return (
+                      <div key={platform} className="flex items-center gap-3 rounded-xl border border-white/8 bg-black/10 px-3 py-2.5">
+                        <span className="min-w-0 flex-1"><span className="block text-sm text-white">{musicPlatformLabels[platform]}</span><span className="block truncate text-xs text-netease-muted">{musicAccount.nickname || '已登录'} · {musicAccount.hasSvip ? 'SVIP' : musicAccount.hasVip ? 'VIP' : '漫游'}</span></span>
+                        <button type="button" role="switch" aria-checked={musicAccount.shared} disabled={submitting || !musicAccount.hasVip} onClick={() => void toggleAccountMusic(platform, !musicAccount.shared)} className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-40 ${musicAccount.shared ? 'bg-emerald-500' : 'bg-white/20'}`}><span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${musicAccount.shared ? 'translate-x-5' : ''}`} /></button>
+                        <button type="button" disabled={submitting} onClick={() => void removeAccountMusic(platform)} className="rounded-lg p-1.5 text-white/35 transition hover:bg-red-400/10 hover:text-red-300 disabled:opacity-40" aria-label={`删除${musicPlatformLabels[platform]}会员信息`}><Trash2 className="h-4 w-4" /></button>
+                      </div>
+                    );
+                  })}
+                  {!accountDataLoading && !Object.values(musicAccounts).some(Boolean) && <p className="py-2 text-xs text-white/40">还没有保存音乐会员账号</p>}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.025] p-3.5">
+                <p className="text-sm font-medium text-white">我的房间</p>
+                <div className="mt-3 space-y-2">
+                  {accountRooms.length > 0 ? accountRooms.map((room) => <Link key={room.id} to={`/room/${room.id}`} onClick={() => setPanelOpen(false)} className="flex items-center justify-between rounded-xl border border-white/8 bg-black/10 px-3 py-2.5 transition hover:bg-white/[0.06]"><span className="min-w-0"><span className="block truncate text-sm text-white">{room.name}</span><span className="mt-0.5 block text-xs text-white/40">{room.id} · {room.userCount} 人在线</span></span><ChevronRight className="h-4 w-4 text-white/35" /></Link>) : <p className="py-2 text-xs text-white/40">还没有创建房间</p>}
+                </div>
+              </div>
               {account.hasPassword && (
                 <div className="flex items-center gap-3 rounded-2xl border border-white/8 bg-white/[0.025] p-3.5"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/[0.07]"><Mail className="h-4 w-4" /></span><span className="flex-1"><span className="block text-sm font-medium text-white">邮箱与密码</span><span className="block truncate text-xs text-netease-muted">{account.email}</span></span><span className="text-xs text-emerald-300/80">已启用</span></div>
               )}
-              {(['linuxdo', 'wechat', 'github'] as const).map((provider) => {
+              {(['wechat_scan', 'qq_scan', 'wechat', 'linuxdo', 'github'] as const).map((provider) => {
                 const identity = identityMap.get(provider);
                 const enabled = providers[provider];
                 if (!identity && !enabled) return null;
@@ -481,10 +664,10 @@ export default function AccountAccess({
                     <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-white">{providerMeta[provider].label}</span><span className="block truncate text-xs text-netease-muted">{identity?.username || (identity ? '已绑定' : '尚未绑定')}</span></span>
                     {identity ? (
                       <button type="button" disabled={submitting} onClick={() => void unbind(provider)} className="rounded-full p-2 text-white/28 transition hover:bg-red-400/10 hover:text-red-300 disabled:opacity-40" aria-label={`解绑 ${providerMeta[provider].label}`}><Unlink className="h-4 w-4" /></button>
-                    ) : provider === 'wechat' ? (
-                      <button type="button" onClick={() => setView('wechat-bind')} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
+                    ) : provider === 'wechat' || provider === 'wechat_scan' || provider === 'qq_scan' ? (
+                      <button type="button" onClick={() => setView(`${provider}-bind`)} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
                     ) : (
-                      <button type="button" onClick={() => startAccountOAuth(provider, 'bind')} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
+                      <button type="button" onClick={() => void startAccountOAuth(provider, 'bind').catch(error => setError(error.message))} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
                     )}
                   </div>
                 );

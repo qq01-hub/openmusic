@@ -1,11 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createPortal } from 'react-dom';
+import { FOLIA_SETTINGS_HOST_EVENT, FOLIA_SETTINGS_ATTACHED_EVENT, isFoliaSettingsSection, type FoliaSettingsHost } from './settingsBridge';
 import { useMotionValue } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import VisualizerRenderer from './upstream/src/components/visualizer/VisualizerRenderer';
 import { VISUALIZER_REGISTRY, getVisualizerRegistryEntry } from './upstream/src/components/visualizer/registry';
 import { VISUALIZER_BACKGROUND_REGISTRY, getVisualizerBackgroundRegistryEntry } from './upstream/src/components/visualizer/backgrounds/registry';
-import { backgroundTuningActions, backgroundTuningConfig, collectVisualizerTunings, getVisualizerTuning } from './upstream/src/components/visualizer/tuningRegistry';
+import { backgroundTuningActions, backgroundTuningConfig, collectVisualizerTunings, getVisualizerTuning, getBackgroundTunings } from './upstream/src/components/visualizer/tuningRegistry';
 import { useVisualizerSettingsStore } from './upstream/src/stores/useVisualizerSettingsStore';
 import { useFoliaAssets } from './useFoliaAssets';
 import { installGlobalVisualizerFrameRateLimiter, restoreGlobalVisualizerFrameRateLimiter } from './upstream/src/utils/frameRateLimiter';
@@ -20,13 +22,15 @@ import { Row, Select, Slider, Toggle } from './upstream/src/components/modal/set
 import { X } from 'lucide-react';
 import { getFoliaPortalRoot, setFoliaPortalRoot } from './upstream/src/utils/foliaPortal';
 import { parseFoliaLyrics } from './lyrics';
+import { findFoliaLyricIndex } from './lyricIndex';
+import { DEFAULT_FOLIA_THEME, normalizeFoliaTheme } from './parameters';
 import i18n from './upstream/src/i18n/config';
 import type { Line, Theme, SmartBeatMode, VisualizerFrameRate } from './upstream/src/types';
 import './upstream/src/index.css';
 import './stage.css';
 
 void i18n.changeLanguage('zh-CN');
-const initialTheme: Theme = { name: 'OpenMusic', backgroundColor: '#12141c', primaryColor: '#f4f2ea', accentColor: '#b7caff', secondaryColor: '#c9c2d6', fontStyle: 'sans', animationIntensity: 'normal' };
+const initialTheme = DEFAULT_FOLIA_THEME;
 const parentOrigin = location.origin;
 const send = (type: string, data = {}) => window.postMessage({ type, ...data }, parentOrigin);
 const readStoredNumber = (key: string, fallback: number, min: number, max: number): number => {
@@ -35,7 +39,15 @@ const readStoredNumber = (key: string, fallback: number, min: number, max: numbe
   return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
 };
 
-function Stage() {
+const visualizerModules = import.meta.glob('./upstream/src/components/visualizer/*/Visualizer*.tsx');
+export function preloadFoliaAssets() {
+  const mode = useVisualizerSettingsStore.getState().visualizerMode;
+  return Promise.all(Object.entries(visualizerModules)
+    .filter(([path]) => path.split('/').at(-2) === mode)
+    .map(([, load]) => load()));
+}
+
+function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
   const storedSettings = useVisualizerSettingsStore();
   const settings = storedSettings as typeof storedSettings & Record<string, unknown>;
   const assets = useFoliaAssets();
@@ -44,7 +56,7 @@ function Stage() {
   const [lines, setLines] = useState<Line[]>([]);
   const [status, setStatus] = useState('等待播放');
   const [customPalette, setCustomPalette] = useState<Theme>(() => {
-    try { return { ...initialTheme, ...JSON.parse(localStorage.getItem('openmusic:folia-theme') || '{}') }; }
+    try { return normalizeFoliaTheme(JSON.parse(localStorage.getItem('openmusic:folia-theme') || '{}')); }
     catch { return initialTheme; }
   });
   const [customTheme, setCustomTheme] = useState(() => localStorage.getItem('openmusic:folia-custom-theme') === 'on');
@@ -56,11 +68,68 @@ function Stage() {
     animationIntensity: customPalette.animationIntensity,
   }), [customTheme, customPalette, autoTheme]);
   const setTheme = (patch: Partial<Theme>, customColors = false) => {
-    setCustomPalette(previous => ({ ...previous, ...patch }));
+    setCustomPalette(previous => normalizeFoliaTheme(patch, previous));
     if (customColors) { setCustomTheme(true); localStorage.setItem('openmusic:folia-custom-theme', 'on'); }
   };
   const [panel, setPanel] = useState(false);
+  const [settingsHost, setSettingsHost] = useState<FoliaSettingsHost | null>(null);
+  const settingsHostRef = useRef<FoliaSettingsHost | null>(null);
+  const controlsOpen = panel || settingsHost !== null;
+  useEffect(() => { if (settingsHost) window.dispatchEvent(new CustomEvent(FOLIA_SETTINGS_ATTACHED_EVENT, { detail: settingsHost.content })); }, [settingsHost]);
+  const tuningDragging = useRef(false);
+  type TuningDraft = { key: string; patch: Record<string, unknown>; commit: (patch: object) => void };
+  const pendingTuning = useRef<TuningDraft | null>(null);
+  const [draftTuning, setDraftTuning] = useState<TuningDraft | null>(null);
+  const beginTuningDrag = useCallback(() => { tuningDragging.current = true; }, []);
+  const commitTuning = useCallback(() => {
+    tuningDragging.current = false;
+    const draft = pendingTuning.current;
+    pendingTuning.current = null;
+    if (draft) draft.commit(draft.patch);
+    setDraftTuning(null);
+  }, []);
+  useEffect(() => () => {
+    const draft = pendingTuning.current;
+    if (draft) draft.commit(draft.patch);
+  }, []);
+  const changeOwnedTuning = (key: string, commit: (patch: object) => void, patch: object) => {
+    if (!tuningDragging.current) { commit(patch); return; }
+    const held = pendingTuning.current;
+    const draft = { key, commit, patch: { ...(held?.key === key ? held.patch : {}), ...patch } };
+    pendingTuning.current = draft;
+    setDraftTuning(draft);
+  };
+  const panelSettings = draftTuning ? { ...settings, [draftTuning.key]: { ...(settings[draftTuning.key] as object), ...draftTuning.patch } } : settings;
   const [tab, setTab] = useState('lyrics');
+  useEffect(() => {
+    const attach = (event: Event) => {
+      const detail = (event as CustomEvent<Partial<FoliaSettingsHost> & { detach?: HTMLElement }>).detail;
+      if (detail?.detach) {
+        if (settingsHostRef.current?.content !== detail.detach) return;
+        commitTuning();
+        settingsHostRef.current = null;
+        setFoliaPortalRoot(stagePortal);
+        setSettingsHost(null);
+        return;
+      }
+      if (!(detail?.content instanceof HTMLElement) || !(detail.portal instanceof HTMLElement) || !isFoliaSettingsSection(detail.section)
+        || !detail.content.isConnected || !detail.portal.isConnected) return;
+      const contentRoot = detail.content.getRootNode();
+      const portalRoot = detail.portal.getRootNode();
+      if (!(contentRoot instanceof ShadowRoot) || !(portalRoot instanceof ShadowRoot)
+        || !contentRoot.host.hasAttribute('data-folia-settings-slot') || !portalRoot.host.hasAttribute('data-folia-settings-popup')) return;
+      commitTuning();
+      const next = { content: detail.content, portal: detail.portal, section: detail.section };
+      settingsHostRef.current = next;
+      setFoliaPortalRoot(next.portal);
+      setSettingsHost(next);
+      setTab(next.section);
+      setPanel(false);
+    };
+    window.addEventListener(FOLIA_SETTINGS_HOST_EVENT, attach);
+    return () => { window.removeEventListener(FOLIA_SETTINGS_HOST_EVENT, attach); setFoliaPortalRoot(stagePortal); };
+  }, [stagePortal, commitTuning]);
+
   const [index, setIndex] = useState(-1);
   const [paused, setPaused] = useState(true);
   const [scale, setScale] = useState(() => readStoredNumber('openmusic:folia-scale', 1, 0.5, 2));
@@ -78,7 +147,7 @@ function Stage() {
   state.current.panel = panel;
   useEffect(() => { localStorage.setItem('openmusic:folia-theme', JSON.stringify(customPalette)); }, [customPalette]);
   useEffect(() => { send('openmusic:folia-analysis', { enabled: settings.smartBeat.mode === 'on' }); }, [settings.smartBeat.mode]);
-  useEffect(() => { send('openmusic:folia-panel', { open: panel }); }, [panel]);
+  useEffect(() => { send('openmusic:folia-panel', { open: panel && !settingsHost }); }, [panel, settingsHost]);
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (event.source !== window || event.origin !== parentOrigin) return;
@@ -107,8 +176,7 @@ function Stage() {
         const time = Math.max(0, data.time + state.current.offset);
         currentTime.set(time); setPaused(!data.playing);
         tickBeatFx({ currentTime: data.time, paused: !data.playing, ended: false }, null);
-        let active = -1;
-        for (let i = 0; i < state.current.lines.length; i++) if (state.current.lines[i].startTime <= time) active = i; else break;
+        const active = findFoliaLyricIndex(state.current.lines, time);
         if (active !== state.current.index) { state.current.index = active; setIndex(active); }
         if (data.bands) {
           // 宿主频段为 0–1，原版主题按 0–255 读取，原始频谱无需换算
@@ -125,8 +193,8 @@ function Stage() {
           kinds: Uint8Array.from(events.map(beat => !beat.tone || beat.tone.low >= Math.max(beat.tone.mid, beat.tone.high) ? 0 : beat.tone.mid >= beat.tone.high ? 1 : 2)),
         });
       }
-      else if (data?.type === 'openmusic:folia-settings') setPanel(Boolean(data.open));
-      else if (data?.type === 'openmusic:folia-theme') setAutoTheme(previous => ({ ...previous, ...data.theme }));
+      else if (data?.type === 'openmusic:folia-settings') setPanel(location.pathname === '/vendor/folia/index.html' && Boolean(data.open));
+      else if (data?.type === 'openmusic:folia-theme') setAutoTheme(previous => normalizeFoliaTheme(data.theme, previous));
     };
     window.addEventListener('message', receive);
     const keydown = (event: KeyboardEvent) => {
@@ -145,19 +213,28 @@ function Stage() {
   const entry = getVisualizerRegistryEntry(mode);
   const tuning = getVisualizerTuning(mode);
   const backgroundMode = settings.visualizerBackgroundMode || 'latent';
+  const backgroundActions = backgroundTuningActions(settings);
+  const backgroundTuning = getBackgroundTunings().find(item => item.mode === backgroundMode);
+  if (backgroundTuning) {
+    const setter = settings[backgroundTuning.settingsSetterKey] as (patch: object) => void;
+    backgroundActions[backgroundMode] = { ...backgroundActions[backgroundMode], onTuningChange: (patch: object) => changeOwnedTuning(backgroundTuning.settingsKey, setter, patch) };
+  }
   const background = {
     mode: backgroundMode, ...backgroundTuningConfig(settings), customImage: assets.monetBackgroundImage,
     common: { opacity: settings.backgroundOpacity, useCoverColorBg: coverColorBg, disableGeometricBackground: settings.disableVisualizerGeometricBackground, disableVignette: settings.disableVisualizerVignette },
     url: { items: settings.urlBackgroundList, selectedId: settings.urlBackgroundSelectedId },
   };
   const actions = {
-    ...backgroundTuningActions(settings),
+    ...backgroundActions,
     common: { onOpacityChange: settings.handleSetBackgroundOpacity, onCoverColorChange: (enabled: boolean) => { setCoverColorBg(enabled); localStorage.setItem('openmusic:folia-cover-colors', enabled ? 'on' : 'off'); }, onDisableGeometricChange: settings.handleToggleDisableVisualizerGeometricBackground, onDisableVignetteChange: settings.handleToggleDisableVisualizerVignette },
     url: { onAdd: settings.handleAddUrlBackgroundItem, onUpdate: settings.handleUpdateUrlBackgroundItem, onDelete: settings.handleDeleteUrlBackgroundItem, onSelect: settings.handleSetUrlBackgroundSelectedId },
     customImage: { onUpload: settings.handleUploadMonetBackgroundImage, onClear: settings.handleClearMonetBackgroundImage, isLoading: assets.isLoadingMonetBackgroundImage },
   };
-  const changeTuning = (patch: object) => { if (tuning) (settings[tuning.settingsSetterKey] as ((patch: object) => void) | undefined)?.(patch); };
-  const close = () => setPanel(false);
+  const changeTuning = (patch: object) => {
+    const setter = tuning && settings[tuning.settingsSetterKey] as ((patch: object) => void) | undefined;
+    if (tuning && setter) changeOwnedTuning(tuning.settingsKey, setter, patch);
+  };
+  const close = () => { commitTuning(); setPanel(false); };
   const beatControls = (effects: readonly BeatEffectDef[] | undefined) => offeredBeatEffects(effects).map(effect => {
     const value = resolveBeatEffectSetting(settings.smartBeat, effect.id);
     return <div className="st-card folia-settings-group" key={effect.id}>
@@ -171,32 +248,21 @@ function Stage() {
     return () => setBeatFxLiveEffects({});
   }, [entry, backgroundMode, settings.smartBeat]);
   const controlTheme: Theme = { ...theme, primaryColor: '#f2f0e9', accentColor: '#00f5d4' };
-  return <SettingsKitThemeContext.Provider value={{ isDaylight: false, theme: controlTheme }}><main className="folia-stage" style={{ backgroundColor: theme.backgroundColor }}>
-    <VisualizerRenderer mode={mode} animateStyleSwitch currentTime={currentTime} currentLineIndex={index} lines={lines}
-      theme={theme} audioPower={audioPower} audioBands={bands} paused={paused} staticMode={staticMode}
-      songTitle={song.name} songArtist={song.artist} coverUrl={song.cover} duration={song.duration} seed={song.key}
-      visualizerOpacity={settings.visualizerOpacity}
-      background={background} visualizerTunings={collectVisualizerTunings(settings)} onVisualizerTuningChange={changeTuning}
-      lyricsFontScale={scale} showSubtitleTranslation={translation} hideTranslationSubtitle={!translation}
-      showText showHarmonySubtitle isPlayerChromeHidden={!panel} isPanelOpen={panel}
-      cappellaCustomEmojiImages={assets.cappellaCustomEmojiImages} cappellaCustomAvatarImages={assets.cappellaCustomAvatarImages}
-      monetPortraitImage={assets.monetPortraitImage} onBack={close} onLyricLineSeek={time => send('openmusic:folia-seek', { time: Math.max(0, time - offset) })} />
-    {!lines.length && <div className="folia-empty" role="status"><p>{song.name || '音乐即将开始'}</p><span>{status}</span></div>}
-    {panel && <aside className="folia-controls st-window" aria-labelledby="folia-controls-title" style={{ ...settingsTokens(false, controlTheme), ...kitMotionTokens(staticMode), '--text-primary': '#f2f0e9' } as React.CSSProperties}>
-      <header className="folia-controls-header"><div><h2 id="folia-controls-title">视觉控制台</h2><p>FOLIA VISUALS · 歌词与背景调节</p></div><button type="button" className="folia-controls-close" aria-label="关闭视觉控制台" onClick={close}><X size={16} /></button></header>
-      <nav aria-label="调节分类">{[['lyrics', '歌词'], ['background', '背景'], ['appearance', '外观']].map(([key, label]) => <button key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}</nav>
+  const controls = controlsOpen ? <aside className={`folia-controls st-window${settingsHost ? ' folia-controls--embedded' : ''}`} aria-label="Folia 设置" style={{ ...settingsTokens(false, controlTheme), ...kitMotionTokens(staticMode), '--text-primary': '#f2f0e9' } as React.CSSProperties}>
+      {!settingsHost && <header className="folia-controls-header"><div><h2 id="folia-controls-title">视觉控制台</h2><p>FOLIA VISUALS · 歌词与背景调节</p></div><button type="button" className="folia-controls-close" aria-label="关闭视觉控制台" onClick={close}><X size={16} /></button></header>}
+      {!settingsHost && <nav aria-label="调节分类">{[['lyrics', '歌词'], ['background', '背景'], ['appearance', '外观']].map(([key, label]) => <button key={key} aria-pressed={tab === key} onClick={() => setTab(key)}>{label}</button>)}</nav>}
       <div className="folia-controls-body">
         {tab === 'lyrics' && <>
           <div className="st-card folia-settings-group"><Row label="歌词主题"><Select value={mode} onChange={value => settings.handleSetVisualizerMode(value, { notify: false })} options={VISUALIZER_REGISTRY.map(item => ({ value: item.mode, label: t(item.labelKey, item.labelFallback) }))} /></Row></div>
           <p className="folia-status">{status}</p>
           {beatControls(entry.beatEffects)}
-          {entry.renderSettingsPanel?.({ t, isDaylight: false, theme: controlTheme, controlCardBg: 'bg-white/5', rangeInputClass: 'w-full', tuning: tuning ? settings[tuning.settingsKey] : undefined, onTuningChange: changeTuning, settings: { ...settings, ...assets } })}
+          {entry.renderSettingsPanel?.({ t, isDaylight: false, theme: controlTheme, controlCardBg: 'bg-white/5', rangeInputClass: 'w-full', tuning: tuning ? panelSettings[tuning.settingsKey] : undefined, onTuningChange: changeTuning, onSliderPointerDown: beginTuningDrag, onSliderCommit: commitTuning, settings: { ...panelSettings, ...assets } })}
           {tuning?.settingsResetterKey && <button className="folia-reset" onClick={() => (settings[tuning.settingsResetterKey!] as (() => void) | undefined)?.()}>重置当前主题参数</button>}
         </>}
         {tab === 'background' && <>
           <div className="st-card folia-settings-group"><Row label="背景"><Select value={backgroundMode} onChange={value => settings.handleSetVisualizerBackgroundMode(value)} options={VISUALIZER_BACKGROUND_REGISTRY.map(item => ({ value: item.mode, label: t(item.labelKey, item.labelFallback) }))} /></Row></div>
           {beatControls(getVisualizerBackgroundRegistryEntry(backgroundMode).beatEffects)}
-          {getVisualizerBackgroundRegistryEntry(backgroundMode).renderSettingsPanel?.({ config: background, actions, t, isDaylight: false, theme: controlTheme, controlCardBg: 'bg-white/5', rangeInputClass: 'w-full' })}
+          {getVisualizerBackgroundRegistryEntry(backgroundMode).renderSettingsPanel?.({ config: { ...background, ...backgroundTuningConfig(panelSettings) }, actions, t, isDaylight: false, theme: controlTheme, controlCardBg: 'bg-white/5', rangeInputClass: 'w-full', onSliderPointerDown: beginTuningDrag, onSliderCommit: commitTuning })}
           <button className="folia-reset" onClick={() => getVisualizerBackgroundRegistryEntry(backgroundMode).resetSettings?.(actions)}>重置当前背景参数</button>
         </>}
         {tab === 'appearance' && <>
@@ -212,14 +278,38 @@ function Stage() {
             <Row label="动画强度"><Select value={theme.animationIntensity} onChange={value => setTheme({ animationIntensity: value })} options={[{ value: 'calm', label: '柔和' }, { value: 'normal', label: '标准' }, { value: 'chaotic', label: '强烈' }]} /></Row>
             <Row label="字体"><Select value={theme.fontStyle} onChange={value => setTheme({ fontStyle: value })} options={[{ value: 'sans', label: '无衬线' }, { value: 'serif', label: '衬线' }, { value: 'mono', label: '等宽' }]} /></Row>
             <Row label="字重"><Slider stacked min={300} max={900} step={100} value={theme.fontWeight || 600} format={String} onChange={value => setTheme({ fontWeight: value })} /></Row>
-            <Row label="帧率"><Select value={String(settings.visualizerFrameRate)} onChange={value => settings.handleSetVisualizerFrameRate(value === 'off' ? 'off' : Number(value) as VisualizerFrameRate)} options={[{ value: '60', label: '60' }, { value: '90', label: '90' }, { value: '120', label: '120' }, { value: 'off', label: '跟随屏幕' }]} /></Row>
+            <Row label="帧率"><Select value={String(settings.visualizerFrameRate)} onChange={value => settings.handleSetVisualizerFrameRate(value === 'off' ? 'off' : Number(value) as VisualizerFrameRate)} options={[{ value: '30', label: '30 · 省电' }, { value: '60', label: '60' }, { value: '90', label: '90' }, { value: '120', label: '120' }, { value: 'off', label: '跟随屏幕' }]} /></Row>
             {(['backgroundColor', 'primaryColor', 'accentColor', 'secondaryColor'] as const).map((key, index) => <Row key={key} label={['背景颜色', '歌词颜色', '强调颜色', '辅助颜色'][index]}><input aria-label={['背景颜色', '歌词颜色', '强调颜色', '辅助颜色'][index]} type="color" value={theme[key]} onChange={event => setTheme({ ...theme, [key]: event.target.value }, true)} /></Row>)}
           </div>
           <footer className="folia-source"><span>Folia · AGPL-3.0</span><a href="/vendor/folia/LICENSE.txt" target="_blank" rel="noreferrer">许可证</a><a href="/vendor/folia/source.zip" download>本版本舞台源码</a></footer>
         </>}
       </div>
-    </aside>}
+    </aside> : null;
+  return <SettingsKitThemeContext.Provider value={{ isDaylight: false, theme: controlTheme }}><main className="folia-stage" style={{ backgroundColor: theme.backgroundColor }}>
+    <VisualizerBoundary resetKey={`${mode}:${backgroundMode}`} fallback={<div className="folia-safe-stage"><p>{song.name}</p><strong>{lines[index]?.fullText || '音乐继续播放'}</strong><span>当前主题暂不可用，请在设置中切换主题</span></div>}>
+    <VisualizerRenderer mode={mode} animateStyleSwitch={settings.visualizerFrameRate !== 30} currentTime={currentTime} currentLineIndex={index} lines={lines}
+      theme={theme} audioPower={audioPower} audioBands={bands} paused={paused} staticMode={staticMode}
+      songTitle={song.name} songArtist={song.artist} coverUrl={song.cover} duration={song.duration} seed={song.key}
+      visualizerOpacity={settings.visualizerOpacity}
+      background={background} visualizerTunings={collectVisualizerTunings(settings)} onVisualizerTuningChange={changeTuning}
+      lyricsFontScale={scale} showSubtitleTranslation={translation} hideTranslationSubtitle={!translation}
+      showText showHarmonySubtitle isPlayerChromeHidden={!controlsOpen} isPanelOpen={controlsOpen}
+      cappellaCustomEmojiImages={assets.cappellaCustomEmojiImages} cappellaCustomAvatarImages={assets.cappellaCustomAvatarImages}
+      monetPortraitImage={assets.monetPortraitImage} onBack={close} onLyricLineSeek={time => send('openmusic:folia-seek', { time: Math.max(0, time - offset) })} />
+    </VisualizerBoundary>
+    {!lines.length && <div className="folia-empty" role="status"><p>{song.name || '音乐即将开始'}</p><span>{status}</span></div>}
+    {settingsHost ? createPortal(<SheetLayerContext.Provider value={settingsHost.portal}>{controls}</SheetLayerContext.Provider>, settingsHost.content) : panel ? controls : null}
   </main></SettingsKitThemeContext.Provider>;
+}
+
+class VisualizerBoundary extends React.Component<{ children: React.ReactNode; fallback: React.ReactNode; resetKey: string }, { failed: boolean; resetKey: string }> {
+  state = { failed: false, resetKey: this.props.resetKey };
+  static getDerivedStateFromProps(props: { resetKey: string }, state: { resetKey: string }) {
+    return props.resetKey !== state.resetKey ? { failed: false, resetKey: props.resetKey } : null;
+  }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error: Error) { console.warn('Folia 主题渲染失败:', error.name); }
+  render() { return this.state.failed ? this.props.fallback : this.props.children; }
 }
 
 class StageBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
@@ -238,7 +328,7 @@ export function mountFolia(container: Element | DocumentFragment) {
   container.append(stageContainer, portal);
   setFoliaPortalRoot(portal);
   const root = createRoot(stageContainer);
-  root.render(<SheetLayerContext.Provider value={portal}><StageBoundary><Stage /></StageBoundary></SheetLayerContext.Provider>);
+  root.render(<SheetLayerContext.Provider value={portal}><StageBoundary><Stage stagePortal={portal} /></StageBoundary></SheetLayerContext.Provider>);
   return () => { root.unmount(); restoreGlobalVisualizerFrameRateLimiter(); setFoliaPortalRoot(null); stageContainer.remove(); portal.remove(); };
 }
 if (location.pathname === '/vendor/folia/index.html') mountFolia(document.getElementById('root')!);

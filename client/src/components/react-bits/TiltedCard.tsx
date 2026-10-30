@@ -54,6 +54,7 @@ export default function TiltedCard({
     el.style.setProperty('--tc-scale', '1');
     el.style.setProperty('--tc-mx', '50%');
     el.style.setProperty('--tc-my', '50%');
+    el.style.willChange = '';
   }, []);
 
   const onMove: MouseEventHandler<HTMLButtonElement> = (e) => {
@@ -65,6 +66,7 @@ export default function TiltedCard({
     const py = (e.clientY - rect.top) / rect.height;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
+      el.style.willChange = 'transform';
       el.style.setProperty('--tc-rx', `${((0.5 - py) * rotateAmplitude).toFixed(2)}deg`);
       el.style.setProperty('--tc-ry', `${((px - 0.5) * rotateAmplitude * 1.15).toFixed(2)}deg`);
       el.style.setProperty('--tc-scale', String(scaleOnHover));
@@ -84,7 +86,6 @@ export default function TiltedCard({
           'perspective(900px) rotateX(var(--tc-rx, 0deg)) rotateY(var(--tc-ry, 0deg)) scale(var(--tc-scale, 1))',
         transition: 'transform 0.18s ease-out, border-color 0.3s ease, box-shadow 0.3s ease',
         transformStyle: 'preserve-3d',
-        willChange: 'transform',
       };
 
   const buttonProps: ButtonHTMLAttributes<HTMLButtonElement> = {

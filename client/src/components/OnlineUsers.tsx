@@ -13,6 +13,9 @@ import Tooltip from "./Tooltip";
 import TruncateTip from "./TruncateTip";
 import UserRoleMarks from "./UserRoleMarks";
 import type { RoomUser } from "../types";
+import { useScrollToTopOnPageChange } from "../hooks/useScrollToTopOnPageChange";
+
+const USERS_PAGE_SIZE = 50;
 
 interface Props {
   users: RoomUser[];
@@ -30,14 +33,15 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
   const isOwner = useRoomStore((s) => s.isOwner);
   const isAdmin = useRoomStore((s) => s.isAdmin);
   const canModerate = isOwner || isAdmin;
+  const hideIpLocation = useRoomStore((s) => Boolean(s.room?.hideIpLocation));
   const adminIds = useRoomStore((s) => s.room?.adminIds) || [];
   const autoPromotedAdminIds = useRoomStore((s) => s.room?.autoPromotedAdminIds) || [];
   const ownerId = useRoomStore((s) => s.room?.ownerId) || null;
   const userNicknames = useRoomStore((s) => s.room?.userNicknames) || {};
   const nickname = useRoomStore((s) => s.nickname);
-  const setNickname = useRoomStore((s) => s.setNickname);
   const { renameUser, kickUser, setRoomAdmin, setUserAvatar } = useSocket();
   const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState(nickname);
   const [saving, setSaving] = useState(false);
@@ -57,6 +61,7 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const getUserAvatar = (userId: string) => {
     if (userId === mySocketId) return resolveRoomAvatarUrl(avatar_url, userAvatarUrls[userId]);
@@ -96,6 +101,18 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
       return a.joinedAt - b.joinedAt;
     });
   }, [visibleUsers, mySocketId, creatorId, adminIds, userNicknames, isOwner]);
+
+  const totalPages = Math.max(1, Math.ceil(orderedUsers.length / USERS_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedUsers = orderedUsers.slice(
+    (currentPage - 1) * USERS_PAGE_SIZE,
+    currentPage * USERS_PAGE_SIZE,
+  );
+  useScrollToTopOnPageChange(currentPage, listRef);
+
+  useEffect(() => {
+    setPage((current) => open ? Math.min(current, totalPages) : 1);
+  }, [open, totalPages]);
 
   useEffect(() => {
     if (!open) return;
@@ -137,7 +154,6 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
     setError("");
     const res = await renameUser(nextName);
     if (res.success) {
-      setNickname(nextName);
       setEditing(false);
     } else {
       setError(res.error || "改名失败");
@@ -348,8 +364,8 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
             </button>
           </div>
 
-          <div className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
-            {orderedUsers.map((user) => {
+          <div ref={listRef} className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
+            {pagedUsers.map((user) => {
               const isMe = user.id === mySocketId;
               const isRoomCreator = Boolean(creatorId && user.id === creatorId);
               const isAppointedAdmin = adminIds.includes(user.id);
@@ -445,7 +461,7 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
                             <span>{formatStayDuration(user.joinedAt, now)}</span>
                           </span>
                         )}
-                        {!user.offline && (
+                        {!user.offline && !hideIpLocation && (
                           <span className="inline-flex min-w-0 items-center gap-0.5">
                             <MapPin className="h-3 w-3 flex-shrink-0" />
                             <span className="truncate">{formatDisplayLocation(user.location)}</span>
@@ -533,6 +549,27 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
             })}
           </div>
 
+          {totalPages > 1 && (
+            <div className="mt-2 flex items-center justify-between gap-2 border-t border-white/10 pt-2 text-xs text-netease-muted">
+              <button
+                type="button"
+                disabled={currentPage <= 1}
+                onClick={() => setPage(currentPage - 1)}
+                className="rounded-lg px-2 py-1 hover:bg-white/10 hover:text-white disabled:opacity-30"
+              >
+                上一页
+              </button>
+              <span>{currentPage} / {totalPages}</span>
+              <button
+                type="button"
+                disabled={currentPage >= totalPages}
+                onClick={() => setPage(currentPage + 1)}
+                className="rounded-lg px-2 py-1 hover:bg-white/10 hover:text-white disabled:opacity-30"
+              >
+                下一页
+              </button>
+            </div>
+          )}
           {error && <p className="mt-2 text-xs text-netease-red">{error}</p>}
         </div>
       )}

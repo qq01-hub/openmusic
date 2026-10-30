@@ -36,17 +36,19 @@ function StaticGlow() {
 }
 
 /** 首页背景：React Bits Aurora。 */
-export default function HomeAuroraBackdrop({ paused = false }: { paused?: boolean }) {
+export default function HomeAuroraBackdrop({ paused = false, roomCount = 0 }: { paused?: boolean; roomCount?: number }) {
   const [enabled, setEnabled] = useState(false);
   const handleUnavailable = useCallback(() => setEnabled(false), []);
+  const overloaded = roomCount > 40;
 
   useEffect(() => {
-    if (!paused) setEnabled(canUseAurora());
-  }, [paused]);
+    if (!paused && !overloaded) setEnabled(canUseAurora());
+    else setEnabled(false);
+  }, [overloaded, paused]);
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-      {enabled && !paused ? (
+      {enabled && !paused && !overloaded ? (
         <Suspense fallback={<StaticGlow />}>
           <div className="absolute inset-0 opacity-[0.68]">
             <Aurora colorStops={BRAND_STOPS} amplitude={1.05} blend={0.62} speed={0.55} onUnavailable={handleUnavailable} />

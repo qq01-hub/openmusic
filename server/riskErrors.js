@@ -16,6 +16,14 @@ const REASONS = {
   ACCOUNT_AUTH_REQUIRED: ['session', '账户未登录'],
   ACCOUNT_IDENTITY_MISMATCH: ['session', '账户身份已变化'],
   ACCOUNT_RATE_LIMITED: ['rate_limit', '账户请求额度已达上限'],
+  MEDIA_DNS_FAILED: ['upstream', '媒体代理域名解析失败'],
+  MEDIA_CONNECT_FAILED: ['upstream', '媒体代理连接上游失败'],
+  MEDIA_TLS_FAILED: ['upstream', '媒体代理上游证书或 TLS 校验失败'],
+  MEDIA_TIMEOUT: ['upstream', '媒体代理请求上游超时'],
+  MEDIA_REDIRECT_FAILED: ['upstream', '媒体代理上游重定向失败'],
+  MEDIA_UPSTREAM_HTTP_ERROR: ['upstream', '上游媒体返回 HTTP 错误'],
+  MEDIA_STREAM_FAILED: ['upstream', '媒体代理读取上游响应失败'],
+  MEDIA_PROXY_FAILED: ['upstream', '媒体代理失败'],
 };
 const MESSAGES = new Map([
   ['no url', 'MUSIC_URL_UNAVAILABLE'], ['no cover', 'COVER_UNAVAILABLE'],

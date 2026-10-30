@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
+import FoliaSettingsSlot from './FoliaSettingsSlot';
 import type { RoomVisualFxSettings, RoomVisualMode } from '../../lib/roomVisualPreset';
 import { DEFAULT_ROOM_VISUAL_FX, defaultLyricFxPatch } from '../../lib/roomVisualPreset';
 import { defaultLyricTypographyPatch } from '../../lib/lyricStyle';
@@ -17,7 +18,7 @@ import {
   subscribeGalaxyHandGestureStartup,
 } from '../galaxy/lib/galaxyHandGestureStartup';
 
-export type ImmersiveFxTab = 'preset' | 'appearance' | 'lyrics' | 'motion' | 'advanced';
+export type ImmersiveFxTab = 'preset' | 'appearance' | 'lyrics' | 'motion' | 'advanced' | 'folia-theme' | 'folia-background' | 'folia-options';
 
 const TAB_META: { id: ImmersiveFxTab; label: string }[] = [
   { id: 'preset', label: '预设' },
@@ -25,6 +26,13 @@ const TAB_META: { id: ImmersiveFxTab; label: string }[] = [
   { id: 'lyrics', label: '歌词' },
   { id: 'motion', label: '动态' },
   { id: 'advanced', label: '高级' },
+];
+
+const FOLIA_TABS: { id: ImmersiveFxTab; label: string }[] = [
+  { id: 'preset', label: '预设' },
+  { id: 'folia-theme', label: '主题' },
+  { id: 'folia-background', label: '背景' },
+  { id: 'folia-options', label: 'Folia 设置' },
 ];
 
 interface Props {
@@ -197,11 +205,14 @@ export default function ImmersiveFxSettingsPanel({
       const raw = sessionStorage.getItem(TAB_KEY);
       if (!raw) return 'preset';
       const as = String(raw) as ImmersiveFxTab;
-      return (TAB_META.map((t) => t.id) as string[]).includes(as) ? as : 'preset';
+      return ([...TAB_META, ...FOLIA_TABS].map((t) => t.id) as string[]).includes(as) ? as : 'preset';
     } catch {
       return 'preset';
     }
   });
+  const tabs = visualMode === 'folia' ? FOLIA_TABS : TAB_META;
+  const activeTab = tabs.some(item => item.id === tab) ? tab : 'preset';
+  useEffect(() => { if (tab !== activeTab) setTab(activeTab); }, [tab, activeTab]);
   const [draggingKey, setDraggingKey] = useState<string | null>(null);
   const [gestureStartup, setGestureStartup] = useState(() => ({
     phase: galaxyHandGestureStartup.phase,
@@ -249,11 +260,11 @@ export default function ImmersiveFxSettingsPanel({
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(TAB_KEY, tab);
+      sessionStorage.setItem(TAB_KEY, activeTab);
     } catch {
       // ignore
     }
-  }, [tab]);
+  }, [activeTab]);
 
   useEffect(() => {
     try {
@@ -292,14 +303,15 @@ export default function ImmersiveFxSettingsPanel({
 
   return (
     <div className="fx-panel-layout">
-      <div className="fx-panel-tabs" role="tablist" aria-label="视觉设置分类">
-        {TAB_META.map((item) => (
+      <div className="fx-panel-toolbar">
+      <div className="fx-panel-tabs" style={{ gridTemplateColumns: `repeat(${tabs.length}, minmax(0, 1fr))` }} role="tablist" aria-label="视觉设置分类">
+        {tabs.map((item) => (
           <button
             key={item.id}
             type="button"
             role="tab"
-            aria-selected={tab === item.id}
-            className={tab === item.id ? 'active' : ''}
+            aria-selected={activeTab === item.id}
+            className={activeTab === item.id ? 'active' : ''}
             onClick={() => setTab(item.id)}
           >
             {item.label}
@@ -307,11 +319,13 @@ export default function ImmersiveFxSettingsPanel({
         ))}
       </div>
 
+      </div>
+
       <div className="fx-tab-scroll">
-        {visualMode === 'folia' && <div className="px-4 py-3">
-          <button type="button" className="w-full rounded-xl bg-white/15 px-4 py-3 text-white" onClick={() => window.dispatchEvent(new Event('openmusic:folia-open-settings'))}>打开 Folia 歌词、背景与动画调节</button>
+        {visualMode === 'folia' && activeTab !== 'preset' && <div className="fx-tab-page active" role="tabpanel" aria-label={tabs.find(item => item.id === activeTab)?.label}>
+          <FoliaSettingsSlot section={activeTab === 'folia-theme' ? 'lyrics' : activeTab === 'folia-background' ? 'background' : 'appearance'} />
         </div>}
-        {tab === 'preset' ? (
+        {activeTab === 'preset' ? (
           <div className="fx-tab-page active" role="tabpanel">
             <FxSectionLabel>视觉预设</FxSectionLabel>
             <div className={dragging ? 'pointer-events-none invisible' : ''}>
@@ -320,7 +334,7 @@ export default function ImmersiveFxSettingsPanel({
           </div>
         ) : null}
 
-        {tab === 'appearance' ? (
+        {activeTab === 'appearance' ? (
           <div className="fx-tab-page active" role="tabpanel">
             <ImmersiveAppearanceControls
               value={value}
@@ -331,7 +345,7 @@ export default function ImmersiveFxSettingsPanel({
           </div>
         ) : null}
 
-        {tab === 'lyrics' ? (
+        {activeTab === 'lyrics' ? (
           <div className="fx-tab-page active" role="tabpanel">
             <FxFold
               title="歌词开关"
@@ -489,7 +503,7 @@ export default function ImmersiveFxSettingsPanel({
           </div>
         ) : null}
 
-        {tab === 'motion' ? (
+        {activeTab === 'motion' ? (
           <div className="fx-tab-page active" role="tabpanel">
             {visualMode === 'topography-we' ? (
               <FxFold
@@ -784,7 +798,7 @@ export default function ImmersiveFxSettingsPanel({
           </div>
         ) : null}
 
-        {tab === 'advanced' ? (
+        {activeTab === 'advanced' ? (
           <div className="fx-tab-page active" role="tabpanel">
             <FxFold
               title="歌词故障"

@@ -21,6 +21,7 @@ export function setAudioBufferEndHandler(handler: ((audio: HTMLAudioElement) => 
 }
 
 export function isAudioBuffering(audio: HTMLAudioElement): boolean {
+  if (audio.seeking) return true;
   if (waitingFlag) return true;
   return !audio.paused
     && !audio.ended
@@ -35,9 +36,13 @@ export function attachAudioBufferingListeners(audio: HTMLAudioElement): void {
 
   audio.addEventListener('waiting', onBufferStart);
   audio.addEventListener('stalled', onBufferStart);
+  audio.addEventListener('seeking', onBufferStart);
+  audio.addEventListener('seeked', () => {
+    if (!audio.seeking && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) onBufferEnd(audio);
+  });
   audio.addEventListener('playing', () => onBufferEnd(audio));
   audio.addEventListener('canplay', () => {
-    if (!audio.paused) onBufferEnd(audio);
+    if (!audio.paused && !audio.seeking) onBufferEnd(audio);
   });
 }
 

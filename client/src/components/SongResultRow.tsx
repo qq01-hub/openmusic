@@ -1,5 +1,5 @@
 import { memo, useCallback } from 'react';
-import { Plus, Loader2, Play, Pause, Share2, UserRound } from 'lucide-react';
+import { Plus, Minus, Loader2, Play, Pause, Share2, UserRound, Zap } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
 import SongCover from './SongCover';
@@ -20,6 +20,9 @@ interface Props {
   favorited: boolean;
   glassRow?: boolean;
   onAdd: (song: SearchResult) => void;
+  onRemove?: (song: SearchResult) => void;
+  cancelDisabledReason?: string;
+  onAddNext?: (song: SearchResult) => void;
   /** 分享到当前房间聊天（音乐卡片） */
   onShare?: (song: SearchResult) => void;
   onArtistClick?: (artist: string) => void;
@@ -34,6 +37,9 @@ function SongResultRow({
   favorited,
   glassRow = false,
   onAdd,
+  onRemove,
+  cancelDisabledReason,
+  onAddNext,
   onShare,
   onArtistClick,
 }: Props) {
@@ -55,6 +61,13 @@ function SongResultRow({
     onAdd(song);
   }, [key, onAdd, preview.key, song]);
 
+  const handleRemove = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (addingId === key || cancelDisabledReason) return;
+    if (preview.key === key) stopSongPreview({ resumeRoom: true });
+    onRemove?.(song);
+  }, [addingId, cancelDisabledReason, key, onRemove, preview.key, song]);
+
   const handleShare = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
     onShare?.(song);
@@ -65,7 +78,7 @@ function SongResultRow({
       className={`group flex cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
         glassRow ? immersiveGlassListRow : 'hover:bg-netease-card/80 active:bg-netease-card/80'
       }`}
-      onDoubleClick={() => handleAdd()}
+      onDoubleClick={() => { if (!inQueue && addingId !== key) handleAdd(); }}
     >
       <SongCover
         song={song}
@@ -132,16 +145,35 @@ function SongResultRow({
           )}
         </button>
       </Tooltip>
+      {onAddNext && (
+        <Tooltip content="点歌并插队到下一首">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (preview.key === key) stopSongPreview({ resumeRoom: true });
+              onAddNext(song);
+            }}
+            disabled={addingId === key}
+            aria-label="点歌并插队"
+            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-amber-400 transition-colors hover:bg-amber-400/10 disabled:opacity-50 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+          >
+            <Zap className="h-4 w-4" />
+          </button>
+        </Tooltip>
+      )}
+      <Tooltip content={inQueue && onRemove ? cancelDisabledReason || '取消点歌' : '点歌到房间'}>
       <button
         type="button"
-        onClick={handleAdd}
-        disabled={addingId === key}
-        aria-label="点歌"
-        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-netease-red/10 text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50 sm:h-auto sm:w-auto sm:gap-1 sm:px-2.5 sm:py-1 sm:text-xs sm:font-medium ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+        onClick={inQueue && onRemove ? handleRemove : handleAdd}
+        disabled={addingId === key || Boolean(inQueue && onRemove && cancelDisabledReason)}
+        aria-label={inQueue && onRemove ? '取消点歌' : '点歌'}
+        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-all disabled:opacity-50 sm:h-auto sm:w-auto sm:gap-1 sm:px-2.5 sm:py-1 sm:text-xs sm:font-medium ${inQueue && onRemove ? 'bg-white/10 text-white/75 hover:bg-rose-400/20 hover:text-rose-200' : 'bg-netease-red/10 text-netease-red hover:bg-netease-red hover:text-white'} ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
       >
-        {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-        <span className="hidden sm:inline">点歌</span>
+        {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : inQueue && onRemove ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+        <span className="hidden sm:inline">{inQueue && onRemove ? '取消' : '点歌'}</span>
       </button>
+      </Tooltip>
     </div>
   );
 }
@@ -154,7 +186,10 @@ export default memo(SongResultRow, (prev, next) => (
   && prev.favorited === next.favorited
   && prev.glassRow === next.glassRow
   && prev.onAdd === next.onAdd
+  && prev.onAddNext === next.onAddNext
   && prev.onShare === next.onShare
+  && prev.onRemove === next.onRemove
+  && prev.cancelDisabledReason === next.cancelDisabledReason
   && prev.onArtistClick === next.onArtistClick
   && songKey(prev.song) === songKey(next.song)
   && prev.song.name === next.song.name

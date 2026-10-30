@@ -21,7 +21,7 @@ export const AUDIT_PAGE_SIZE = 10;
  */
 export const AUDIT_ACTION_OPTIONS: { value: string; label: string }[] = [
   { value: 'auth', label: '登录 / 退出' },
-  { value: 'oauth', label: '账号绑定' },
+  { value: 'oauth', label: '第三方授权 / 绑定' },
   { value: 'account', label: '账号与入口' },
   { value: 'risk', label: '风控处置' },
   { value: 'config', label: '系统配置' },

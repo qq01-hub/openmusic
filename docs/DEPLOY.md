@@ -100,7 +100,7 @@ npm start   # http://0.0.0.0:4000
 | `CLIENT_ID_SECRET` | 生产必填 | 设备身份与配置加密引导密钥，向导自动生成且必须稳定保存，不是向前端下发的登录私钥 |
 | `TRUST_PROXY` | 推荐 | 反代后设为 `1`；仅当 TCP 对端在 `TRUSTED_PROXY_IPS` 中时才采信转发 IP 头 |
 | `TRUSTED_PROXY_IPS` | 反代必填 | 逗号分隔的反向代理 TCP 地址；本机 Nginx 默认可用 `127.0.0.1,::1`，容器部署须填网关/代理地址 |
-| `CLIENT_IP_HEADER` | 有 CDN | Cloudflare：`CF-Connecting-IP`；EdgeOne：`iqp` |
+| `CLIENT_IP_HEADER` | 有 CDN | Cloudflare：`CF-Connecting-IP`；EdgeOne：`EO-Connecting-IP`，`iqp` 仅为旧版自定义回源头 |
 | `REDIS_URL` | 必需 | Redis 连接串（或分项 `REDIS_HOST` 等） |
 
 生产最小配置示例：
@@ -119,7 +119,42 @@ Meting / 房间凭证密钥等由向导或管理后台配置。使用汽水音�
 
 普通用户访问令牌固定 3 天，refresh 凭证首次登录起 30 天绝对有效，均通过 HttpOnly Cookie 传递，原 `ACCOUNT_SESSION_TTL_SEC` 不再调整登录期限，旧 `API_SIGN_REQUIRED` 与 `ALLOW_INSECURE_HTTP_API` 不再控制账户业务授权，也不能开放匿名接口
 
+微信扫码登录与 QQ扫码登录复用后台接口盒子的 ID 和 API Key，在「系统设置 → 身份登录」分别开关，管理员扫码身份在账号设置中绑定，前台用户在账户与安全中绑定，新微信与原微信文件传输助手身份独立，配置、验收和回退见 [扫码登录说明](SOCIAL_SCAN_LOGIN.md)
+
+自部署若不需要普通用户登录，可在管理后台「系统设置 → 身份登录」开启「允许匿名登录」并保存，默认关闭，保存后立即影响后续业务请求，无需修改 `.env` 或重启服务
+
+开启后访客可直接创建和加入房间、点歌、播放及收藏，匿名收藏仍以 Redis 为权威存储，通过当前设备 HttpOnly Cookie 恢复；清除 Cookie 或换设备不会自动找回匿名身份，跨设备使用请登录账户，现有游客收藏与房间继续沿用账户登录迁移链路
+
+匿名访问仍受房间权限、站点封禁、风控额度和异常访问验证约束，账户专属接口及管理员后台仍须登录；关闭开关后匿名 HTTP 业务请求立即被拒绝，已有 Socket 在下一次操作或最长 30 秒的会话检查时断开
+
+发布时先升级并重启兼容服务端，再发布前端资源；旧客户端继续要求登录，新增 `anonymousAllowed` 响应字段不改变旧客户端认证语义，无 Redis 数据格式迁移，回退前先关闭开关，再恢复上一版配套服务端与前端
+
 登录私钥由服务端生成并加密保存到 Redis，必须备份既有凭证加密主密钥、稳定的 `CLIENT_ID_SECRET`、运行时配置与 Redis，不能只备份公钥或在重启时重建已有密钥，Web 与服务端需配套升级，升级后旧账户会话需要重新登录
+
+### EdgeOne 真实 IP 与风控统计
+
+EdgeOne 默认通过 `EO-Connecting-IP` 传递与边缘节点建连的客户端地址，`iqp` 并非默认头
+经 EdgeOne → Nginx → Node 回源时，Nginx 的 `$remote_addr` 通常是边缘节点地址，不能直接作为用户地址统计
+
+在服务端启动配置中设置 `CLIENT_IP_HEADER=EO-Connecting-IP`，同时开启 `TRUST_PROXY=1`，将 Node 实际看到的 Nginx TCP 对端加入 `TRUSTED_PROXY_IPS`
+该配置属于基础设施信任边界，当前管理后台不提供修改入口
+Docker 部署填写实际网关或代理地址，不能直接照抄本机回环地址，也不要将所有地址设为可信
+
+Nginx 的 HTTP API 和 `/socket.io/` 回源均需保留该请求头，若配置了请求头过滤则显式增加：
+
+```nginx
+proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
+```
+
+仅在源站入口限制为可信 EdgeOne 回源流量时启用 CDN 头，防止公网绕过 CDN 直连 Nginx 后伪造该头
+普通无 CDN 部署保持 `CLIENT_IP_HEADER` 为空，服务端不会仅凭请求自带 CDN 头就信任它
+旧站点已设置 `CLIENT_IP_HEADER=iqp` 时仍优先使用有效的 `iqp`，缺失或无效时兼容读取 `EO-Connecting-IP`
+
+修改后执行 `nginx -t`，通过后重载 Nginx 并重启服务端，使用两个不同公网网络登录并重连房间，检查后台新增访问 IP 是否分别记录客户端地址
+此前已经写入 Redis 的边缘节点 IP 无法反推真实用户，保留审计历史；最后一次错误记录超过 24 小时后不再计入滚动多 IP 评分，不应通过降低阈值或清空整库处理
+无需数据迁移，回滚时恢复原服务端版本及代理配置并重启，观察新增访问记录和封面请求状态码
+
+官方说明：`https://cloud.tencent.com/document/product/1552/87654`
 
 ---
 
@@ -230,6 +265,9 @@ npm run package:build      # 交互式录入更新说明，组装 release zip
 
 - `forcePrompt: true` = 强制弹窗更新；`false` = 静默发版
 - CDN 勿长期缓存 `index.html` 与 `/api/*`
+- 管理后台的入口探测、会话和业务响应使用 `no-store`，服务端同时发送 `CDN-Cache-Control` 与 `Surrogate-Control` 禁用共享缓存，CDN 规则也应让 `/api/admin/*` 绕过缓存；已有错误缓存需要在 CDN 清理
+- 后台写请求仍校验来源与管理员会话，来源与 Host 比较会规范化域名大小写及默认端口，非默认端口与跨站来源仍按原规则拒绝；若继续出现 403，先区分 JSON 中的来源拒绝、凭据错误、初始安全设置要求与 CDN 返回的 HTML 拦截页
+- 发布此次后台来源与缓存修复需更新并重启 Node 服务，再发布前端资源；无新增配置、Redis 迁移或移动端桥接变更，重启后进程内管理员会话需重新登录，回滚使用上一版服务端及配套前端资源
 - Windows 发版 zip 使用 .NET 文件流压缩，不再调用 `Compress-Archive`，压缩成功后才替换旧 zip，失败保留旧包，压缩包根目录结构保持不变
 - 打包构建的 Node 堆上限为 1536 MiB，已有更低上限会保留，线程池最多 2 个线程，Gzip/Brotli 预压缩逐个执行，Brotli 使用质量 5，避免多任务最高质量压缩挤占系统内存，堆限制不等于整个进程的内存限制
 - 打包前检查可用物理内存，不足 3 GiB 时直接停止，不强行启动构建，避免低内存环境持续换页或卡死
@@ -251,3 +289,46 @@ npm run package:build      # 交互式录入更新说明，组装 release zip
 | `GET` | `/api/media-proxy?url=` | HTTP 媒体代理 |
 
 WebSocket：`/socket.io`（与 HTTP 同端口）
+
+## 媒体代理 502 排查
+
+### 媒体代理性能与带宽
+
+- 音频保持流式转发和背压，不等待整首歌曲下载，也不启用 CDN 或 Nginx 音频共享缓存
+- 歌曲代理直接连接 Node 上游流和客户端响应，省去 Node → Web → Node 流适配和中间缓冲复制，压缩响应仍使用流式解压
+- `/api/media-proxy` 的 HEAD 请求向上游透传 HEAD，只返回媒体响应头，不通过 GET 下载整首歌曲；鉴权与限流沿用 GET 路由
+- 客户端断开后取消仍在等待响应或传输中的上游请求，减少切歌、拖动进度和离开房间产生的无效下载
+- 代理透传 `Range`、`If-Range`、响应范围及有效的 `Content-Length`，上游被解压时移除原始长度，避免压缩长度与输出字节数不符
+- 上游返回 `416` 时直接保留该状态及合法的 `Content-Range: bytes */总长度`，不再去掉 Range 重新下载整首歌曲；Range 返回 `403` 时仍保留一次完整 GET 的兼容重试
+- 成功返回的完整封面允许浏览器私有缓存最多 300 秒，上游更短的 `max-age`、`no-store` 和 `no-cache` 会被尊重，CDN 与共享代理仍禁止缓存
+- 本次调整只需更新并重启 Node 服务，无新增环境变量、Redis 数据迁移或 Nginx 参数，已有 Nginx 仍需按示例关闭媒体缓冲，并透传 `Range`、`If-Range`
+- 验收时分别观察首字节时间、拖动后的 `206` 与 `Content-Range`、取消请求后的出站流量，以及重复打开封面时的浏览器缓存命中
+- 这些调整减少无效传输和协议开销，不会增加服务器物理出口带宽；若同房间同时播放人数为 N，平均音频码率为 R，音频出口需求约为 N × R，还需预留协议和其他请求的余量
+- 回滚时恢复上一版服务端并重启，已缓存的封面最多等待 300 秒过期，音频无新增持久化缓存
+
+### 错误原因
+
+iPhone / iPad 的网页音量使用 Web Audio，外部音频经本站媒体代理读取，代理失败时需先核对服务端到音乐 CDN 的连通性
+
+升级后，媒体代理失败响应保留原有 HTTP 状态和 `error`，追加可选 `code`，后台错误分析按以下原因显示新记录
+
+| 错误码 | 含义 | 排查方向 |
+|------|------|------|
+| `MEDIA_DNS_FAILED` | 媒体代理域名解析失败 | 检查部署主机或容器内的 DNS |
+| `MEDIA_CONNECT_FAILED` | 媒体代理连接上游失败 | 检查出站网络、路由和防火墙 |
+| `MEDIA_TLS_FAILED` | 上游证书或 TLS 校验失败 | 检查服务器时间、CA 证书及上游证书，不关闭 HTTPS 校验 |
+| `MEDIA_TIMEOUT` | 请求上游超时，包含 DNS 等待 | 检查解析耗时和 CDN 连通性 |
+| `MEDIA_REDIRECT_FAILED` | 上游重定向失败 | 检查音源返回的播放地址是否有效 |
+| `MEDIA_UPSTREAM_HTTP_ERROR` | 上游实际返回 HTTP 错误 | 结合原有 HTTP 状态确认上游拒绝或故障 |
+| `MEDIA_STREAM_FAILED` | 读取上游响应失败 | 检查传输中断或响应损坏 |
+| `MEDIA_PROXY_FAILED` | 其他代理失败 | 结合实际请求复现定位 |
+
+旧的 `HTTP_502` 记录不能还原为细分原因，不能仅凭旧记录判断是 DNS、证书还是上游实际返回 502
+
+发布时先更新并重启服务端，再发布前端资源，无新增配置、Redis 键或数据迁移，移动端桥接命令不变，回滚使用上一版配套服务端与前端资源
+
+## Redis 容量与读写治理
+
+全项目 Redis 入口、写入背压、留存边界、批量读取、ACL、验证和回滚见 [Redis 治理说明](REDIS_GOVERNANCE.md)
+
+本轮没有修改生产 Redis 的内存上限、淘汰策略或持久化参数，生产上线前备份 Redis 并在预发布验证命令权限与实际峰值负载，不应以自动淘汰账户、收藏或签名密钥来掩盖容量不足

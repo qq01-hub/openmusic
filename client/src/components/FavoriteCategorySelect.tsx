@@ -21,6 +21,7 @@ interface Props {
   categories: string[];
   songName: string;
   disabled?: boolean;
+  openOnMount?: boolean;
   onChange: (category: string) => void;
 }
 
@@ -29,6 +30,7 @@ export default function FavoriteCategorySelect({
   categories,
   songName,
   disabled = false,
+  openOnMount = false,
   onChange,
 }: Props) {
   const [open, setOpen] = useState(false);
@@ -39,6 +41,10 @@ export default function FavoriteCategorySelect({
   const listboxId = useId();
   const options = getFavoriteCategoryOptions(categories, value);
   const selectedLabel = options.find((option) => option.value === value)?.label ?? '未分类';
+
+  useEffect(() => {
+    if (openOnMount) setOpen(true);
+  }, [openOnMount]);
 
   const updateMenuPosition = useCallback(() => {
     const button = buttonRef.current;

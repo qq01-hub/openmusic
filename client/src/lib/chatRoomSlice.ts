@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useMemo } from 'react';
 import type { RoomState, RoomUser } from '../types';
 import { useRoomStore } from '../stores/roomStore';
 import type { ChatRoomMeta } from '../components/ChatMessageRow';
@@ -19,6 +19,7 @@ export type ChatRoomSlice = {
 };
 
 function stringArraysEqual(a: string[], b: string[]): boolean {
+  if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
     if (a[i] !== b[i]) return false;
@@ -69,7 +70,7 @@ export function chatRoomSlicesEqual(a: ChatRoomSlice | null, b: ChatRoomSlice | 
     && stringArraysEqual(a.autoPromotedAdminIds || [], b.autoPromotedAdminIds || [])
     && stringArraysEqual(a.mutedUserIds || [], b.mutedUserIds || [])
     && roomUsersEqual(a.users, b.users)
-    && memberTiersEqual(a.memberTiers, b.memberTiers)
+    && (a.memberTiers === b.memberTiers || memberTiersEqual(a.memberTiers, b.memberTiers))
     && avatarUrlsEqual(a.userAvatarUrls, b.userAvatarUrls);
 }
 
@@ -90,21 +91,18 @@ export function chatSliceToRoomMeta(slice: ChatRoomSlice): ChatRoomMeta {
 
 /** 仅在聊天相关字段变化时更新引用，避免 room_update 拖动 ChatPanel 重渲染 */
 export function useChatRoomSlice(): ChatRoomSlice | null {
-  const room = useRoomStore((s) => s.room);
-  const sliceRef = useRef<ChatRoomSlice | null>(null);
-
-  return useMemo(() => {
-    if (!room) {
-      sliceRef.current = null;
-      return null;
-    }
-    const next = roomToChatSlice(room);
-    if (sliceRef.current && chatRoomSlicesEqual(sliceRef.current, next)) {
-      return sliceRef.current;
-    }
-    sliceRef.current = next;
-    return next;
-  }, [room]);
+  const selectSlice = useMemo(() => {
+    let previousRoom: RoomState | null = null;
+    let previousSlice: ChatRoomSlice | null = null;
+    return ({ room }: { room: RoomState | null }): ChatRoomSlice | null => {
+      if (room === previousRoom) return previousSlice;
+      previousRoom = room;
+      const next = room ? roomToChatSlice(room) : null;
+      if (!chatRoomSlicesEqual(previousSlice, next)) previousSlice = next;
+      return previousSlice;
+    };
+  }, []);
+  return useRoomStore(selectSlice);
 }
 
 export function useChatRoomMeta(): ChatRoomMeta | null {

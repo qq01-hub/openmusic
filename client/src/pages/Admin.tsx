@@ -185,6 +185,8 @@ function AdminPage() {
   const navigate = useNavigate();
   const [loggedIn, setLoggedIn] = useState<boolean | null>(null);
   const [activeTab, setActiveTab] = useState<AdminTabId>('overview');
+  const [riskReturnAccountId, setRiskReturnAccountId] = useState('');
+  const [settingsIdentityEntry, setSettingsIdentityEntry] = useState(false);
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [rooms, setRooms] = useState<AdminRoom[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -289,6 +291,7 @@ function AdminPage() {
     setLoggedIn(false);
     setOverview(null);
     setRooms([]);
+    setRiskReturnAccountId('');
     setRevealedPasswords({});
     setRevealingPasswordId(null);
     setBans([]);
@@ -352,9 +355,14 @@ function AdminPage() {
     if (!shouldAutoRefreshAdminTab(loggedIn === true, activeTab)) return undefined;
     // 重新进入看板时即使上一次请求尚未结束，也要排队执行一次最新加载。
     void refresh({ force: true });
-    const timer = setInterval(() => void refresh(), 10_000);
+    const refreshWhenVisible = () => {
+      if (!document.hidden) void refresh();
+    };
+    const timer = setInterval(refreshWhenVisible, 10_000);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
     return () => {
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
       // 使离开看板后才完成的请求结果失效，避免覆盖其他页面的数据状态。
       refreshGenRef.current += 1;
     };
@@ -969,6 +977,7 @@ function AdminPage() {
   );
 
   const handleTabChange = (tab: AdminTabId) => {
+    if (tab !== 'settings') setSettingsIdentityEntry(false);
     setActiveTab(tab);
     setMobileMenuOpen(false);
   };
@@ -1405,7 +1414,7 @@ function AdminPage() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'risk':
-        return <RiskControlPanel />;
+        return <RiskControlPanel onOpenSecurity={() => { setSettingsIdentityEntry(true); handleTabChange('settings'); }} initialAccountId={riskReturnAccountId} onOpenRoom={(roomId, accountId) => { setRiskReturnAccountId(accountId); setRoomsKeyword(roomId); setRoomsStatusFilter([]); setRoomsPage(1); handleTabChange('rooms'); }} />;
       case 'overview':
         return (
           <OverviewDashboard
@@ -1425,6 +1434,7 @@ function AdminPage() {
             size="small"
             extra={(
               <Space size={8} wrap>
+                {riskReturnAccountId && <Button onClick={() => handleTabChange('risk')}>返回账户画像</Button>}
                 {pendingPermanentCount > 0 && (
                   <Badge
                     status="warning"
@@ -2024,6 +2034,7 @@ function AdminPage() {
             }}
           >
             <RuntimeConfigPanel
+              initialTab={settingsIdentityEntry ? 'identity' : undefined}
               onError={(text) => message.error(text)}
               securityTab={(
                 <>
@@ -2206,7 +2217,10 @@ function AdminPage() {
             mode="inline"
             selectedKeys={[activeTab]}
             items={menuItems}
-            onClick={({ key }) => handleTabChange(key as AdminTabId)}
+            onClick={({ key }) => {
+              if (key === 'rooms') setRiskReturnAccountId('');
+              handleTabChange(key as AdminTabId);
+            }}
             style={{ borderInlineEnd: 'none', flex: 1, overflow: 'auto' }}
           />
           <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', flexShrink: 0 }}>
@@ -2229,7 +2243,10 @@ function AdminPage() {
           mode="inline"
           selectedKeys={[activeTab]}
           items={menuItems}
-          onClick={({ key }) => handleTabChange(key as AdminTabId)}
+          onClick={({ key }) => {
+            if (key === 'rooms') setRiskReturnAccountId('');
+            handleTabChange(key as AdminTabId);
+          }}
         />
         <div style={{ padding: 12 }}>
           <Button type="text" danger icon={<LogoutOutlined />} block onClick={() => void logout()}>

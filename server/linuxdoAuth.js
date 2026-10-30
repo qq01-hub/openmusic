@@ -1,5 +1,5 @@
 import { getRuntimeConfig, isLinuxdoConfigured } from './runtimeConfig.js';
-import { createOAuthProvider, fetchWithTimeout, sanitizeReturnPath } from './oauthProvider.js';
+import { createOAuthProvider, fetchOAuthJson, sanitizeReturnPath, oauthUpstreamError } from './oauthProvider.js';
 
 // Linux.do OAuth2（房主身份绑定 / 找回，后台登录见 adminApi.js 的绑定部分）。
 // 具体授权 / 令牌 / 用户信息接口地址由运行时配置提供（LINUXDO_* 环境变量），
@@ -33,7 +33,7 @@ export async function exchangeLinuxdoCode(code) {
     client_secret: config.linuxdoClientSecret,
   });
 
-  const response = await fetchWithTimeout(config.linuxdoTokenUrl, {
+  const data = await fetchOAuthJson(config.linuxdoTokenUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -41,13 +41,8 @@ export async function exchangeLinuxdoCode(code) {
     },
     body: body.toString(),
   });
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    throw new Error(`Linux.do 令牌接口返回 ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}`);
-  }
-  const data = await response.json();
   const accessToken = String(data?.access_token || '').trim();
-  if (!accessToken) throw new Error('Linux.do 未返回 access_token');
+  if (!accessToken) throw oauthUpstreamError(200, data?.error || 'OAUTH_RESPONSE_INVALID');
   return accessToken;
 }
 
@@ -58,18 +53,14 @@ export async function exchangeLinuxdoCode(code) {
  */
 export async function fetchLinuxdoProfile(accessToken) {
   const config = getRuntimeConfig();
-  const response = await fetchWithTimeout(config.linuxdoUserInfoUrl, {
+  const data = await fetchOAuthJson(config.linuxdoUserInfoUrl, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
     },
   });
-  if (!response.ok) {
-    throw new Error(`Linux.do 用户信息接口返回 ${response.status}`);
-  }
-  const data = await response.json();
   const id = String(data?.id ?? data?.sub ?? data?.user_id ?? '').trim();
-  if (!id) throw new Error('Linux.do 用户信息缺少 id');
+  if (!id) throw oauthUpstreamError(200, 'OAUTH_RESPONSE_INVALID');
 
   const username = String(data?.username ?? data?.login ?? data?.name ?? '').trim();
   let avatarUrl = String(data?.avatar_url ?? '').trim();

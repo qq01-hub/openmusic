@@ -172,9 +172,16 @@ export type MentionTextSegment =
   | { type: 'text'; value: string }
   | { type: 'mention'; value: string };
 
+const mentionLabelsByNicknames = new WeakMap<string[], string[]>();
+
 /** 按房间昵称最长匹配拆分 @ 提及（支持昵称含空格） */
 export function tokenizeMentionSegments(text: string, nicknames: string[]): MentionTextSegment[] {
-  const labels = collectMentionLabels(nicknames);
+  if (!text.includes('@')) return [{ type: 'text', value: text }];
+  let labels = mentionLabelsByNicknames.get(nicknames);
+  if (!labels) {
+    labels = collectMentionLabels(nicknames);
+    mentionLabelsByNicknames.set(nicknames, labels);
+  }
   const segments: MentionTextSegment[] = [];
   let i = 0;
 

@@ -1,4 +1,4 @@
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Loader2, Plus, Reply, Smile } from 'lucide-react';
 import { isVerifiedAiBotMessage } from '../lib/chatAi';
 import type { ChatMessage, ChatReplyRef, RoomMemberTier, RoomUser } from '../types';
@@ -89,6 +89,24 @@ export type ChatRoomMeta = {
   chatShowAvatars?: boolean;
   muteAll?: boolean;
 };
+
+const roomUserIndexes = new WeakMap<RoomUser[], {
+  userMap: Map<string, RoomUser>;
+  nicknames: string[];
+}>();
+
+function getRoomUserIndex(users: RoomUser[]) {
+  let index = roomUserIndexes.get(users);
+  if (!index) {
+    index = { userMap: new Map(), nicknames: [] };
+    for (const user of users) {
+      index.userMap.set(user.id, user);
+      index.nicknames.push(user.nickname);
+    }
+    roomUserIndexes.set(users, index);
+  }
+  return index;
+}
 
 function renderMessageText(
   messageText: string,
@@ -268,11 +286,7 @@ function ChatMessageRow({
 }: ChatMessageRowProps) {
   const [menuPos, setMenuPos] = useState<ChatMessageMenuPos | null>(null);
   const myAvatarUrl = useRoomStore((s) => s.avatar_url);
-  const userMap = useMemo(
-    () => new Map(room.users.map((user) => [user.id, user])),
-    [room.users],
-  );
-  const nicknames = useMemo(() => room.users.map((user) => user.nickname), [room.users]);
+  const { userMap, nicknames } = getRoomUserIndex(room.users);
   const canRecall = canRecallChatMessage(msg, myUserId, {
     canModerate,
     isOwner: Boolean(room.creatorId && myUserId === room.creatorId),
@@ -641,36 +655,6 @@ function WelcomeChatRow({
   );
 }
 
-function reactionsKey(reactions: ChatMessage['reactions']) {
-  return (reactions || [])
-    .map((r) => `${r.emoji}:${r.users.length}`)
-    .join(',');
-}
-
-export default memo(ChatMessageRow, (prev, next) => (
-  prev.msg.id === next.msg.id
-  && prev.msg.kind === next.msg.kind
-  && prev.msg.text === next.msg.text
-  && prev.msg.imageUrl === next.msg.imageUrl
-  && prev.msg.imageKey === next.msg.imageKey
-  && prev.msg.asSticker === next.msg.asSticker
-  && prev.msg.songs === next.msg.songs
-  && reactionsKey(prev.msg.reactions) === reactionsKey(next.msg.reactions)
-  && prev.pureMode === next.pureMode
-  && prev.pureImageRevealed === next.pureImageRevealed
-  && prev.aiProcessing === next.aiProcessing
-  && prev.reactionPickerOpen === next.reactionPickerOpen
-  && prev.chatMuted === next.chatMuted
-  && prev.canModerate === next.canModerate
-  && prev.myUserId === next.myUserId
-  && prev.room.creatorId === next.room.creatorId
-  && prev.room.adminIds === next.room.adminIds
-  && prev.room.memberTiers === next.room.memberTiers
-  && prev.room.chatShowAvatars === next.room.chatShowAvatars
-  && prev.room.userAvatarUrls === next.room.userAvatarUrls
-  && prev.chatScrollRoot === next.chatScrollRoot
-  // 卡片收藏 / 点歌状态（Set 由 ChatPanel 在变化时重建引用）
-  && prev.cardActions === next.cardActions
-));
+export default memo(ChatMessageRow);
 
 export { renderReplyRefContent };

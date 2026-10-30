@@ -1,12 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 const serverSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
 const modalSource = readFileSync(new URL('../client/src/components/MusicContributionModal.tsx', import.meta.url), 'utf8');
 const roomPanelSource = readFileSync(new URL('../client/src/components/RoomMusicAccountPanel.tsx', import.meta.url), 'utf8');
-// 汽水安全验证页有两个入口：贡献弹窗和房间音乐账号面板，两个 iframe 都必须同源。
+// 普通网页需要同源存储能力，鸿蒙媒体桥接模式必须隔离顶层令牌
 const secondVerifyEmbeds = [['MusicContributionModal.tsx', modalSource], ['RoomMusicAccountPanel.tsx', roomPanelSource]];
+const sandboxSource = readFileSync(new URL('../client/src/lib/harmonyMediaSession.ts', import.meta.url), 'utf8');
+
+function verificationSandbox(harmony) {
+  const marker = 'export function getMusicVerificationSandbox(): string {';
+  const start = sandboxSource.indexOf(marker);
+  assert.ok(start >= 0, '缺少验证 iframe 权限函数');
+  const end = sandboxSource.indexOf('\n}', start);
+  assert.ok(end > start, '验证 iframe 权限函数不完整');
+  const fn = sandboxSource.slice(start, end + 2).replace(marker, 'function getMusicVerificationSandbox() {');
+  return runInNewContext(`${fn}\ngetMusicVerificationSandbox()`, { window: { __OPENMUSIC_HARMONY_APP__: harmony } });
+}
 
 const assetRouteStart = serverSource.indexOf("app.get('/api/music-account-contribution/qr/verify/:asset'");
 
@@ -34,13 +46,23 @@ test('扫码验证桥接接口仍然强制校验会话身份', () => {
   }
 });
 
-test('二次验证 iframe 必须同源，官方 SDK 才能读写 localStorage / Cookie', () => {
+test('普通网页二次验证 iframe 保留官方 SDK 所需的脚本与同源权限', () => {
   for (const [name, source] of secondVerifyEmbeds) {
-    const sandbox = (source.match(/sandbox="([^"]*)"/) || [])[1] || '';
+    assert.ok(source.includes("import { getMusicVerificationSandbox } from '../lib/harmonyMediaSession'"), `${name} 未导入统一权限函数`);
+    assert.ok(source.includes('sandbox={getMusicVerificationSandbox()}'), `${name} 未使用统一权限函数`);
+    const sandbox = verificationSandbox(false);
     const tokens = sandbox.split(/\s+/).filter(Boolean);
     for (const token of ['allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-popups', 'allow-popups-to-escape-sandbox']) {
       assert.ok(tokens.includes(token), `${name} 的验证 iframe 缺少 ${token}`);
     }
     assert.equal(tokens.includes('allow-same-origin'), true, `${name} 的验证 iframe 仍是 opaque origin`);
   }
+});
+
+test('鸿蒙二次验证 iframe 保留交互能力并隔离顶层媒体令牌', () => {
+  const tokens = verificationSandbox(true).split(/\s+/).filter(Boolean);
+  for (const token of ['allow-scripts', 'allow-forms', 'allow-popups', 'allow-popups-to-escape-sandbox']) {
+    assert.ok(tokens.includes(token), `鸿蒙验证 iframe 缺少 ${token}`);
+  }
+  assert.equal(tokens.includes('allow-same-origin'), false, '鸿蒙验证 iframe 不得访问顶层令牌');
 });

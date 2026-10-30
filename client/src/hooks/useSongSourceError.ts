@@ -9,8 +9,9 @@ import type { MusicSource, QueueItem } from '../types';
 
 /** 订阅源错误/跨源标记变化，用于队列列表重渲染 */
 export function useSourceErrorRevision() {
-  const [, bump] = useState(0);
+  const [revision, bump] = useState(0);
   useEffect(() => subscribeSourceErrors(() => bump((v) => v + 1)), []);
+  return revision;
 }
 
 export function useTrackSourceError(song: Pick<QueueItem, 'queueId' | 'id' | 'source'> | null | undefined): boolean {

@@ -26,11 +26,29 @@ export async function addSongsToQueue(
   options: {
     getRoom: () => RoomState | null;
     addSong: (song: Song) => Promise<{ success: boolean; error?: string }>;
+    addSongs?: (songs: Song[]) => Promise<{ success: boolean; added?: number; skipped?: number; failed?: number }>;
   },
 ): Promise<BulkAddResult> {
   let added = 0;
   let skipped = 0;
   let failed = 0;
+
+  if (options.addSongs) {
+    const pending = songs.filter(song => {
+      const room = options.getRoom();
+      if (room && isSongInRoomQueue(room, song)) { skipped++; return false; }
+      return true;
+    });
+    for (let offset = 0; offset < pending.length; offset += 100) {
+      const batch = pending.slice(offset, offset + 100);
+      const result = await options.addSongs(batch.map(toSongPayload));
+      added += result.added || 0;
+      skipped += result.skipped || 0;
+      failed += result.failed ?? (result.success ? 0 : batch.length);
+      if (!result.success) { failed += pending.length - offset - batch.length; break; }
+    }
+    return { added, skipped, failed };
+  }
 
   for (const song of songs) {
     const room = options.getRoom();

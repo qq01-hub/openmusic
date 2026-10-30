@@ -5,6 +5,8 @@ import { useAudioStore } from '../stores/audioStore';
 import { resolveDisplayDurationSeconds } from '../hooks/useTrackDuration';
 import { getClientPlaybackState, getPlaybackTime } from '../lib/playbackState';
 import { getSharedAudio } from '../lib/audioElement';
+import { isAudioBoundToQueue } from '../lib/audioTrackBinding';
+import { isRoomAudioTakenOver } from '../lib/roomAudioPriority';
 import type { Song, QueueItem } from '../types';
 
 type TimeCapSong = Pick<Song, 'duration' | 'id' | 'source'> & Partial<Pick<QueueItem, 'queueId'>>;
@@ -49,14 +51,16 @@ function readAudioCurrentTime(song: TimeCapSong | null | undefined): number | nu
 }
 
 /**
- * 底栏和歌词始终优先使用房间时间轴。
- *
- * 本机聊天卡片 / 搜索试听会临时暂停共享房间 audio；若在占用切换前后
- * 改读 audio.currentTime，会先显示旧位置、完成房间重同步后又跳到新位置。
- * 房主拖动时会同步乐观更新 playback state，因此仍可即时反映手动进度。
+ * 酷狗和汽水以本机实际播放位置显示，缓冲时不会凭房间时钟继续前进
+ * 试听占用或音源尚未绑定时继续显示房间时间轴
  */
 function resolveDisplayedPlaybackTime(song: TimeCapSong | null | undefined): number | null {
   if (!song || !stateMatchesSong(song)) return null;
+  if ((song.source === 'kugou' || song.source === 'qishui')
+    && song.queueId && !isRoomAudioTakenOver()
+    && isAudioBoundToQueue(getSharedAudio(), song.queueId)) {
+    return readAudioCurrentTime(song);
+  }
   const state = getClientPlaybackState();
   if (state) return capSongTime(getPlaybackTime(state), song);
   return readAudioCurrentTime(song);
@@ -100,7 +104,7 @@ export function snapSmoothPlaybackTime(time: number) {
   publishSmoothPlaybackTime(time, true);
 }
 
-function readLocalPlaybackTime(song: TimeCapSong | null | undefined): number {
+export function readLocalPlaybackTime(song: TimeCapSong | null | undefined): number {
   const displayed = resolveDisplayedPlaybackTime(song);
   if (displayed !== null) return displayed;
   if (!song || !stateMatchesSong(song)) {

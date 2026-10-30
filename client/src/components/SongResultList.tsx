@@ -15,6 +15,7 @@ import { immersiveGlassListFooter } from '../lib/immersiveGlass';
 import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
 import { useFavorites } from '../hooks/useFavorites';
 import { stopSongPreview } from '../lib/songPreviewPlayer';
+import { useRoomStore } from '../stores/roomStore';
 
 export interface SongResultRemotePagination {
   page: number;
@@ -30,6 +31,8 @@ interface Props {
   results: SearchResult[];
   addingId: string | null;
   onAdd: (song: SearchResult) => void;
+  onRemove?: (song: SearchResult) => void;
+  onAddNext?: (song: SearchResult) => void;
   /** 分享到当前房间聊天（音乐卡片） */
   onShare?: (song: SearchResult) => void;
   onArtistClick?: (artist: string) => void;
@@ -46,6 +49,8 @@ function SongResultList({
   results,
   addingId,
   onAdd,
+  onRemove,
+  onAddNext,
   onShare,
   onArtistClick,
   keyword,
@@ -59,6 +64,16 @@ function SongResultList({
   const [pageSize, setPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
   const { queueKeys, playedKeys } = useRoomSongKeySets();
   const { favoriteIds } = useFavorites();
+  const queue = useRoomStore(s => s.room?.queue);
+  const currentKey = useRoomStore(s => s.room?.current ? songKey(s.room.current) : '');
+  const myUserId = useRoomStore(s => s.mySocketId);
+  const nickname = useRoomStore(s => s.nickname);
+  const canControlPlayback = useRoomStore(s => s.canControlPlayback);
+  const readOnly = useRoomStore(s => Boolean(s.room?.users.find(user => user.id === s.mySocketId)?.readOnly));
+  const cancelableKeys = useMemo(() => new Set((queue || [])
+    .filter(song => !readOnly && (canControlPlayback || song.requestedById === myUserId
+      || (!song.requestedById && song.requestedBy === nickname)))
+    .map(songKey)), [canControlPlayback, myUserId, nickname, queue, readOnly]);
   const onAddRef = useRef(onAdd);
   const scrollBodyRef = useRef<HTMLDivElement>(null);
   onAddRef.current = onAdd;
@@ -71,12 +86,19 @@ function SongResultList({
   const totalCount = pagination
     ? (pagination.total > 0 ? pagination.total : results.length)
     : results.length;
-  const pageResults = useMemo(
-    () => (pagination
-      ? results
-      : results.slice((page - 1) * pageSize, page * pageSize)),
-    [results, page, pageSize, pagination],
-  );
+  const sortedResults = useMemo(() => {
+    const favorites: SearchResult[] = [];
+    const others: SearchResult[] = [];
+    for (const song of results) {
+      (favoriteIds.has(songKey(song)) ? favorites : others).push(song);
+    }
+    return favorites.length ? [...favorites, ...others] : results;
+  }, [favoriteIds, results]);
+  const remotePagination = Boolean(pagination);
+  const pageResults = useMemo(() => remotePagination
+    ? sortedResults
+    : sortedResults.slice((page - 1) * pageSize, page * pageSize),
+  [page, pageSize, remotePagination, sortedResults]);
 
   const handleRowAdd = useCallback((song: SearchResult) => {
     onAddRef.current(song);
@@ -146,6 +168,11 @@ function SongResultList({
                 favorited={favoriteIds.has(key)}
                 glassRow={immersiveGlass}
                 onAdd={handleRowAdd}
+                onRemove={onRemove}
+                cancelDisabledReason={queueKeys.has(key) && !cancelableKeys.has(key)
+                  ? currentKey === key ? '正在播放的歌曲不能取消' : '只能取消自己点的歌'
+                  : undefined}
+                onAddNext={onAddNext}
                 onShare={onShare}
                 onArtistClick={onArtistClick}
               />
@@ -195,6 +222,8 @@ export default memo(SongResultList, (prev, next) => (
   && prev.immersiveGlass === next.immersiveGlass
   && prev.onPageResultsChange === next.onPageResultsChange
   && prev.onShare === next.onShare
+  && prev.onRemove === next.onRemove
+  && prev.onAddNext === next.onAddNext
   && prev.onArtistClick === next.onArtistClick
   && prev.pagination?.page === next.pagination?.page
   && prev.pagination?.pageSize === next.pagination?.pageSize

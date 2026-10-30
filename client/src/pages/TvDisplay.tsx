@@ -31,10 +31,11 @@ export default function TvDisplay() {
   const { roomId } = useParams<{ roomId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const room = useRoomStore((s) => s.room);
-  const current = room?.current ?? null;
-  const isPlaying = room?.isPlaying ?? false;
-  const queueLength = room?.queue.length ?? 0;
+  const hasRoom = useRoomStore((s) => Boolean(s.room));
+  const roomName = useRoomStore((s) => s.room?.name);
+  const current = useRoomStore((s) => s.room?.current ?? null);
+  const isPlaying = useRoomStore((s) => s.room?.isPlaying ?? false);
+  const queueLength = useRoomStore((s) => s.room?.queue.length ?? 0);
   const rawCoverUrl = current ? getCoverUrl(current, 'medium') : null;
   const signedCoverUrl = useSignedApiUrl(rawCoverUrl);
   const { joinRoom } = useSocket();
@@ -52,7 +53,7 @@ export default function TvDisplay() {
   }, []);
 
   usePageSeo({
-    title: room?.name ? `${room.name} 电视歌词` : '电视歌词模式',
+    title: roomName ? `${roomName} 电视歌词` : '电视歌词模式',
     description: '大屏歌词与封面展示，实时同步房间播放进度，适合投屏观看。',
     path: roomId ? `/tv/${roomId}` : undefined,
     noindex: true,
@@ -167,7 +168,7 @@ export default function TvDisplay() {
         <p className="text-netease-red text-sm">{joinError}</p>
       </div>
     );
-  } else if (!room) {
+  } else if (!hasRoom) {
     content = <MusicLoading label="正在连接房间" className="bg-[#080808]" />;
   } else if (!current) {
     content = (
@@ -224,7 +225,7 @@ export default function TvDisplay() {
   return (
     <div ref={containerRef} className="h-full w-full bg-[#080808]">
       <AudioEngine tvMode />
-      {!isFullscreen && room && !joinError && (
+      {!isFullscreen && hasRoom && !joinError && (
         <Tooltip content="全屏">
           <button
             type="button"

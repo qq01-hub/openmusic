@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "OpenMusic 鸿蒙网页容器"
+    },
+    {
+      "name": "server_url",
+      "value": "https://music.qqovo.cn"
+    }
+  ]
+}

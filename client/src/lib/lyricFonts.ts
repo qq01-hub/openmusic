@@ -1,6 +1,6 @@
 import type { RoomVisualFxSettings } from './roomVisualPreset';
 import { DEFAULT_ROOM_VISUAL_FX } from './roomVisualPreset';
-import { LYRIC_FONT_OPTIONS, lyricFontCss, normalizeLyricFontKey, type LyricFontKey } from './lyricStyle';
+import { lyricFontCss, normalizeLyricFontKey, type LyricFontKey } from './lyricStyle';
 
 export const LYRIC_FONTS_HREF =
   'https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900' +
@@ -62,14 +62,6 @@ export function ensureLyricFontLoaded(fx?: RoomVisualFxSettings): Promise<void> 
 
   fontLoadCache.set(cacheKey, promise);
   return promise;
-}
-
-/** 应用启动时预热全部歌词字体选项 */
-export function preloadAllLyricFonts(): void {
-  injectLyricFontStylesheet();
-  for (const opt of LYRIC_FONT_OPTIONS) {
-    void ensureLyricFontLoaded({ ...DEFAULT_ROOM_VISUAL_FX, lyricFont: opt.key });
-  }
 }
 
 export function lyricFontDataAttr(key: LyricFontKey): LyricFontKey {

@@ -13,7 +13,7 @@ interface Props {
   mode?: 'both' | 'elapsed' | 'duration';
 }
 
-function PlaybackTimeLabel({
+function PlaybackElapsedTime({
   song,
   className = '',
   showDuration = true,
@@ -27,16 +27,28 @@ function PlaybackTimeLabel({
   if (resolvedMode === 'elapsed') {
     return <span className={className}>{formatDuration(displayTime)}</span>;
   }
-  if (resolvedMode === 'duration') {
-    return <span className={className}>{duration > 0 ? formatDuration(duration) : '--:--'}</span>;
-  }
-
   return (
     <span className={className}>
       {formatDuration(displayTime)}
       {duration > 0 ? ` / ${formatDuration(duration)}` : ''}
     </span>
   );
+}
+
+function PlaybackDurationTime({ song, className = '' }: Pick<Props, 'song' | 'className'>) {
+  const duration = useTrackDuration(song);
+  return <span className={className}>{duration > 0 ? formatDuration(duration) : '--:--'}</span>;
+}
+
+const MemoPlaybackElapsedTime = memo(PlaybackElapsedTime);
+const MemoPlaybackDurationTime = memo(PlaybackDurationTime);
+
+function PlaybackTimeLabel({ song, className = '', showDuration = true, mode }: Props) {
+  const resolvedMode = mode ?? (showDuration ? 'both' : 'elapsed');
+  if (resolvedMode === 'duration') {
+    return <MemoPlaybackDurationTime song={song} className={className} />;
+  }
+  return <MemoPlaybackElapsedTime song={song} className={className} mode={resolvedMode} />;
 }
 
 export default memo(PlaybackTimeLabel);

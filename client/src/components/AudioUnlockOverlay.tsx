@@ -43,7 +43,7 @@ export default function AudioUnlockOverlay({ tvMode = false }: Props) {
     <button
       type="button"
       onClick={!isMobileDevice() ? handlePointerUnlock : undefined}
-      onTouchStart={isMobileDevice() ? handlePointerUnlock : undefined}
+      onTouchEnd={isMobileDevice() ? handlePointerUnlock : undefined}
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/75 touch-manipulation cursor-pointer"
       style={{ WebkitTapHighlightColor: 'transparent' }}
       aria-label="开启声音"

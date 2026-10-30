@@ -108,7 +108,7 @@ function isBlockedIpAddress(address) {
   return !/^[23][0-9a-f]{3}:/u.test(normalized) || normalized.startsWith('2001:db8:') || normalized.startsWith('2002:');
 }
 
-async function assertPublicDnsTarget(hostname) {
+async function assertPublicDnsTarget(hostname, timeoutMs) {
   const host = String(hostname).replace(/^\[|\]$/gu, '');
   if (isIP(host)) {
     if (isBlockedIpAddress(host)) {
@@ -120,12 +120,22 @@ async function assertPublicDnsTarget(hostname) {
   }
 
   let records;
+  let deadline;
   try {
-    records = await lookup(host, { all: true, verbatim: true });
-  } catch {
-    const err = new Error('媒体域名解析失败');
+    records = await Promise.race([
+      lookup(host, { all: true, verbatim: true }),
+      new Promise((_, reject) => {
+        deadline = setTimeout(() => {
+          reject(Object.assign(new Error('媒体域名解析超时'), { code: 'ETIMEDOUT' }));
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (cause) {
+    const err = new Error('媒体域名解析失败', { cause });
     err.statusCode = 502;
     throw err;
+  } finally {
+    clearTimeout(deadline);
   }
   if (!records.length || records.some((record) => isBlockedIpAddress(record.address))) {
     const err = new Error('禁止访问内网地址');
@@ -182,6 +192,8 @@ export function preferHttpsMediaUrl(rawUrl) {
 
 function normalizeAudioContentType(contentType) {
   if (!contentType) return contentType;
+  // 网易封面 CDN 返回 image/jpg，统一为浏览器标准 JPEG 类型
+  if (contentType.split(';')[0].trim().toLowerCase() === 'image/jpg') return 'image/jpeg';
   // 部分浏览器对 audio/x-flac 支持更差
   if (/^audio\/x-flac\b/i.test(contentType)) return 'audio/flac';
   return contentType;
@@ -199,17 +211,19 @@ function isAudioStream(contentType, range) {
   return Boolean(contentType && /^(audio|video|application\/octet-stream)\b/i.test(contentType));
 }
 
-/** 流式响应只透传 Range 相关头；不写 Content-Length，避免 HTTP/2 字节数承诺与实际 DATA 帧不一致 */
+/** 解压路径已移除原始长度，仅透传仍与输出字节一致的长度和范围信息 */
 function applyStreamingMediaHeaders(response, res, contentType) {
   if (contentType) res.set('Content-Type', contentType);
-  for (const header of ['accept-ranges', 'content-range']) {
+  for (const header of ['accept-ranges', 'content-range', 'etag', 'last-modified']) {
     const value = response.headers.get(header);
     if (value) res.set(header, value);
   }
+  const length = response.headers.get('content-length');
+  if (length && /^\d+$/u.test(length)) res.set('Content-Length', length);
   res.status(response.status);
 }
 
-async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist }) {
+async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist, timeoutMs }) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -243,11 +257,11 @@ async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist 
     err.statusCode = 403;
     throw err;
   }
-  const addresses = await assertPublicDnsTarget(parsed.hostname);
+  const addresses = await assertPublicDnsTarget(parsed.hostname, timeoutMs);
   return { parsed, addresses };
 }
 
-function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs) {
+function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false } = {}) {
   return new Promise((resolve, reject) => {
     const transport = parsed.protocol === 'https:' ? https : http;
     let deadline;
@@ -256,7 +270,7 @@ function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs) {
       hostname: parsed.hostname.replace(/^\[|\]$/gu, ''),
       port: parsed.port || undefined,
       path: `${parsed.pathname}${parsed.search}`,
-      method: 'GET', headers, signal,
+      method, headers, signal,
       lookup: (_hostname, options, callback) => options?.all
         ? callback(null, addresses)
         : callback(null, addresses[0].address, addresses[0].family),
@@ -268,25 +282,31 @@ function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs) {
           if (value !== undefined) responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
         }
         const status = response.statusCode || 502;
+        const noBody = method === 'HEAD' || [204, 205, 304].includes(status);
         let stream = response;
-        if (![204, 205, 304].includes(status) && !(status >= 300 && status < 400)) {
+        if (!(status >= 300 && status < 400)) {
           const encodings = (responseHeaders.get('content-encoding') || '').split(',').map((value) => value.trim().toLowerCase()).filter((value) => value && value !== 'identity');
-          const decoders = encodings.reverse().map((encoding) => {
+          const decoders = (noBody ? [] : encodings.reverse()).map((encoding) => {
             if (encoding === 'gzip' || encoding === 'x-gzip') return createGunzip();
             if (encoding === 'deflate') return createInflate();
             if (encoding === 'br') return createBrotliDecompress();
             throw new Error('Unsupported media encoding');
           });
-          if (decoders.length) {
-            stream = decoders.at(-1);
-            pipeline(response, ...decoders).catch((error) => stream.destroy(error));
+          if (encodings.length) {
+            if (decoders.length) {
+              stream = decoders.at(-1);
+              pipeline(response, ...decoders).catch((error) => stream.destroy(error));
+            }
             responseHeaders.delete('content-encoding');
             responseHeaders.delete('content-length');
           }
         }
-        const body = [204, 205, 304].includes(status) ? null : Readable.toWeb(stream);
+        const body = noBody ? null : nodeStream ? stream : Readable.toWeb(stream);
         if (!body) response.resume();
-        resolve(new Response(body, { status, headers: responseHeaders }));
+        // 歌曲直接使用 Node 流，公开 fetch 接口仍返回标准 Web Response
+        resolve(nodeStream
+          ? { status, ok: status >= 200 && status < 300, headers: responseHeaders, body }
+          : new Response(body, { status, headers: responseHeaders }));
       } catch (error) {
         response.destroy();
         request.destroy();
@@ -295,11 +315,20 @@ function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs) {
     });
     request.on('error', reject);
     request.once('close', () => clearTimeout(deadline));
-    const timeout = () => request.destroy(new Error('媒体请求超时'));
+    const timeout = () => request.destroy(Object.assign(new Error('媒体请求超时'), { code: 'ETIMEDOUT' }));
     deadline = setTimeout(timeout, timeoutMs);
     request.setTimeout(timeoutMs, timeout);
     request.end();
   });
+}
+
+async function cancelMediaBody(response) {
+  try {
+    if (response.body instanceof Readable) response.body.destroy();
+    else await response.body?.cancel?.();
+  } catch {
+    // 释放已结束或已取消的上游响应无需再次报错
+  }
 }
 
 /**
@@ -312,19 +341,18 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
 
   let currentUrl = preferHttpsMediaUrl(rawUrl);
   for (let hop = 0; hop <= MAX_MEDIA_REDIRECTS; hop += 1) {
-    const target = await assertSafeMediaUrl(currentUrl, extraAllowedHosts, { requireAllowlist });
-    const response = await requestPinnedMedia(target, headers, fetchOptions.signal, timeoutMs);
+    fetchOptions.signal?.throwIfAborted();
+    const target = await assertSafeMediaUrl(currentUrl, extraAllowedHosts, { requireAllowlist, timeoutMs });
+    fetchOptions.signal?.throwIfAborted();
+    const response = await requestPinnedMedia(target, headers, fetchOptions.signal, timeoutMs, fetchOptions);
 
     if (response.status >= 300 && response.status < 400) {
       const location = String(response.headers.get('location') || '').trim();
-      try {
-        await response.body?.cancel?.();
-      } catch {
-        // 忽略 drain 失败，继续跟随 Location
-      }
+      await cancelMediaBody(response);
       if (!location) {
         const err = new Error('上游返回空重定向');
         err.statusCode = 502;
+        err.code = 'MEDIA_REDIRECT_FAILED';
         throw err;
       }
       try {
@@ -332,6 +360,7 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
       } catch {
         const err = new Error('上游重定向地址无效');
         err.statusCode = 502;
+        err.code = 'MEDIA_REDIRECT_FAILED';
         throw err;
       }
       for (const name of Object.keys(headers)) {
@@ -345,32 +374,61 @@ export async function fetchMediaWithSafeRedirects(fetchWithTimeout, rawUrl, fetc
 
   const err = new Error('上游重定向次数过多');
   err.statusCode = 502;
+  err.code = 'MEDIA_REDIRECT_FAILED';
   throw err;
+}
+
+function respondMediaProxyFailure(res, error) {
+  if (res.headersSent) return;
+  const status = Number(error?.statusCode) || 502;
+  if (status < 500) {
+    res.status(status).json({ error: error?.message || '媒体代理请求被拒绝' });
+    return;
+  }
+  const failures = [error, error?.cause, ...(Array.isArray(error?.errors) ? error.errors.slice(0, 8) : [])];
+  const codes = failures.map(failure => String(failure?.code || ''));
+  let code = 'MEDIA_PROXY_FAILED';
+  let message = '媒体代理失败';
+  if (codes.some(value => ['ENOTFOUND', 'EAI_AGAIN', 'ENODATA'].includes(value))) {
+    code = 'MEDIA_DNS_FAILED';
+    message = '媒体代理域名解析失败';
+  } else if (codes.some(value => ['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(value))) {
+    code = 'MEDIA_TIMEOUT';
+    message = '媒体代理请求上游超时';
+  } else if (codes.some(value => value.startsWith('ERR_TLS_') || value.startsWith('ERR_SSL_')
+    || ['CERT_HAS_EXPIRED', 'CERT_NOT_YET_VALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+      'UNABLE_TO_GET_ISSUER_CERT_LOCALLY', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN'].includes(value))) {
+    code = 'MEDIA_TLS_FAILED';
+    message = '媒体代理上游证书或 TLS 校验失败';
+  } else if (codes.some(value => ['ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'EPIPE'].includes(value))) {
+    code = 'MEDIA_CONNECT_FAILED';
+    message = '媒体代理连接上游失败';
+  } else if (codes.includes('MEDIA_REDIRECT_FAILED')) {
+    code = 'MEDIA_REDIRECT_FAILED';
+    message = '媒体代理上游重定向失败';
+  } else if (error?.message === '媒体域名解析失败') {
+    code = 'MEDIA_DNS_FAILED';
+    message = '媒体代理域名解析失败';
+  }
+  // 仅返回固定文案和错误码，避免上游异常携带的完整地址、签名或凭据进入响应
+  res.status(status).json({ error: message, code });
 }
 
 async function readBoundedMediaResponse(response, maxBytes) {
   if (!response.body) return Buffer.alloc(0);
-  const reader = response.body.getReader();
+  const stream = response.body instanceof Readable ? response.body : Readable.fromWeb(response.body);
   const chunks = [];
   let total = 0;
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) return Buffer.concat(chunks, total);
-      total += value.byteLength;
-      if (total > maxBytes) {
-        const error = new Error('媒体过大');
-        error.statusCode = 413;
-        throw error;
-      }
-      chunks.push(Buffer.from(value));
+  for await (const chunk of stream) {
+    total += chunk.byteLength;
+    if (total > maxBytes) {
+      const error = new Error('媒体过大');
+      error.statusCode = 413;
+      throw error;
     }
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    throw error;
-  } finally {
-    reader.releaseLock();
+    chunks.push(chunk);
   }
+  return Buffer.concat(chunks, total);
 }
 
 /**
@@ -378,7 +436,23 @@ async function readBoundedMediaResponse(response, maxBytes) {
  * 图片/缩略图整包缓冲；音频 Range 流式转发（勿中途 abort body）。
  */
 export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options = {}) {
+  if (res.destroyed || res.writableEnded) return false;
+  const controller = new AbortController();
+  const onClose = () => controller.abort();
+  res.once('close', onClose);
+  try {
+    return await serveConnectedMedia(rawUrl, res, fetchWithTimeout, {
+      ...options,
+      signal: options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal,
+    });
+  } finally {
+    res.off('close', onClose);
+  }
+}
+
+async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
   const fetchUrl = preferHttpsMediaUrl(rawUrl);
+  const method = options.method === 'HEAD' ? 'HEAD' : 'GET';
   const headers = {
     'User-Agent': DEFAULT_MEDIA_UA,
     Accept: '*/*',
@@ -390,6 +464,7 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
 
   const range = String(options.range || '').trim();
   if (range) headers.Range = range;
+  if (range && options.ifRange) headers['If-Range'] = String(options.ifRange);
 
   let response;
   try {
@@ -401,27 +476,25 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
         extraAllowedHosts: options.extraAllowedHosts || [],
         requireAllowlist: options.requireAllowlist !== false,
         trustedInitialUrl: options.trustedInitialUrl,
+        signal: options.signal,
+        method,
+        nodeStream: true,
       },
       options.timeoutMs || 20000,
     );
   } catch (err) {
-    if (!res.headersSent) {
-      const status = Number(err?.statusCode) || 502;
-      res.status(status).json({ error: err?.message || '媒体代理失败' });
-    }
+    if (options.signal.aborted) return false;
+    respondMediaProxyFailure(res, err);
     return false;
   }
 
-  // 少数汽水 CDN 对带 Range 的请求返回 403/416，但完整 GET 可以正常返回。
-  // 仅在已走代理且上游明确拒绝 Range 时重试一次，不影响普通直链和正常分段播放。
-  if (range && (response.status === 403 || response.status === 416)) {
-    try {
-      await response.body?.cancel?.();
-    } catch {
-      // 忽略上游错误响应的释放失败，继续尝试无 Range 请求。
-    }
+  // 部分 CDN 拒绝 Range 但允许完整 GET，保留一次兼容重试
+  // 416 表示请求范围不可满足，必须保留状态与总长度，不能重新下载整首歌曲
+  if (method === 'GET' && range && response.status === 403) {
+    await cancelMediaBody(response);
     const fallbackHeaders = { ...headers };
     delete fallbackHeaders.Range;
+    delete fallbackHeaders['If-Range'];
     try {
       response = await fetchMediaWithSafeRedirects(
         fetchWithTimeout,
@@ -430,34 +503,51 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
           ...options,
           headers: fallbackHeaders,
           range: '',
+          method,
+          nodeStream: true,
         },
         options.timeoutMs || 20000,
       );
     } catch (err) {
-      if (!res.headersSent) {
-        const status = Number(err?.statusCode) || 502;
-        res.status(status).json({ error: err?.message || '媒体代理失败' });
-      }
+      if (options.signal.aborted) return false;
+      respondMediaProxyFailure(res, err);
       return false;
     }
   }
 
+  if (options.signal.aborted) {
+    await cancelMediaBody(response);
+    return false;
+  }
+  if (response.status === 416) {
+    await cancelMediaBody(response);
+    const contentRange = response.headers.get('content-range');
+    if (contentRange && /^bytes \*\/\d+$/iu.test(contentRange)) res.set('Content-Range', contentRange);
+    res.set('Cache-Control', 'no-store, private');
+    res.status(416).end();
+    return false;
+  }
   if (!response.ok && response.status !== 206) {
-    await response.body?.cancel?.().catch(() => {});
-    if (!res.headersSent) res.status(response.status).json({ error: '上游媒体请求失败' });
+    await cancelMediaBody(response);
+    if (!res.headersSent) res.status(response.status).json({ error: '上游媒体返回 HTTP 错误', code: 'MEDIA_UPSTREAM_HTTP_ERROR' });
     return false;
   }
 
-  const rawType = response.headers.get('content-type') || '';
+  const rawType = normalizeAudioContentType(response.headers.get('content-type') || '');
   const mediaType = rawType.split(';')[0].trim().toLowerCase();
+  if (options.imageOnly && !mediaType.startsWith('image/')) {
+    await cancelMediaBody(response);
+    if (!res.headersSent) res.status(415).json({ error: '上游未返回支持的图片类型' });
+    return false;
+  }
   if (!/^(?:audio|video)\//u.test(mediaType) && !/^image\/(?:jpeg|png|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)$/u.test(mediaType) && !['application/octet-stream', 'application/ogg', 'application/vnd.apple.mpegurl', 'application/x-mpegurl'].includes(mediaType)) {
-    await response.body?.cancel?.().catch(() => {});
+    await cancelMediaBody(response);
     if (!res.headersSent) res.status(415).json({ error: '上游未返回支持的媒体类型' });
     return false;
   }
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', 'sandbox');
-  const contentType = normalizeAudioContentType(rawType);
+  const contentType = rawType;
   const useBuffer = shouldBufferResponse(rawType, options) && !isAudioStream(rawType, range);
 
   // 流式音频禁止 CDN/Nginx 缓冲或分段缓存（酷狗等 HTTP 代理链路易因此卡顿）
@@ -470,46 +560,64 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
   }
   res.set('X-OpenMusic-Proxy', '1');
 
+  if (method === 'HEAD') {
+    applyStreamingMediaHeaders(response, res, contentType);
+    res.end();
+    return true;
+  }
+
   if (useBuffer) {
     try {
       const isImage = /^image\//i.test(rawType);
       const maxBufferedBytes = isImage ? MAX_BUFFERED_IMAGE_BYTES : MAX_BUFFERED_MEDIA_BYTES;
       const declaredLen = Number(response.headers.get('content-length') || 0);
       if (Number.isFinite(declaredLen) && declaredLen > maxBufferedBytes) {
-        await response.body?.cancel?.().catch(() => {});
+        await cancelMediaBody(response);
         if (!res.headersSent) res.status(413).json({ error: '媒体过大' });
         return false;
       }
       const buffer = await readBoundedMediaResponse(response, maxBufferedBytes);
       if (res.writableEnded || res.destroyed) return false;
       if (contentType) res.set('Content-Type', contentType);
+      const upstreamCacheControl = response.headers.get('cache-control') || '';
+      const upstreamMaxAge = upstreamCacheControl.match(/\bmax-age\s*=\s*"?(\d+)/iu);
+      const maxAge = upstreamMaxAge ? Math.min(300, Number(upstreamMaxAge[1])) : 300;
+      if (isImage && response.status === 200 && maxAge > 0 && !/\b(?:no-store|no-cache)\b/iu.test(upstreamCacheControl)) {
+        // 仅复用浏览器内的封面，避免重复拉图占用音频带宽
+        res.set('Cache-Control', `private, max-age=${maxAge}, no-transform`);
+        res.removeHeader('Pragma');
+      }
       res.status(200).send(buffer);
       return true;
     } catch (error) {
-      if (!res.headersSent) res.status(error?.statusCode === 413 ? 413 : 502).json({ error: error?.statusCode === 413 ? '媒体过大' : '媒体代理失败' });
+      if (!res.headersSent && !options.signal.aborted) {
+        if (error?.statusCode === 413) res.status(413).json({ error: '媒体过大' });
+        else res.status(502).json({ error: '媒体代理读取上游响应失败', code: 'MEDIA_STREAM_FAILED' });
+      }
       return false;
     }
   }
 
   if (!response.body) {
     try {
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const buffer = Buffer.alloc(0);
       applyStreamingMediaHeaders(response, res, contentType);
       res.set('Content-Length', String(buffer.length));
       res.send(buffer);
       return true;
     } catch {
-      if (!res.headersSent) res.status(502).json({ error: '媒体代理失败' });
+      if (!res.headersSent) res.status(502).json({ error: '媒体代理读取上游响应失败', code: 'MEDIA_STREAM_FAILED' });
       return false;
     }
   }
 
-  const stream = Readable.fromWeb(response.body);
+  const stream = response.body instanceof Readable ? response.body : Readable.fromWeb(response.body);
   let clientGone = false;
-  res.on('close', () => {
+  const onClose = () => {
     clientGone = true;
     stream.destroy();
-  });
+  };
+  res.once('close', onClose);
 
   applyStreamingMediaHeaders(response, res, contentType);
   if (!res.headersSent) res.flushHeaders?.();
@@ -520,6 +628,8 @@ export async function serveUpstreamMedia(rawUrl, res, fetchWithTimeout, options 
     if (clientGone) return false;
     if (!res.headersSent) res.status(502).end();
     return false;
+  } finally {
+    res.off('close', onClose);
   }
 }
 

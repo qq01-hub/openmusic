@@ -11,6 +11,7 @@ export interface CachedOwnerRoomConfigSettings {
   chatShowAvatars?: boolean;
   maxAdmins?: number;
   songRequestEnabled?: boolean;
+  queueLikeSortEnabled?: boolean;
   memberJumpEnabled?: boolean;
   memberSeekEnabled?: boolean;
   memberPauseEnabled?: boolean;
@@ -79,6 +80,7 @@ function sanitizeSettings(raw: unknown): CachedOwnerRoomConfigSettings {
     chatShowAvatars: asBoolean(obj.chatShowAvatars),
     maxAdmins: asNumber(obj.maxAdmins),
     songRequestEnabled: asBoolean(obj.songRequestEnabled),
+    queueLikeSortEnabled: asBoolean(obj.queueLikeSortEnabled),
     memberJumpEnabled: asBoolean(obj.memberJumpEnabled),
     memberSeekEnabled: asBoolean(obj.memberSeekEnabled),
     memberPauseEnabled: asBoolean(obj.memberPauseEnabled),
@@ -158,6 +160,7 @@ export function extractOwnerRoomConfig(room: RoomState): CachedOwnerRoomConfigSe
     chatShowAvatars: Boolean(room.chatShowAvatars),
     maxAdmins: room.maxAdmins,
     songRequestEnabled: room.songRequestEnabled !== false,
+    queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     memberJumpEnabled: Boolean(room.memberJumpEnabled),
     memberSeekEnabled: Boolean(room.memberSeekEnabled),
     memberPauseEnabled: Boolean(room.memberPauseEnabled),

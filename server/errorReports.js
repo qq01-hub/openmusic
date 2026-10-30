@@ -1,7 +1,9 @@
+import { evalRedisScript } from './redisScripts.js';
 import { customAlphabet } from 'nanoid';
 import { getRedisClient } from './roomStorage.js';
 
 const IDS_KEY = 'openmusic:error_reports:ids';
+const SUMMARIES_KEY = 'openmusic:error_reports:summaries';
 const reportKey = (id) => `openmusic:error_reports:${id}`;
 const generateId = customAlphabet('0123456789abcdefghijklmnopqrstuvwxyz', 14);
 const MAX_REPORTS = 100;
@@ -142,19 +144,24 @@ async function persistReport(report) {
     return;
   }
   try {
-    await client.set(reportKey(report.id), JSON.stringify(report));
-    await client.lRem(IDS_KEY, 0, report.id);
-    await client.lPush(IDS_KEY, report.id);
-    await client.lTrim(IDS_KEY, 0, MAX_REPORTS - 1);
-    const kept = await client.lRange(IDS_KEY, 0, MAX_REPORTS - 1);
-    // 尽力清理过期键（忽略失败）
-    const keptSet = new Set(kept);
-    // 不扫全库；仅当 map/list 同步即可
-    void keptSet;
+    await evalRedisScript(client, `
+      redis.call('SET', KEYS[1], ARGV[2])
+      redis.call('HSET', KEYS[3], ARGV[1], ARGV[3])
+      redis.call('LREM', KEYS[2], 0, ARGV[1])
+      redis.call('LPUSH', KEYS[2], ARGV[1])
+      local old = redis.call('LRANGE', KEYS[2], 100, 199)
+      redis.call('LTRIM', KEYS[2], 0, 99)
+      for _, id in ipairs(old) do
+        redis.call('UNLINK', ARGV[4] .. id)
+        redis.call('HDEL', KEYS[3], id)
+      end
+      return 1
+    `, { keys: [reportKey(report.id), IDS_KEY, SUMMARIES_KEY], arguments: [report.id, JSON.stringify(report), JSON.stringify(toSummary(report)), 'openmusic:error_reports:'] });
   } catch (err) {
     console.error('error-report Redis 写入失败:', err?.message || err);
     memoryReports.set(report.id, report);
     memoryIds = [report.id, ...memoryIds.filter((id) => id !== report.id)].slice(0, MAX_REPORTS);
+    for (const id of memoryReports.keys()) if (!memoryIds.includes(id)) memoryReports.delete(id);
   }
 }
 
@@ -203,11 +210,32 @@ export async function listErrorReports() {
   if (client) {
     try {
       const ids = await client.lRange(IDS_KEY, 0, MAX_REPORTS - 1);
-      const reports = [];
-      for (const id of ids) {
-        const report = await readReport(id);
-        if (report) reports.push(toSummary(report));
+      if (!ids.length) return [];
+      const summaries = await client.hmGet(SUMMARIES_KEY, ids);
+      const byId = new Map();
+      const missing = [];
+      ids.forEach((id, index) => {
+        try { const value = JSON.parse(summaries[index] || 'null'); if (value?.id === id) { byId.set(id, value); return; } } catch { /* 旧摘要不可用时从权威正文读取 */ }
+        missing.push(id);
+      });
+      for (let offset = 0; offset < missing.length; offset += 20) {
+        const batch = missing.slice(offset, offset + 20);
+        const bodies = await client.mGet(batch.map(reportKey));
+        const backfill = [];
+        bodies.forEach(raw => {
+          try {
+            const report = raw ? sanitizeReport(JSON.parse(raw)) : null;
+            if (report?.id) { const summary = toSummary(report); byId.set(report.id, summary); backfill.push([report.id, JSON.stringify(summary)]); }
+          } catch { /* 不删除损坏的历史正文 */ }
+        });
+        if (backfill.length) await evalRedisScript(client, `
+          for _, item in ipairs(cjson.decode(ARGV[1])) do
+            if redis.call('LPOS', KEYS[1], item[1]) then redis.call('HSETNX', KEYS[2], item[1], item[2]) end
+          end
+          return 1
+        `, { keys: [IDS_KEY, SUMMARIES_KEY], arguments: [JSON.stringify(backfill)] });
       }
+      const reports = ids.map(id => byId.get(id)).filter(Boolean);
       return reports;
     } catch (err) {
       console.error('error-report Redis 列表失败:', err?.message || err);

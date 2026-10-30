@@ -44,33 +44,38 @@ export function preloadSonicWorkshopBackground(): Promise<unknown> {
 }
 
 export function preloadImmersiveBackground(mode: RoomVisualMode): Promise<unknown> {
-  if (mode === 'folia') return import('../components/immersive/FoliaBackground');
+  if (mode === 'folia') return import('../components/immersive/FoliaBackground').then(module => module.preloadFoliaStage());
   if (mode === 'topography') return import('../components/topography/TopographyBackground3D');
   if (mode === 'topography-we') return preloadSonicWorkshopBackground();
   return preloadGalaxyBackground();
 }
 
 async function waitForCurrentTrackProxyReady(
-  song: QueueItem,
   timeoutMs = TRACK_READY_TIMEOUT_MS,
-): Promise<void> {
-  const audio = getSharedAudio();
+): Promise<QueueItem | null> {
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
+    const song = useRoomStore.getState().room?.current;
+    if (!song) return null;
+    const audio = getSharedAudio();
     const loading = useAudioStore.getState().trackLoading;
     const src = audio.currentSrc || audio.src || '';
     const bound = isAudioBoundToQueue(audio, song.queueId);
-    const proxied = Boolean(src && (isProxiedMediaUrl(src) || isSameOriginMediaUrl(src)));
+    const proxied = Boolean(src && (
+      isProxiedMediaUrl(src) || isSameOriginMediaUrl(src)
+      || (song.source === 'qishui' && src.startsWith('blob:'))
+    ));
 
     if (!loading && bound && proxied && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-      return;
+      return song;
     }
 
     await new Promise((resolve) => window.setTimeout(resolve, TRACK_READY_POLL_MS));
   }
 
-  throw new Error('immersive track proxy timeout');
+  console.warn('沉浸模式音频代理等待超时，将继续加载视觉舞台');
+  return null;
 }
 
 /** 曲目 load 完成（进入/退出过渡通用） */
@@ -144,9 +149,12 @@ export interface PrepareImmersiveEnterOptions {
 
 /** 代理音源切换与播放对齐（进入沉浸专用） */
 export async function reloadImmersiveTrackProxy(song: QueueItem): Promise<void> {
+  const liveSong = useRoomStore.getState().room?.current;
+  if (!liveSong) return;
+  song = liveSong;
   // 汽水只用本地解密 blob:，沉浸模式直接接 Web Audio，禁止触发代理重载
   if ((song.source || '') === 'qishui') {
-    await waitForCurrentTrackReady(song);
+    await waitForCurrentTrackProxyReady();
     ensureGalaxyAudioOutput();
     return;
   }
@@ -155,10 +163,16 @@ export async function reloadImmersiveTrackProxy(song: QueueItem): Promise<void> 
   await new Promise<void>((resolve) => {
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
   });
-  await resolveSongUrl(song, { refresh: true });
-  await waitForCurrentTrackProxyReady(song);
+  try {
+    await resolveSongUrl(song, { refresh: true });
+  } catch (error) {
+    console.warn('沉浸模式音频预加载失败，将由播放器继续恢复', error);
+    return;
+  }
+  const readySong = await waitForCurrentTrackProxyReady();
+  if (!readySong) return;
   await waitForAudioMinimumReady(getSharedAudio());
-  await syncRoomPlaybackAfterProxyReload(song);
+  await syncRoomPlaybackAfterProxyReload(readySong);
   ensureGalaxyAudioOutput();
 }
 

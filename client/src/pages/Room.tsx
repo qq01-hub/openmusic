@@ -1,12 +1,13 @@
-import { useState, useEffect, useCallback, useRef, useMemo, Suspense } from 'react';
+import { useState, useEffect, useCallback, useDeferredValue, useRef, useMemo, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
 import MusicLoading from '../components/MusicLoading';
 import { mergeFavoriteImportStats } from '../lib/favoriteImport';
+import { filterCrossPlatformDuplicates, type FavoriteDuplicateMode } from '../lib/favoriteDuplicates';
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users } from 'lucide-react';
+import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Play, Pause } from 'lucide-react';
 
 import { searchAllSongs, getAvailableSources, listRooms, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform, type PlaylistChannelFilter as PlaylistChannelFilterMode } from '../api/music/playlist';
@@ -19,6 +20,7 @@ import { detectPlaylistLink } from '../lib/playlistLink';
 import { consumeLinuxdoReturnParam, fetchLinuxdoStatus, type LinuxdoBinding } from '../lib/linuxdoAuth';
 import { consumeGithubReturnParam, fetchGithubStatus, type GithubBinding } from '../lib/githubAuth';
 import { fetchWechatUinStatus, type WechatUinBinding } from '../lib/wechatUinAuth';
+import { hasAnonymousAccess } from '../lib/accountAccessSession';
 
 import type { FavoriteSong, MusicSource, RoomAudioQuality, RoomMemberSettings, RoomMemberTier, RoomSummary, SearchResult, Song, SongHistoryItem } from '../types';
 
@@ -66,6 +68,8 @@ import FavoriteCategorySelect from '../components/FavoriteCategorySelect';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
 import { useSongHistoryStore } from '../stores/songHistoryStore';
+import { useSongPreviewState } from '../hooks/useSongPreviewState';
+import { stopSongPreview, toggleSongPreview } from '../lib/songPreviewPlayer';
 
 import RoomFmModeBadge from '../components/RoomFmModeBadge';
 import type { SongRequestSettings } from '../components/RoomSettingsModal';
@@ -262,10 +266,6 @@ type SearchDetailOrigin = 'radio' | 'recommend-playlist';
 
 
 export default function Room() {
-  useEffect(() => {
-    void preloadRoomShell().catch(() => undefined);
-  }, []);
-
   const { roomId } = useParams<{ roomId: string }>();
 
   const navigate = useNavigate();
@@ -326,7 +326,7 @@ export default function Room() {
     noindex: true,
   });
 
-  const { joinRoom, addSong, leaveRoom, shareSongToChat, createFavoriteShare, revokeFavoriteShare, previewFavoriteShare, importFavoriteShare, renameRoomName, setRoomLock, setRoomFmMode, setRoomPlaylistRoaming, setRoomAnnouncement, setRoomCustomCover, setChatHistoryVisibleOnJoin, setChatShowAvatars, setRoomJoinNotice, setRoomAiSettings, setRoomMaxAdmins, setRoomAdminSelfManageMemberTier, setRoomPlaybackRate, setSongRequestEnabled, unbanRoomSong, addRoomForbiddenWord, removeRoomForbiddenWord, setRoomMemberTier, removeRoomMemberTier, setRoomMemberSettings, loadSongHistory, transferOwner, destroyRoom, applyRoomPermanent, cancelRoomPermanent, clearQueue, createMusicAccountQr, checkMusicAccountQr, bindMusicAccount, listMusicAccounts, setMusicAccountShared, unbindMusicAccount, skipSong, togglePlay } = useSocket();
+  const { joinRoom, addSong, addSongs, removeSong, leaveRoom, shareSongToChat, createFavoriteShare, revokeFavoriteShare, previewFavoriteShare, importFavoriteShare, renameRoomName, setRoomLock, setRoomFmMode, setRoomQishuiProxy, setRoomPlaylistRoaming, setRoomAnnouncement, setRoomCustomCover, setChatHistoryVisibleOnJoin, setChatShowAvatars, setRoomHideIpLocation, setRoomJoinNotice, setRoomAiSettings, setRoomMaxAdmins, setRoomAdminSelfManageMemberTier, setRoomPlaybackRate, setSongRequestEnabled, unbanRoomSong, addRoomForbiddenWord, removeRoomForbiddenWord, setRoomMemberTier, removeRoomMemberTier, setRoomMemberSettings, loadSongHistory, transferOwner, destroyRoom, applyRoomPermanent, cancelRoomPermanent, clearQueue, createMusicAccountQr, checkMusicAccountQr, bindMusicAccount, listMusicAccounts, setMusicAccountShared, unbindMusicAccount, skipSong, togglePlay } = useSocket();
   const {
     listFavorites,
     setFavorite,
@@ -337,8 +337,10 @@ export default function Room() {
     categories: favoriteCategories,
     listCategories,
     addCategory,
+    deleteCategory,
   } = useFavorites();
   const { queueKeys, playedKeys } = useRoomSongKeySets();
+  const songPreview = useSongPreviewState();
 
 
 
@@ -363,6 +365,7 @@ export default function Room() {
   const [joinError, setJoinError] = useState('');
 
   const [addingId, setAddingId] = useState<string | null>(null);
+  const cancelSongPendingRef = useRef(false);
   const [addingPage, setAddingPage] = useState(false);
   const [listPageSongs, setListPageSongs] = useState<SearchResult[]>([]);
   const [clearQueueConfirmOpen, setClearQueueConfirmOpen] = useState(false);
@@ -451,6 +454,8 @@ export default function Room() {
   const [favoriteShareLoading, setFavoriteShareLoading] = useState(false);
   const [favorites, setFavorites] = useState<FavoriteSong[]>(() => cachedFavorites);
   const [favoriteQuery, setFavoriteQuery] = useState('');
+  const [favoriteDuplicateMode, setFavoriteDuplicateMode] = useState<FavoriteDuplicateMode>('none');
+  const [favoriteDuplicatePickerOpen, setFavoriteDuplicatePickerOpen] = useState(false);
   const [activeFavoriteCategory, setActiveFavoriteCategory] = useState('全部收藏');
   const [newFavoriteCategoryOpen, setNewFavoriteCategoryOpen] = useState(false);
   const [newFavoriteCategoryName, setNewFavoriteCategoryName] = useState('');
@@ -462,6 +467,8 @@ export default function Room() {
   const [addingAllFavorites, setAddingAllFavorites] = useState(false);
   const [importingFavorites, setImportingFavorites] = useState(false);
   const [favoritesImportProgress, setFavoritesImportProgress] = useState('');
+  const [deletingFavoriteCategory, setDeletingFavoriteCategory] = useState<string | null>(null);
+  const [deleteFavoriteCategoryTarget, setDeleteFavoriteCategoryTarget] = useState<string | null>(null);
 
   useEffect(() => {
     if (!favoritesOpen && cachedFavorites.length > 0) setFavorites(cachedFavorites);
@@ -479,6 +486,7 @@ export default function Room() {
   const [lockSaving, setLockSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [fmSaving, setFmSaving] = useState(false);
+  const [qishuiProxySaving, setQishuiProxySaving] = useState(false);
   const [transferSaving, setTransferSaving] = useState(false);
   const [destroySaving, setDestroySaving] = useState(false);
   const [permanentSaving, setPermanentSaving] = useState(false);
@@ -491,6 +499,7 @@ export default function Room() {
   const [songRequestSaving, setSongRequestSaving] = useState(false);
   const [chatHistorySaving, setChatHistorySaving] = useState(false);
   const [chatAvatarsSaving, setChatAvatarsSaving] = useState(false);
+  const [hideIpLocationSaving, setHideIpLocationSaving] = useState(false);
   const [joinNoticeSaving, setJoinNoticeSaving] = useState(false);
   const [roomAiSaving, setRoomAiSaving] = useState(false);
   const [maxAdminsSaving, setMaxAdminsSaving] = useState(false);
@@ -650,6 +659,7 @@ export default function Room() {
   const canOpenRoomSettings = canModerate;
   const songRequestSettings: SongRequestSettings = useMemo(() => ({
     enabled: room?.songRequestEnabled !== false,
+    queueLikeSortEnabled: room?.queueLikeSortEnabled !== false,
     memberJumpEnabled: Boolean(room?.memberJumpEnabled),
     memberSeekEnabled: Boolean(room?.memberSeekEnabled),
     memberPauseEnabled: Boolean(room?.memberPauseEnabled),
@@ -667,6 +677,7 @@ export default function Room() {
     queueMaxLength: room?.queueMaxLength ?? 200,
   }), [
     room?.songRequestEnabled,
+    room?.queueLikeSortEnabled,
     room?.memberJumpEnabled,
     room?.memberSeekEnabled,
     room?.memberPauseEnabled,
@@ -808,26 +819,34 @@ export default function Room() {
     }
   }, [lockPassword, lockSaving, room?.id, setRoomLock, showToast]);
 
-  const filteredFavorites = favorites.filter((song) => {
-    if (activeFavoriteCategory === '未分类') {
-      if (String(song.category || '').trim()) return false;
-    } else if (activeFavoriteCategory !== '全部收藏') {
-      if (String(song.category || '').trim() !== activeFavoriteCategory) return false;
-    }
-    const keyword = favoriteQuery.trim().toLowerCase();
-    if (!keyword) return true;
-    return [song.name, song.artist, song.album, song.lrc].some((value) => String(value || '').toLowerCase().includes(keyword));
-  });
+  const duplicateFilteredFavorites = useMemo(
+    () => filterCrossPlatformDuplicates(favorites, favoriteDuplicateMode),
+    [favoriteDuplicateMode, favorites],
+  );
+
+  const deferredFavoriteQuery = useDeferredValue(favoriteQuery);
+  const filteredFavorites = useMemo(() => {
+    const keyword = deferredFavoriteQuery.trim().toLowerCase();
+    return duplicateFilteredFavorites.filter((song) => {
+      if (activeFavoriteCategory === '未分类') {
+        if (String(song.category || '').trim()) return false;
+      } else if (activeFavoriteCategory !== '全部收藏') {
+        if (String(song.category || '').trim() !== activeFavoriteCategory) return false;
+      }
+      if (!keyword) return true;
+      return [song.name, song.artist, song.album, song.lrc].some((value) => String(value || '').toLowerCase().includes(keyword));
+    });
+  }, [activeFavoriteCategory, deferredFavoriteQuery, duplicateFilteredFavorites]);
 
   const favoriteTotalPages = Math.max(1, Math.ceil(filteredFavorites.length / favoritePageSize));
-  const pagedFavorites = filteredFavorites.slice(
+  const pagedFavorites = useMemo(() => filteredFavorites.slice(
     (favoritePage - 1) * favoritePageSize,
     favoritePage * favoritePageSize,
-  );
+  ), [favoritePage, favoritePageSize, filteredFavorites]);
 
   useEffect(() => {
     setFavoritePage(1);
-  }, [activeFavoriteCategory, favoriteQuery, favoritePageSize]);
+  }, [activeFavoriteCategory, favoriteQuery, favoritePageSize, favoriteDuplicateMode]);
 
   useEffect(() => {
     if (favoritePage > favoriteTotalPages) {
@@ -866,6 +885,21 @@ export default function Room() {
     setNewFavoriteCategoryOpen(false);
     showToast('分类已创建', 'success');
   }, [addCategory, creatingFavoriteCategory, newFavoriteCategoryName, showToast]);
+
+  const handleDeleteFavoriteCategory = useCallback(async (category: string, keepSongs: boolean) => {
+    if (deletingFavoriteCategory) return;
+    setDeletingFavoriteCategory(category);
+    const result = await deleteCategory(category, keepSongs);
+    setDeletingFavoriteCategory(null);
+    if (!result.success) {
+      showToast(result.error || '分类删除失败', 'error');
+      return;
+    }
+    if (result.favorites) { setFavorites(result.favorites); applyFavorites(result.favorites); }
+    setDeleteFavoriteCategoryTarget(null);
+    setActiveFavoriteCategory('全部收藏');
+    showToast(keepSongs ? '分类已删除，歌曲已移入未分类' : '分类和其中歌曲已删除', 'success');
+  }, [applyFavorites, deleteCategory, deletingFavoriteCategory, showToast]);
 
   const handleChangeFavoriteCategory = useCallback(async (song: FavoriteSong, category: string) => {
     const key = songKey(song);
@@ -946,13 +980,14 @@ export default function Room() {
       const result = await addSongsToQueue(pagedFavorites, {
         getRoom: () => useRoomStore.getState().room,
         addSong,
+        addSongs,
       });
       const toast = formatBulkAddToast(result);
       showToast(toast.message, toast.type);
     } finally {
       setAddingAllFavorites(false);
     }
-  }, [addingAllFavorites, pagedFavorites, addSong, showToast]);
+  }, [addingAllFavorites, pagedFavorites, addSong, addSongs, showToast]);
 
   const handleImportFavoritesJson = useCallback(() => {
     const input = document.createElement('input');
@@ -1051,7 +1086,8 @@ export default function Room() {
       return;
     }
 
-    joinRoom(roomId, nick, roomPassword).then((res) => {
+    let recoveryAttempt = 0;
+    const attemptJoin = () => joinRoom(roomId, nick, roomPassword).then((res) => {
       if (cancelled) return;
       if (!res.success) {
         if (res.needsPassword) {
@@ -1071,6 +1107,12 @@ export default function Room() {
           }
           return;
         }
+        if (res.needsSession) {
+          // 发布或临时连接故障保留当前入口，真实账户失效由 AccountGate 处理
+          setJoinError('');
+          redirectTimer = window.setTimeout(() => { if (!cancelled) void attemptJoin(); }, Math.min(30000, 1500 * 2 ** Math.min(recoveryAttempt++, 5)));
+          return;
+        }
         // 房间不存在等永久失败：清掉残留会话，避免重连逻辑一直转圈重试
         void leaveRoom();
         setJoinError(res.error || '加入房间失败');
@@ -1088,6 +1130,8 @@ export default function Room() {
         setAnnouncementPopupOpen(true);
       }
     });
+
+    void attemptJoin();
 
     return () => {
       cancelled = true;
@@ -1652,7 +1696,7 @@ export default function Room() {
     }
   }, [searchDetailOrigin, isPlaylistResults, playlistSearchBackup, handleBackToPlaylistSearch, clearSearchResults, resetRadioProgramState]);
 
-  const handleAdd = useCallback(async (song: SearchResult) => {
+  const handleAdd = useCallback(async (song: SearchResult, jump = false) => {
     if (songRequestBlockReason) {
       showToast(songRequestBlockReason, 'error');
       return;
@@ -1669,14 +1713,38 @@ export default function Room() {
       duration: song.duration,
       url: song.url,
       lrc: song.lrc,
-    });
+    }, { jump });
     setAddingId(null);
     if (res.success) {
       lastSongRequestAtRef.current = Date.now();
+      if (jump) showToast('已点歌并插队到下一首', 'success');
     } else if (res.error) {
       showToast(res.error, 'error');
     }
   }, [songRequestBlockReason, addSong, showToast]);
+
+  const handleAddNext = useCallback((song: SearchResult) => {
+    void handleAdd(song, true);
+  }, [handleAdd]);
+
+  const handleRemoveFromSearch = useCallback(async (song: SearchResult) => {
+    if (cancelSongPendingRef.current) return;
+    const key = songKey(song);
+    const queued = useRoomStore.getState().room?.queue.find((item) => songKey(item) === key);
+    if (!queued) {
+      showToast('歌曲已不在待播队列', 'error');
+      return;
+    }
+    cancelSongPendingRef.current = true;
+    setAddingId(key);
+    try {
+      const success = await removeSong(queued.queueId);
+      showToast(success ? '已取消点歌' : '取消点歌失败，可能无权限或歌曲已开始播放', success ? 'success' : 'error');
+    } finally {
+      cancelSongPendingRef.current = false;
+      setAddingId(current => current === key ? null : current);
+    }
+  }, [removeSong, showToast]);
 
   const handleListPageResultsChange = useCallback((songs: SearchResult[]) => {
     setListPageSongs(songs);
@@ -1747,13 +1815,14 @@ export default function Room() {
       const result = await addSongsToQueue(songs, {
         getRoom: () => useRoomStore.getState().room,
         addSong,
+        addSongs,
       });
       const toast = formatBulkAddToast(result);
       showToast(toast.message, toast.type);
     } finally {
       setAddingPage(false);
     }
-  }, [addingPage, addSong, showToast, isOwner, isAdmin]);
+  }, [addingPage, addSong, addSongs, showToast, isOwner, isAdmin]);
 
   const handleSaveFmMode = useCallback(async (mode: string, source?: FmSource) => {
     if (fmSaving) return;
@@ -1766,6 +1835,18 @@ export default function Room() {
       showToast(res.error || '漫游模式设置失败', 'error');
     }
   }, [fmSaving, setRoomFmMode, showToast]);
+
+  const handleSaveQishuiProxy = useCallback(async (enabled: boolean) => {
+    if (qishuiProxySaving) return;
+    setQishuiProxySaving(true);
+    const res = await setRoomQishuiProxy(enabled);
+    setQishuiProxySaving(false);
+    if (res.success) {
+      showToast(enabled ? '汽水同源代理已开启' : '汽水同源代理已关闭', 'success');
+    } else {
+      showToast(res.error || '汽水代理设置失败', 'error');
+    }
+  }, [qishuiProxySaving, setRoomQishuiProxy, showToast]);
 
   const handleSavePlaylistRoaming = useCallback(async (payload: { platform?: 'netease' | 'qq' | 'kugou' | 'qishui'; input?: string; clear?: boolean; playlistId?: string; playlistSource?: FmSource; playlistName?: string; dedupeByName?: boolean; playlistEnabled?: boolean }) => {
     const res = await setRoomPlaylistRoaming(payload);
@@ -1863,6 +1944,18 @@ export default function Room() {
     }
   }, [chatAvatarsSaving, setChatShowAvatars, showToast]);
 
+  const handleSaveHideIpLocation = useCallback(async (hidden: boolean) => {
+    if (hideIpLocationSaving) return;
+    setHideIpLocationSaving(true);
+    const res = await setRoomHideIpLocation(hidden);
+    setHideIpLocationSaving(false);
+    if (res.success) {
+      showToast(hidden ? '已隐藏用户 IP 归属' : '已显示用户 IP 归属', 'success');
+    } else {
+      showToast(res.error || 'IP 归属设置失败', 'error');
+    }
+  }, [hideIpLocationSaving, setRoomHideIpLocation, showToast]);
+
   const handleSaveJoinNotice = useCallback(async (settings: {
     enabled: boolean;
     cooldownMinutes: number;
@@ -1931,6 +2024,7 @@ export default function Room() {
     setSongRequestSaving(true);
     const res = await setSongRequestEnabled({
       enabled: settings.enabled,
+      queueLikeSortEnabled: settings.queueLikeSortEnabled,
       memberJumpEnabled: settings.memberJumpEnabled,
       memberSeekEnabled: settings.memberSeekEnabled,
       memberPauseEnabled: settings.memberPauseEnabled,
@@ -2926,6 +3020,8 @@ export default function Room() {
             results={results}
             addingId={addingId}
             onAdd={handleAdd}
+            onRemove={handleRemoveFromSearch}
+            onAddNext={canControlPlayback || room?.memberJumpEnabled ? handleAddNext : undefined}
             onShare={handleShareSongToChat}
             onArtistClick={handleArtistClick}
             keyword={searchedKeyword}
@@ -2945,6 +3041,7 @@ export default function Room() {
   return (
     <Suspense fallback={<MusicLoading label="正在连接房间" />}>
     <div
+      role="main"
       className={`room-ambient-root relative isolate flex h-full flex-col overflow-hidden ${
         ambientBackgroundRetained ? 'room-ambient-root--transparent' : ''
       }`}
@@ -3016,7 +3113,7 @@ export default function Room() {
               />
             }
             player={
-              room.current || room.randomLoading ? (
+              room.current || room.randomLoading || room.randomError ? (
                 <MiniPlayer variant="immersive" onExpand={() => setShowPlayer(true)} />
               ) : (
                 <div className="mineradio-glass-bar px-4 py-3 text-center text-xs text-white/45">等待播放…</div>
@@ -3075,6 +3172,8 @@ export default function Room() {
         canModerate={canModerate}
         fmMode={normalizeFmMode(room?.neteaseFmMode)}
         fmSource={activeFmSource}
+        qishuiProxyEnabled={Boolean(room?.qishuiProxyEnabled)}
+        qishuiProxySaving={qishuiProxySaving}
         enabledFmSources={enabledFmSources}
         enabledMusicAccountPlatforms={enabledFmSources}
         fmModeBeforeOff={room?.fmModeBeforeOff}
@@ -3088,6 +3187,8 @@ export default function Room() {
         chatHistorySaving={chatHistorySaving}
         chatShowAvatars={Boolean(room?.chatShowAvatars)}
         chatAvatarsSaving={chatAvatarsSaving}
+        hideIpLocation={Boolean(room?.hideIpLocation)}
+        hideIpLocationSaving={hideIpLocationSaving}
         joinNoticeEnabled={room?.joinNoticeEnabled !== false}
         joinNoticeCooldownMinutes={Math.floor((room?.joinNoticeCooldownSec ?? 180) / 60)}
         joinNoticeSaving={joinNoticeSaving}
@@ -3110,6 +3211,8 @@ export default function Room() {
         transferSaving={transferSaving}
         destroySaving={destroySaving}
         roomId={roomId}
+        ownerAccountId={room?.ownerAccountId}
+        anonymousLoginEnabled={hasAnonymousAccess()}
         protectedFromDestroy={Boolean(room?.protectedFromDestroy)}
         permanentApplication={room?.permanentApplication ?? null}
         permanentSaving={permanentSaving}
@@ -3129,11 +3232,13 @@ export default function Room() {
         onMusicAccountUnbind={unbindMusicAccount}
         onClose={() => setSettingsOpen(false)}
         onSaveFmMode={handleSaveFmMode}
+        onSaveQishuiProxy={handleSaveQishuiProxy}
         onSavePlaylistRoaming={handleSavePlaylistRoaming}
         onOpenMemberModal={handleOpenMemberModalFromSettings}
         onSaveAnnouncement={handleSaveAnnouncement}
         onSaveChatHistory={handleSaveChatHistory}
         onSaveChatShowAvatars={handleSaveChatShowAvatars}
+        onSaveHideIpLocation={handleSaveHideIpLocation}
         onSaveJoinNotice={handleSaveJoinNotice}
         onSaveRoomAi={handleSaveRoomAi}
         onSaveSongRequest={handleSaveSongRequestSettings}
@@ -3403,7 +3508,7 @@ export default function Room() {
 
             </div>
 
-            {!pureMode && room && !isSmUp && (
+            {room && !isSmUp && (
             <div className="flex-shrink-0">
               <OnlineUsers
                 users={room.users}
@@ -3589,7 +3694,7 @@ export default function Room() {
 
             </div>
 
-            {!pureMode && room && isSmUp && (
+            {room && isSmUp && (
               <OnlineUsers
                 users={room.users}
                 creatorId={room.creatorId}
@@ -3802,6 +3907,8 @@ export default function Room() {
                   results={results}
                   addingId={addingId}
                   onAdd={handleAdd}
+                  onRemove={handleRemoveFromSearch}
+                  onAddNext={canControlPlayback || room?.memberJumpEnabled ? handleAddNext : undefined}
                   onShare={handleShareSongToChat}
                   onArtistClick={handleArtistClick}
                   keyword={searchedKeyword}
@@ -3942,17 +4049,17 @@ export default function Room() {
             }`}
           >
             <div
-              className={`flex items-center justify-between px-4 py-3 ${
+              className={`flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
                 immersiveMode ? immersiveGlassSheetHeader : 'border-b border-netease-border/50'
               }`}
             >
               <div>
                 <h2 className="text-sm font-medium text-white">我的收藏</h2>
                 <p className="mt-0.5 text-xs text-netease-muted">
-                  共 {favorites.length} 首{favoriteQuery.trim() ? `，筛选 ${filteredFavorites.length} 首` : ''}
+                  共 {favorites.length} 首{favoriteQuery.trim() || favoriteDuplicateMode !== 'none' ? `，筛选 ${filteredFavorites.length} 首` : ''}
                 </p>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
                 <Tooltip content="分享收藏">
                   <button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareOpen(true); setFavoriteShareSongs([]); }} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white">
                     <Share2 className="h-4 w-4" /> 分享收藏
@@ -3999,14 +4106,25 @@ export default function Room() {
             <div className="flex-shrink-0 border-b border-netease-border/50 px-4 py-2.5">
               <div className="mb-2 flex items-center gap-2 overflow-x-auto pb-0.5">
                 {['全部收藏', '未分类', ...favoriteCategories].map((category) => (
-                  <button
-                    key={category}
-                    type="button"
-                    onClick={() => { setActiveFavoriteCategory(category); setFavoritePage(1); }}
-                    className={`flex-shrink-0 rounded-lg px-2.5 py-1 text-xs transition-colors ${activeFavoriteCategory === category ? 'bg-netease-red text-white' : 'text-netease-muted hover:bg-white/10 hover:text-white'}`}
-                  >
-                    {category}
-                  </button>
+                  <div key={category} className="flex flex-shrink-0 items-center rounded-lg bg-white/5">
+                    <button
+                      type="button"
+                      onClick={() => { setActiveFavoriteCategory(category); setFavoritePage(1); }}
+                      className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${activeFavoriteCategory === category ? 'bg-netease-red text-white' : 'text-netease-muted hover:bg-white/10 hover:text-white'}`}
+                    >
+                      {category}
+                    </button>
+                    {favoriteCategories.includes(category) && (
+                      <button
+                        type="button"
+                        onClick={() => setDeleteFavoriteCategoryTarget(category)}
+                        className="rounded-r-lg px-1.5 py-1 text-netease-muted hover:bg-rose-400/15 hover:text-rose-200"
+                        aria-label={`删除分类 ${category}`}
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
                 ))}
                 <button type="button" onClick={() => setNewFavoriteCategoryOpen(true)} className="flex flex-shrink-0 items-center gap-1 rounded-lg px-2.5 py-1 text-xs text-netease-muted hover:bg-white/10 hover:text-white">
                   <Plus className="h-3.5 w-3.5" /> 新建分类
@@ -4019,8 +4137,15 @@ export default function Room() {
                   value={favoriteQuery}
                   onChange={(event) => setFavoriteQuery(event.target.value)}
                   placeholder="搜索收藏歌名、歌手..."
-                  className="w-full rounded-xl border border-netease-border bg-netease-dark py-2 pl-9 pr-3 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none"
+                  className="w-full rounded-xl border border-netease-border bg-netease-dark py-2 pl-9 pr-28 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none"
                 />
+                <button
+                  type="button"
+                  onClick={() => setFavoriteDuplicatePickerOpen(true)}
+                  className={`absolute right-2 top-1/2 -translate-y-1/2 rounded-lg px-2 py-1 text-xs ${favoriteDuplicateMode === 'none' ? 'text-netease-muted hover:bg-white/10 hover:text-white' : 'bg-netease-red/15 text-netease-red'}`}
+                >
+                  {favoriteDuplicateMode === 'none' ? '重复筛选' : favoriteDuplicateMode === 'name' ? '同名跨平台' : '同名同歌手'}
+                </button>
               </div>
             </div>
             <div ref={favoritesScrollRef} className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -4029,7 +4154,7 @@ export default function Room() {
               ) : filteredFavorites.length === 0 ? (
                 <div className="py-16 text-center text-sm text-netease-muted">
                   <Heart className="mx-auto mb-2 h-8 w-8 opacity-40" />
-                  {favorites.length === 0 ? '暂无收藏歌曲' : '没有匹配的收藏歌曲'}
+                  {favorites.length === 0 ? '暂无收藏歌曲' : favoriteDuplicateMode !== 'none' ? '没有符合当前条件的跨平台重复歌曲' : '没有匹配的收藏歌曲'}
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -4061,7 +4186,10 @@ export default function Room() {
                         <div className="min-w-0 flex-1 space-y-0.5">
                           <p className="truncate text-sm font-medium">{song.name}</p>
                           <p className="truncate text-xs text-netease-muted">{song.artist}{song.album ? ` · ${song.album}` : ''}</p>
-                          <div className="mt-1">
+                          {songPreview.key === key && songPreview.status === 'error' && songPreview.error && (
+                            <p className="truncate text-[10px] text-amber-400/90">{songPreview.error}</p>
+                          )}
+                          <div className="mt-1 flex flex-wrap items-center gap-1.5">
                             <FavoriteCategorySelect
                               value={String(song.category || '')}
                               categories={favoriteCategories}
@@ -4069,15 +4197,40 @@ export default function Room() {
                               onChange={(category) => void handleChangeFavoriteCategory(song, category)}
                               disabled={updatingFavoriteCategoryId === key}
                             />
+                            {favoriteDuplicateMode !== 'none' && <SourceBadge source={song.source} variant="muted" className="sm:hidden" />}
                           </div>
                         </div>
                         <SongRowBadges
                           song={song}
                           status={{ inQueue: queueKeys.has(key), played: playedKeys.has(key) }}
                         />
+                        <Tooltip content={songPreview.key === key && songPreview.status === 'playing' ? '暂停试听' : '试听'}>
+                          <button
+                            type="button"
+                            onClick={() => void toggleSongPreview(song)}
+                            disabled={songPreview.key === key && songPreview.status === 'loading'}
+                            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
+                              songPreview.key === key && (songPreview.status === 'playing' || songPreview.status === 'loading')
+                                ? 'bg-sky-500/20 text-sky-300'
+                                : 'bg-white/5 text-netease-muted hover:bg-white/10 hover:text-white'
+                            }`}
+                            aria-label={songPreview.key === key && songPreview.status === 'playing' ? '暂停试听' : '试听'}
+                          >
+                            {songPreview.key === key && songPreview.status === 'loading' ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : songPreview.key === key && songPreview.status === 'playing' ? (
+                              <Pause className="h-3.5 w-3.5" />
+                            ) : (
+                              <Play className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        </Tooltip>
                         <button
                           type="button"
-                          onClick={() => void handleAdd(song as SearchResult)}
+                          onClick={() => {
+                            if (songPreview.key === key) stopSongPreview({ resumeRoom: true });
+                            void handleAdd(song as SearchResult);
+                          }}
                           disabled={addingId === key}
                           className="flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50"
                         >
@@ -4120,7 +4273,7 @@ export default function Room() {
           document.body,
         )}
 
-      {(room.current || room.randomLoading) && !(pureMode && purePlayerHidden) && !immersiveMode ? (
+      {(room.current || room.randomLoading || room.randomError) && !(pureMode && purePlayerHidden) && !immersiveMode ? (
         <MiniPlayer onExpand={() => setShowPlayer(true)} barClassName={ambientGlassClass} />
       ) : (
         !immersiveMode && !(pureMode && purePlayerHidden) && (
@@ -4218,6 +4371,70 @@ export default function Room() {
               {renameSaving ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
               保存
             </button>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {favoriteDuplicatePickerOpen && createPortal(
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭重复筛选" />
+          <div role="dialog" aria-modal="true" aria-labelledby="favorite-duplicate-title" className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 id="favorite-duplicate-title" className="text-sm font-medium text-white">跨平台重复歌曲筛选</h2>
+              <button type="button" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭"><X className="h-5 w-5 text-netease-muted" /></button>
+            </div>
+            <p className="mb-4 text-xs leading-5 text-netease-muted">从全部收藏中找出至少存在于两个平台的歌曲，按组展示供你查看，不会自动取消收藏</p>
+            <div className="space-y-2">
+              {([
+                { value: 'name', label: '歌曲名称', description: '名称相同即视为重复，可能包含不同歌手的翻唱' },
+                { value: 'nameArtist', label: '歌曲 + 歌手', description: '歌曲名称与歌手都相同时才视为重复' },
+                { value: 'none', label: '显示全部歌曲', description: '关闭重复筛选' },
+              ] as const).map(option => (
+                <button
+                  key={option.value}
+                  type="button"
+                  autoFocus={favoriteDuplicateMode === option.value}
+                  onClick={() => { setFavoriteDuplicateMode(option.value); setFavoritePage(1); setFavoriteDuplicatePickerOpen(false); }}
+                  aria-pressed={favoriteDuplicateMode === option.value}
+                  className={`w-full rounded-xl border px-3 py-2.5 text-left transition-colors ${favoriteDuplicateMode === option.value ? 'border-netease-red/50 bg-netease-red/10' : 'border-white/10 hover:bg-white/5'}`}
+                >
+                  <span className="block text-sm">{option.label}</span>
+                  <span className="mt-1 block text-xs text-netease-muted">{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {deleteFavoriteCategoryTarget && createPortal(
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} aria-label="关闭删除分类" />
+          <div role="dialog" aria-modal="true" aria-labelledby="delete-favorite-category-title" className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+            <h2 id="delete-favorite-category-title" className="text-sm font-medium text-white">删除分类「{deleteFavoriteCategoryTarget}」</h2>
+            <p className="mt-2 text-xs leading-5 text-netease-muted">请选择如何处理分类中的歌曲，同时取消收藏后无法撤销</p>
+            <div className="mt-4 space-y-2">
+              <button
+                type="button"
+                autoFocus
+                disabled={Boolean(deletingFavoriteCategory)}
+                onClick={() => void handleDeleteFavoriteCategory(deleteFavoriteCategoryTarget, true)}
+                className="w-full rounded-xl border border-white/10 px-3 py-3 text-sm hover:bg-white/5 disabled:opacity-50"
+              >
+                {deletingFavoriteCategory ? '正在处理…' : '保留歌曲并移入未分类'}
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(deletingFavoriteCategory)}
+                onClick={() => void handleDeleteFavoriteCategory(deleteFavoriteCategoryTarget, false)}
+                className="w-full rounded-xl border border-rose-400/20 bg-rose-400/10 px-3 py-3 text-sm text-rose-200 hover:bg-rose-400/20 disabled:opacity-50"
+              >
+                同时取消其中歌曲收藏
+              </button>
+              <button type="button" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} className="w-full rounded-lg py-2 text-sm text-netease-muted hover:bg-white/5 disabled:opacity-50">取消</button>
+            </div>
           </div>
         </div>,
         document.body,

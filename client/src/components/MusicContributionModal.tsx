@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getMusicVerificationSandbox } from '../lib/harmonyMediaSession';
 import { CheckCircle2, Crown, Gem, HeartHandshake, KeyRound, QrCode, X } from 'lucide-react';
 import {
   checkContributionQr,
@@ -412,7 +413,7 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
               ref={secondVerifyFrameRef}
               title="汽水安全验证"
               src={secondVerifyUrl}
-              sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+              sandbox={getMusicVerificationSandbox()}
               className="min-h-0 flex-1 border-0"
             />
           </div>
