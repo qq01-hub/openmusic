@@ -307,52 +307,80 @@ async function listAuditLogPage({ offset = 0, limit = 10, q = '', action = '' } 
   try {
     await pruneExpiredAdminAudit(client);
     const cutoff = auditCutoffMs();
-    const rows = await client.lRange(ADMIN_AUDIT_KEY, 0, AUDIT_MAX - 1);
-    const all = rows.map((raw, index) => {
-      try {
-        const entry = JSON.parse(raw);
-        // 历史审计记录没有 ID，读取时补一个与 Redis 列表位置绑定的兼容键。
-        return entry && typeof entry === 'object'
-          ? { ...entry, id: entry.id || `legacy-${index}` }
-          : null;
-      } catch {
-        return null;
+    if (!keyword && !actionSet) {
+      const total = Math.min(AUDIT_MAX, Number(await client.lLen(ADMIN_AUDIT_KEY)) || 0);
+      if (total === 0 || start >= total) {
+        return { items: [], total, offset: start, limit: pageSize };
       }
-    }).filter((entry) => entry && Number(entry.at) >= cutoff);
+      const rows = await client.lRange(ADMIN_AUDIT_KEY, start, Math.min(total - 1, start + pageSize - 1));
+      const items = rows.map((raw, idx) => {
+        try {
+          const entry = JSON.parse(raw);
+          return entry && typeof entry === 'object'
+            ? { ...entry, id: entry.id || `legacy-${start + idx}` }
+            : null;
+        } catch {
+          return null;
+        }
+      }).filter((entry) => entry && Number(entry.at) >= cutoff);
+      return { items, total, offset: start, limit: pageSize };
+    }
 
-    const filtered = all.filter((entry) => {
-      if (actionSet && !actionSet.has(entry.action)) return false;
-      if (!keyword) return true;
-      const haystack = [
-        entry.action,
-        entry.ip,
-        entry.username,
-        entry.linuxdoUsername,
-        entry.githubUsername,
-        entry.roomId,
-        entry.name,
-        entry.value,
-        entry.banType,
-        entry.banId,
-        entry.reason,
-        entry.path,
-        entry.url,
-        entry.reportId,
-        entry.error,
-        entry.trigger,
-        entry.deviceId,
-        entry.userId,
-        entry.via,
-        entry.source,
-      ]
-        .filter((v) => v != null && v !== '')
-        .map((v) => String(v).toLowerCase())
-        .join(' ');
-      return haystack.includes(keyword);
-    });
-
-    const total = filtered.length;
-    const items = filtered.slice(start, start + pageSize);
+    const items = [];
+    let total = 0;
+    const batchSize = 500;
+    for (let cursor = 0; cursor < AUDIT_MAX; cursor += batchSize) {
+      const rows = await client.lRange(ADMIN_AUDIT_KEY, cursor, Math.min(AUDIT_MAX - 1, cursor + batchSize - 1));
+      if (!rows.length) break;
+      let reachedExpired = false;
+      for (let i = 0; i < rows.length; i += 1) {
+        let entry;
+        try {
+          entry = JSON.parse(rows[i]);
+        } catch {
+          continue;
+        }
+        if (!entry || typeof entry !== 'object') continue;
+        if (Number(entry.at) < cutoff) {
+          reachedExpired = true;
+          continue;
+        }
+        if (actionSet && !actionSet.has(entry.action)) continue;
+        if (keyword) {
+          const haystack = [
+            entry.action,
+            entry.ip,
+            entry.username,
+            entry.linuxdoUsername,
+            entry.githubUsername,
+            entry.roomId,
+            entry.name,
+            entry.value,
+            entry.banType,
+            entry.banId,
+            entry.reason,
+            entry.path,
+            entry.url,
+            entry.reportId,
+            entry.error,
+            entry.trigger,
+            entry.deviceId,
+            entry.userId,
+            entry.via,
+            entry.source,
+          ]
+            .filter((v) => v != null && v !== '')
+            .map((v) => String(v).toLowerCase())
+            .join(' ');
+          if (!haystack.includes(keyword)) continue;
+        }
+        if (total >= start && items.length < pageSize) {
+          items.push({ ...entry, id: entry.id || `legacy-${cursor + i}` });
+        }
+        total += 1;
+      }
+      if (rows.length < batchSize || reachedExpired) break;
+    }
     return { items, total, offset: start, limit: pageSize };
   } catch (err) {
     console.error('admin-audit Redis 读取失败:', err?.message || err);

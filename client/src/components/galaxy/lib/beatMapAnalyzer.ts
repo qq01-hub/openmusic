@@ -8,6 +8,7 @@ import {
 import { resolveSignedApiUrl } from '../../../lib/signedApiUrl';
 
 const HOP_SEC = 0.01;
+const MAX_BEATMAP_AUDIO_BYTES = 24 * 1024 * 1024;
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -139,21 +140,30 @@ export async function analyzeAudioBeatMap(
   const signedUrl = (await resolveSignedApiUrl(audioUrl)) || audioUrl;
   const resp = await fetch(signedUrl, { signal, credentials: 'same-origin' });
   if (!resp.ok) return null;
+  const declaredBytes = Number(resp.headers.get('content-length') || 0);
+  if (Number.isFinite(declaredBytes) && declaredBytes > MAX_BEATMAP_AUDIO_BYTES) {
+    try { await resp.body?.cancel?.(); } catch { /* ignore */ }
+    return null;
+  }
   const ab = await resp.arrayBuffer();
-  if (signal?.aborted) return null;
+  if (signal?.aborted || ab.byteLength > MAX_BEATMAP_AUDIO_BYTES) return null;
 
   progress?.('解码音频…');
   const DecodeCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!DecodeCtx) return null;
   const dc = new DecodeCtx();
-  const buffer = await new Promise<AudioBuffer | null>((resolve) => {
-    void dc.decodeAudioData(
-      ab.slice(0),
-      (b) => resolve(b),
-      () => resolve(null),
-    );
-  });
-  dc.close?.();
+  let buffer: AudioBuffer | null = null;
+  try {
+    buffer = await new Promise<AudioBuffer | null>((resolve) => {
+      void dc.decodeAudioData(
+        ab,
+        (b) => resolve(b),
+        () => resolve(null),
+      );
+    });
+  } finally {
+    void dc.close?.().catch(() => {});
+  }
   if (!buffer || signal?.aborted) return null;
 
   const musicTempoTask = analyzeMusicTempoInWorker(buffer, signal);

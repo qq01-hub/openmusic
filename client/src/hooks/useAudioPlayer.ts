@@ -33,7 +33,6 @@ import {
   isRestrictedAutoplayEnv,
   type PlayResult,
 } from '../lib/audioUnlock';
-import { sharedAudioGeneration } from '../lib/audioElement';
 import {
   installBackgroundPlaybackGuards,
   isLikelySystemMediaSuspend,
@@ -149,6 +148,8 @@ function isSourceUnavailableReason(reason: string): boolean {
  */
 function ensureLowestQualityForLocalRecovery(song: QueueItem): boolean {
   const source = song.source || 'netease';
+  // 汽水只提供完整流且无降级音质接口，不对其触发标准档锁定或降级提示
+  if (source === 'qishui') return false;
   const current = getUserPlaybackQuality(source);
   const lowest = getLowestQuality(source);
   if (!lowest) return false;
@@ -521,8 +522,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     const targetTime = playbackState
       ? getPlaybackTime(playbackState)
       : Math.max(0, Number(liveRoom.currentTime) || 0);
-    // applySync 会在 audio 仍暂停时先 play，再执行强制进度对齐。
-    applySync({ forceTime: targetTime });
+    // 曲首刚开播（< 6s）且本机已在头部时保持从 0s 连续播放，避免 loadeddata 晚到触发二次跳秒
+    applySync({ forceTime: targetTime < 6 && audio.currentTime < 1 ? 0 : targetTime });
   }, [applySync]);
 
   const applyVisibilitySync = useCallback(() => {
@@ -871,18 +872,21 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             return;
           }
 
+          const isCodecUnsupported = audio.error?.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED;
           runtime.lowestFallbackAttempted.current = true;
           const beforeLocked = isPlaybackQualityLockedToLowest();
-          void fetchServiceFallbackUrl(song).then(async (fallbackUrl) => {
+          void fetchServiceFallbackUrl(song, { lockGlobalLowest: !isCodecUnsupported }).then(async (fallbackUrl) => {
             if (fallbackUrl) {
-              const qualityDowngraded = ensureLowestQualityForLocalRecovery(song)
-                || (!beforeLocked && isPlaybackQualityLockedToLowest());
-              notifyLocalRecoveryToast(song, { qualityDowngraded, reason: 'media_quality_fallback' });
+              if (!isCodecUnsupported) {
+                const qualityDowngraded = ensureLowestQualityForLocalRecovery(song)
+                  || (!beforeLocked && isPlaybackQualityLockedToLowest());
+                notifyLocalRecoveryToast(song, { qualityDowngraded, reason: 'media_quality_fallback' });
+              }
               runtime.tempRetries.current = 0;
               if (isCachedUrlCrossSource(song) || isTrackCrossSource(song)) {
                 markTrackCrossSource(song, getCachedUrlCrossSourceFrom(song));
               }
-              const freshFallback = (await refreshSignedApiUrl(fallbackUrl)) || fallbackUrl;
+              const freshFallback = (await resolveSignedApiUrl(fallbackUrl)) || fallbackUrl;
               controller.enqueue(async () => {
                 const a = controller.audio;
                 a.pause();
@@ -1274,7 +1278,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             }
             if (localResult.status === 'ok') {
               playbackUrl = localResult.url;
-              qishuiWebAudio = isIOS() || shouldProxySongPlaybackUrl() || proxyQishui;
+              qishuiWebAudio = isIOS() || shouldProxySongPlaybackUrl();
             }
           }
           qualityLabel = resolvedMeta.qualityLabel;
@@ -1335,6 +1339,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           || (shouldProxySongPlaybackUrl() && isProxiedMediaUrl(playbackUrl))
           || (isIOS() && effectiveSource === 'kugou' && isProxiedMediaUrl(playbackUrl));
         setSharedAudioRouting(useWebAudioOutput);
+        initAudio();
 
         await controller.exec(async () => {
           if (gen !== loadGeneration.current) return;
@@ -1522,7 +1527,6 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     room?.current?.source,
     loadRetryNonce,
     trackReloadNonce,
-    sharedAudioGeneration,
     tvMode,
     initAudio,
     controller,

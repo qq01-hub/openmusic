@@ -31,9 +31,10 @@ test('new accounts reaching 500 music requests do not receive the removed burst 
 
 test('resetRisk resets one account and returns the retained latest IP', async () => {
   let evaluated;
+  let scriptText = '';
   const client = {
     async hGet(_key, field) { return field === 'status' ? 'blocked' : null; },
-    async eval(_script, options) { evaluated = options; return JSON.stringify({ found: 1, latestIp: '198.51.100.8' }); },
+    async eval(script, options) { scriptText = script; evaluated = options; return JSON.stringify({ found: 1, latestIp: '198.51.100.8' }); },
   };
   const control = createRiskControl({ getStore: () => client, now: () => 1_700_000_000_000 });
   const result = await control.resetRisk('acct_1234567890abcdef', { reason: '人工复核后解除误报' });
@@ -41,4 +42,6 @@ test('resetRisk resets one account and returns the retained latest IP', async ()
   assert.equal(evaluated.arguments[1], 'acct_1234567890abcdef');
   assert.equal(evaluated.arguments[2], 'blocked');
   assert.equal(evaluated.arguments[3], '人工复核后解除误报');
+  assert.equal(evaluated.keys[8], 'openmusic:risk:v1:scores');
+  assert.equal(scriptText.includes("redis.call('ZADD', KEYS[9], 0, ARGV[2])"), true);
 });

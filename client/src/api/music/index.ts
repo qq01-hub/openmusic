@@ -185,7 +185,8 @@ export type { RoomAudioQuality } from '../../types';
 
 const lyricsInflight = new Map<string, Promise<string>>();
 const LYRICS_CACHE_TTL_MS = 5 * 60_000;
-const lyricsCache = new Map<string, { value: string; expires: number }>();
+const MAX_LYRICS_CACHE_ENTRIES = 64;
+const lyricsCache = new Map<string, { value: string; expires: number; parsed?: import('../../types').LyricLine[] }>();
 
 function lyricsRequestKey(song: Pick<Song, 'id' | 'source' | 'lrc' | 'name'>) {
   const source = song.source || 'netease';
@@ -211,14 +212,26 @@ async function fetchLyrics(song: LyricsSong): Promise<string> {
 
 export async function getLyrics(song: LyricsSong): Promise<string> {
   const key = lyricsRequestKey(song);
+  const now = Date.now();
   const cached = lyricsCache.get(key);
-  if (cached && cached.expires > Date.now()) return cached.value;
+  if (cached && cached.expires > now) {
+    lyricsCache.delete(key);
+    lyricsCache.set(key, cached);
+    return cached.value;
+  }
+  if (cached) lyricsCache.delete(key);
 
   const inflight = lyricsInflight.get(key);
   if (inflight) return inflight;
 
   const promise = fetchLyrics(song).then((lrc) => {
+    lyricsCache.delete(key);
     lyricsCache.set(key, { value: lrc, expires: Date.now() + LYRICS_CACHE_TTL_MS });
+    while (lyricsCache.size > MAX_LYRICS_CACHE_ENTRIES) {
+      const oldest = lyricsCache.keys().next().value;
+      if (!oldest) break;
+      lyricsCache.delete(oldest);
+    }
     return lrc;
   }).finally(() => {
     lyricsInflight.delete(key);
@@ -248,7 +261,18 @@ export function getSourceLabel(source?: MusicSource): string {
   return getSourceShortLabel(source);
 }
 
+const parsedLrcCache = new Map<string, import('../../types').LyricLine[]>();
+const MAX_PARSED_LRC_CACHE = 32;
+
 export function parseLrc(lrc: string): import('../../types').LyricLine[] {
+  if (!lrc) return [];
+  const cached = parsedLrcCache.get(lrc);
+  if (cached) {
+    parsedLrcCache.delete(lrc);
+    parsedLrcCache.set(lrc, cached);
+    return cached;
+  }
+
   const lines: import('../../types').LyricLine[] = [];
   const regex = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
   const offsetMs = Number(lrc.match(/^\s*\[offset\s*:\s*([+-]?\d+)\s*\]\s*$/im)?.[1] ?? 0);
@@ -273,10 +297,17 @@ export function parseLrc(lrc: string): import('../../types').LyricLine[] {
     }
   }
 
-  return mergeLyricTranslations(lines.sort((a, b) => a.time - b.time)).map((line) => ({
+  const result = mergeLyricTranslations(lines.sort((a, b) => a.time - b.time)).map((line) => ({
     ...line,
     time: Math.max(0, line.time - offsetSec),
   }));
+  parsedLrcCache.set(lrc, result);
+  while (parsedLrcCache.size > MAX_PARSED_LRC_CACHE) {
+    const oldest = parsedLrcCache.keys().next().value;
+    if (oldest === undefined) break;
+    parsedLrcCache.delete(oldest);
+  }
+  return result;
 }
 
 /** 歌词结束后常见纯音乐尾奏预留（秒） */

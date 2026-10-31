@@ -9,13 +9,13 @@ export const COVER_SIZE_PX: Record<Exclude<CoverSize, 'full'>, number> = {
 const FALLBACK_COVER =
   'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect fill="%23333" width="48" height="48"/><text x="24" y="28" text-anchor="middle" fill="%23666" font-size="16">♪</text></svg>';
 
-function appendMetingThumbParam(url: string): string {
+function appendMetingThumbParam(url: string, px = 320): string {
   const idx = url.indexOf('?');
   const params = new URLSearchParams(idx >= 0 ? url.slice(idx + 1) : '');
   if (params.get('type') !== 'pic') return url;
-  // 同一首歌的封面由多个视觉层共用；统一请求一张 320px 公共封面，
-  // 避免房间背景、队列和播放器分别触发 48/96/320 多次请求。
-  params.set('size', '320');
+  // 按尺寸分桶请求封面：列表缩略图统一走 96px，房间/播放器走 320px，全屏舞台走 512px
+  const bucket = px <= 96 ? 96 : px <= 320 ? 320 : 512;
+  params.set('size', String(bucket));
   return `${url.split('?')[0]}?${params.toString()}`;
 }
 
@@ -55,8 +55,10 @@ function resizeQqCover(url: string, px: number): string {
   return url;
 }
 
+const KUGOU_COVER_HOST_RE = /(?:^|\.|\/)(?:kugou\.com|kugou\.net|kgimg\.com|kgimg\.net|kgcdn\.com)(?:\/|:|$)/i;
+
 function resizeKugouCover(url: string, px: number): string {
-  if (!/kugou\.com/i.test(url)) return url;
+  if (!KUGOU_COVER_HOST_RE.test(url)) return url;
   const bucket = px <= 64 ? 64 : px <= 120 ? 120 : px <= 240 ? 240 : 400;
   const resized = url.replace(/\/(\d+)\//, `/${bucket}/`);
   if (resized !== url) return resized;
@@ -89,14 +91,14 @@ function resizeDirectCoverUrl(url: string, px: number): string {
 
 /**
  * HTTPS 页面上的 http 封面直链会被手机浏览器按混合内容拦截（桌面 Chrome 会自动升级图片协议，
- * 手机端多数浏览器不会，表现为热榜/队列封面整片空白）。
+ * 手机端多数浏览器不会，表现为热榜/队列封面整片空白）
  * 网易/QQ 等音乐 CDN 支持 https，直接升协议；酷狗部分节点 https 证书不可靠（与服务端
- * preferHttpsMediaUrl 保持一致），改走同源 media-proxy。
+ * preferHttpsMediaUrl 保持一致），改走同源 media-proxy
  */
 export function upgradeInsecureCoverUrl(url: string): string {
   if (!/^http:\/\//i.test(url)) return url;
   if (typeof window === 'undefined' || window.location.protocol !== 'https:') return url;
-  if (/kugou\.com/i.test(url)) {
+  if (KUGOU_COVER_HOST_RE.test(url)) {
     return `/api/media-proxy?url=${encodeURIComponent(url)}`;
   }
   return `https://${url.slice('http://'.length)}`;
@@ -113,7 +115,8 @@ export function resizeCoverUrl(url: string, size: CoverSize = 'full'): string {
     try {
       const parsed = new URL(next, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
       if (parsed.searchParams.get('type') === 'pic') {
-        parsed.searchParams.set('size', '320');
+        const targetPx = size === 'full' ? 512 : COVER_SIZE_PX[size] <= 96 ? 96 : 320;
+        parsed.searchParams.set('size', String(targetPx));
         return `${parsed.pathname}?${parsed.searchParams.toString()}`;
       }
     } catch {
@@ -125,7 +128,7 @@ export function resizeCoverUrl(url: string, size: CoverSize = 'full'): string {
   const px = COVER_SIZE_PX[size];
 
   if (next.startsWith('/api/meting')) {
-    return appendMetingThumbParam(next);
+    return appendMetingThumbParam(next, px);
   }
 
   if (next.includes('/api/media-proxy')) {

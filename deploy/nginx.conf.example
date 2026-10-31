@@ -29,6 +29,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
 
     gzip on;
+    gzip_static on;
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 4;
@@ -272,6 +273,25 @@ server {
         expires 7d;
         add_header Cache-Control "public, max-age=604800" always;
         access_log off;
+    }
+
+    location = /favicon.ico {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+    }
+
+    location = /apple-touch-icon.png {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+    }
+
+    location = /site.webmanifest {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+        default_type application/manifest+json;
     }
 
     location = /og-cover.png {

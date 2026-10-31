@@ -33,6 +33,25 @@
   backdrop-filter: none;
 }
 .admin-shell .runtime-config-savebar { margin-inline: -24px; padding-inline: 24px; }
+/* 统一修正后台所有多行文本框 showCount 字数统计位置，避免浮动到框外右下角与下方按钮或说明文字重叠 */
+.admin-shell .ant-input-textarea-show-count > .ant-input,
+.ant-modal-root .ant-input-textarea-show-count > .ant-input,
+.ant-drawer .ant-input-textarea-show-count > .ant-input {
+  padding-bottom: 24px;
+}
+.admin-shell .ant-input-textarea-show-count .ant-input-data-count,
+.ant-modal-root .ant-input-textarea-show-count .ant-input-data-count,
+.ant-drawer .ant-input-textarea-show-count .ant-input-data-count {
+  bottom: 6px !important;
+  inset-inline-end: 10px !important;
+  margin-bottom: 0 !important;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: rgba(255, 255, 255, 0.88);
+  pointer-events: none;
+}
 .admin-freshness { color: var(--admin-muted); font-size: 12px; white-space: nowrap; }
 .admin-refresh-error { margin-bottom: 16px; }
 @media (max-width: 1100px) {

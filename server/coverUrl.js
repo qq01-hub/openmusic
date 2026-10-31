@@ -32,10 +32,12 @@ export function resizeCoverForThumb(url, px) {
     return next;
   }
 
-  if (/kugou\.com/i.test(next)) {
+  if (/(?:^|\.|\/)(?:kugou\.com|kugou\.net|kgimg\.com|kgimg\.net|kgcdn\.com)(?:\/|:|$)/i.test(next)) {
     const bucket = px <= 64 ? 64 : px <= 120 ? 120 : px <= 240 ? 240 : 400;
     const resized = next.replace(/\/(\d+)\//, `/${bucket}/`);
     if (resized !== next) return resized;
+    const fallbackResized = next.replace(/\/(480|400|240|200|150)\//, `/${bucket}/`);
+    if (fallbackResized !== next) return fallbackResized;
   }
 
   if (/param=\d+y\d+/i.test(next)) {

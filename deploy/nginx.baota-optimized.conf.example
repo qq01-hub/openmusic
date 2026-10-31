@@ -82,6 +82,7 @@ server {
 
     #GZIP START
     gzip on;
+    gzip_static on;
     gzip_vary on;
     gzip_proxied any;
     gzip_comp_level 4;
@@ -129,6 +130,7 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
         proxy_buffering off;
         proxy_read_timeout 86400;
         proxy_send_timeout 86400;
@@ -145,6 +147,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
         proxy_set_header Range $http_range;
         proxy_set_header If-Range $http_if_range;
         proxy_buffering off;
@@ -165,6 +169,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
         proxy_connect_timeout 60s;
         proxy_send_timeout 600s;
         proxy_read_timeout 600s;
@@ -178,6 +184,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
     }
@@ -190,6 +198,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     location ^~ /cgi-bin/ {
@@ -200,6 +210,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     location = /robots.txt {
@@ -209,6 +221,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     location = /sitemap.xml {
@@ -218,6 +232,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     # 首页 HTML 走 Node，保证百度验证 meta 写入源码
@@ -228,6 +244,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     location = /index.html {
@@ -237,6 +255,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     # 动态会话页由 Node 返回 X-Robots-Tag: noindex，避免被收录。
@@ -247,6 +267,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     # /admin 与自定义后台入口由 Node 校验；不匹配配置的随机路径会返回 404。
@@ -257,6 +279,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     location ~ ^/[A-Za-z0-9_-]{8,64}$ {
@@ -266,6 +290,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     # ★ 静态直出（构建文件名带 hash，可长期缓存）
@@ -319,6 +345,25 @@ server {
         access_log off;
     }
 
+    location = /favicon.ico {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+    }
+
+    location = /apple-touch-icon.png {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+    }
+
+    location = /site.webmanifest {
+        expires 7d;
+        add_header Cache-Control "public, max-age=604800" always;
+        access_log off;
+        default_type application/manifest+json;
+    }
+
     location = /og-cover.png {
         expires 7d;
         add_header Cache-Control "public, max-age=604800" always;
@@ -338,6 +383,8 @@ server {
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header iqp $http_iqp;
+        proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
     #PROXY-CONF-END

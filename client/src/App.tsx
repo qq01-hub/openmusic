@@ -36,6 +36,30 @@ const TvDisplay = lazyWithRetry(() => import('./pages/TvDisplay'), 'TvDisplay');
 const Admin = lazyWithRetry(() => import('./pages/Admin'), 'Admin');
 const Setup = lazyWithRetry(() => import('./pages/Setup'), 'Setup');
 
+let adminBundlePreload: Promise<unknown> | null = null;
+function preloadAdminBundle() {
+  if (!adminBundlePreload) {
+    adminBundlePreload = import('./pages/Admin').catch(() => {
+      adminBundlePreload = null;
+    });
+  }
+  return adminBundlePreload;
+}
+
+if (typeof window !== 'undefined') {
+  const initialPath = window.location.pathname;
+  void import('./components/AccountGate').catch(() => undefined);
+  if (initialPath === '/') {
+    void import('./pages/Home').catch(() => undefined);
+  } else if (initialPath.startsWith('/room/')) {
+    void import('./pages/Room').then((m) => m.preloadRoomShell()).catch(() => undefined);
+  } else if (initialPath.startsWith('/tv/')) {
+    void import('./pages/TvDisplay').catch(() => undefined);
+  } else if (initialPath === '/admin' || /^\/[A-Za-z0-9_-]{8,64}$/.test(initialPath)) {
+    void preloadAdminBundle();
+  }
+}
+
 function RouteFallback() {
   const location = useLocation();
   const label = location.pathname.startsWith('/room/') || location.pathname.startsWith('/tv/')
@@ -75,15 +99,19 @@ function AdminGate() {
     }
 
     setMatch(null);
+    void preloadAdminBundle();
     (async () => {
       try {
-        const res = await fetch('/api/admin/gate', {
-          method: 'POST',
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path }),
-        });
+        const [res] = await Promise.all([
+          fetch('/api/admin/gate', {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path }),
+          }),
+          preloadAdminBundle(),
+        ]);
         const data = await res.json().catch(() => ({}));
         const matched = Boolean(data.match);
         if (!cancelled) {

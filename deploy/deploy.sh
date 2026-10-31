@@ -150,8 +150,9 @@ update_docker_full() {
   local compose_cmd
   compose_cmd="$(check_docker)"
   update_git_pull
+  ensure_full_env_file
   info "重新构建并启动容器（含 Meting）..."
-  $compose_cmd -f docker-compose.full.yml up -d --build
+  $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
   configure_meting "$compose_cmd" -f docker-compose.full.yml
   ok "更新完成（Docker 全量版）"
 }
@@ -160,9 +161,10 @@ update_docker_loudness() {
   local compose_cmd
   compose_cmd="$(check_docker)"
   update_git_pull
+  ensure_full_env_file
   info "重新构建并启动容器（含 Meting + 响度辅助服务）..."
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
-  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build
+  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
   configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
   ok "更新完成（Docker 响度增强版）"
 }
@@ -233,15 +235,58 @@ deploy_update() {
 
 # ---------- Docker 全量版 + 响度辅助服务 ----------
 
+ensure_full_env_file() {
+  local env_file=".env"
+  if [ ! -f "$env_file" ]; then
+    local openmusic_port="${OPENMUSIC_PORT:-4000}"
+    local meting_port="${METING_PORT:-3000}"
+    local meting_admin_path
+    local meting_pw
+    local encryption_key
+    if require_cmd openssl; then
+      meting_admin_path="$(openssl rand -hex 8)"
+      meting_pw="$(openssl rand -hex 16)"
+      encryption_key="$(openssl rand -hex 32)"
+    else
+      meting_admin_path="$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
+      meting_pw="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
+      encryption_key="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
+    cat > "$env_file" <<EOF
+OPENMUSIC_PORT=$openmusic_port
+METING_PORT=$meting_port
+OPENMUSIC_NETWORK_SUBNET=${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
+ALLOW_INSECURE_COOKIES=${ALLOW_INSECURE_COOKIES:-1}
+METING_ADMIN_PATH=$meting_admin_path
+METING_ADMIN_USERNAME=admin
+METING_ADMIN_PASSWORD=$meting_pw
+ROOM_CREDENTIAL_ENCRYPTION_KEY=$encryption_key
+EOF
+    ok "已自动生成根目录 $env_file 配置"
+  else
+    for required_var in METING_ADMIN_PATH METING_ADMIN_USERNAME METING_ADMIN_PASSWORD ROOM_CREDENTIAL_ENCRYPTION_KEY; do
+      if ! grep -Eq "^${required_var}=.+$" "$env_file"; then
+        err "$env_file 缺少非空配置 ${required_var}，为避免覆盖现有密钥已中止，请先补齐该字段"
+        exit 1
+      fi
+    done
+  fi
+}
+
 deploy_docker_loudness() {
   local compose_cmd
   compose_cmd="$(check_docker)"
   info "使用命令：$compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml"
+  ensure_full_env_file
   prepare_data_dir
 
   info "启动容器（redis + meting + loudness）..."
   $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
-  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build
+  if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
+    $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180 --force-recreate
+  else
+    $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
+  fi
   configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
 
   ok "部署完成（全量版，含 Meting + 响度辅助服务）"
@@ -272,7 +317,7 @@ configure_meting() {
 }
 
 prepare_data_dir() {
-  mkdir -p data/downloads
+  mkdir -p data/downloads data/meting
   CONFIG_FILES_REPAIRED=0
   for config_file in data/.env data/runtimeConfig.json data/adminConfig.json data/setup.lock; do
     if [ -d "$config_file" ]; then
@@ -290,10 +335,6 @@ prepare_data_dir() {
   [ -f data/runtimeConfig.json ] || echo '{}' > data/runtimeConfig.json
   [ -f data/adminConfig.json ] || echo '{}' > data/adminConfig.json
   [ -f data/setup.lock ] || : > data/setup.lock
-  if [ -s data/setup.lock ]; then
-    err "data/setup.lock 非空，为避免误判安装状态已中止；如需重新安装请先清空该文件"
-    exit 1
-  fi
 }
 
 # ---------- Docker 精简版（不含 Meting） ----------
@@ -306,9 +347,9 @@ deploy_docker() {
 
   info "启动容器（redis + openmusic）..."
   if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
-    $compose_cmd up -d --build --force-recreate openmusic
+    $compose_cmd up -d --build --wait --wait-timeout 180 --force-recreate openmusic
   else
-    $compose_cmd up -d --build
+    $compose_cmd up -d --build --wait --wait-timeout 180
   fi
 
   ok "部署完成"
@@ -332,13 +373,14 @@ deploy_docker_full() {
   local compose_cmd
   compose_cmd="$(check_docker)"
   info "使用命令：$compose_cmd -f docker-compose.full.yml"
+  ensure_full_env_file
   prepare_data_dir
 
   info "启动容器（redis + meting + openmusic）..."
   if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
-    $compose_cmd -f docker-compose.full.yml up -d --build --force-recreate openmusic
+    $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180 --force-recreate openmusic
   else
-    $compose_cmd -f docker-compose.full.yml up -d --build
+    $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
   fi
   configure_meting "$compose_cmd" -f docker-compose.full.yml
 

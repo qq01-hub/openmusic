@@ -72,7 +72,7 @@ function ToplistRow({
       </span>
       <SongCover
         song={song}
-        size="full"
+        size="thumb"
         className="h-9 w-9 flex-shrink-0 rounded-md object-cover bg-netease-card"
       />
       <div className="min-w-0 flex-1 self-stretch flex flex-col justify-center gap-0.5">
@@ -128,7 +128,7 @@ function CompactToplistCard({
       className="group flex w-[4.25rem] flex-shrink-0 flex-col text-left disabled:opacity-50"
     >
       <div className="relative aspect-square overflow-hidden rounded-lg bg-netease-card">
-        <SongCover song={song} size="full" className="h-full w-full object-cover" />
+        <SongCover song={song} size="thumb" className="h-full w-full object-cover" />
         <span className={`absolute left-0.5 top-0.5 rounded px-1 text-[9px] font-bold leading-4 ${rankClass(rank)} bg-black/50`}>
           {rank}
         </span>
@@ -379,8 +379,7 @@ export default memo(function HotSongPanel({
       <div className="surface-panel room-main-panel room-main-panel--hot flex-shrink-0 overflow-hidden rounded-2xl">
         {header}
         <div className="room-panel-divider border-t px-2 pb-2 pt-1.5">
-          <div style={{ display: source === 'netease' ? undefined : 'none' }}>{renderBody('netease')}</div>
-          <div style={{ display: source === 'platform' ? undefined : 'none' }}>{renderBody('platform')}</div>
+          {renderBody(source)}
         </div>
       </div>
     );
@@ -397,8 +396,7 @@ export default memo(function HotSongPanel({
       <div className="room-panel-divider border-b">{header}</div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 py-1">
-        <div style={{ display: source === 'netease' ? undefined : 'none' }}>{renderBody('netease')}</div>
-        <div style={{ display: source === 'platform' ? undefined : 'none' }}>{renderBody('platform')}</div>
+        {renderBody(source)}
       </div>
     </div>
   );

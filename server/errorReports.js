@@ -318,6 +318,7 @@ export async function deleteErrorReport(id) {
     try {
       const existed = await client.exists(reportKey(reportId));
       await client.del(reportKey(reportId));
+      await client.hDel(SUMMARIES_KEY, reportId);
       await client.lRem(IDS_KEY, 0, reportId);
       if (!existed && !memoryReports.has(reportId)) {
         return { success: false, error: '上报不存在' };

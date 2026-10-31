@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { measureCoverLuminance, tuneCoverBackdrop, type CoverBackdropTuning } from '../lib/coverBackdrop';
 import { getCoverPixelSize } from '../lib/coverUrl';
+import { cacheCoverImage } from '../lib/coverImageCache';
+import { toProxiedMediaUrl } from '../lib/mediaProxyUrl';
 import { useSignedApiUrl } from '../lib/signedApiUrl';
 import { loadSharedCoverResource } from '../lib/sharedCoverResource';
 
@@ -75,8 +77,13 @@ export default function AmbientCoverLayers({ coverUrl, className = 'absolute ins
             }
           }}
           onLoad={(event) => {
+            const img = event.currentTarget;
             setLoadedFor(resourceUrl);
-            setTuning(tuneCoverBackdrop(measureCoverLuminance(event.currentTarget)));
+            setTuning(tuneCoverBackdrop(measureCoverLuminance(img)));
+            if (coverUrl) {
+              cacheCoverImage(coverUrl, img);
+              cacheCoverImage(toProxiedMediaUrl(coverUrl), img);
+            }
           }}
           onError={() => {
             if (stage === 'primary' && proxyUrl) {

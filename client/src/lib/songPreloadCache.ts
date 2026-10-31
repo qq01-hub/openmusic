@@ -5,6 +5,7 @@ import { isIOS } from './audioUnlock';
 import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
 import { stripApiSignParams } from './signedApiUrl';
 import {
+  getDowngradedQuality,
   getLowestQuality,
   getUserPlaybackQuality,
 } from '../api/music/quality';
@@ -664,9 +665,10 @@ async function fetchSongUrl(
   return null;
 }
 
-/** B 类服务错误：单级降至最低档并重取 URL（仅调用方负责重试 1 次播放） */
+/** B 类服务错误：按音质阶梯逐级向下尝试（如 hires → lossless → exhigh → standard），仅针对当前单曲，不锁死全局 standard */
 export async function fetchServiceFallbackUrl(
   song: QueueItem,
+  options: { lockGlobalLowest?: boolean } = {},
 ): Promise<string | null> {
   if (isHumanCheckPending()) return null;
   const source = songSourceOf(song);
@@ -684,11 +686,34 @@ export async function fetchServiceFallbackUrl(
     return (await fetchCrossSourceFallback(song))?.url || null;
   }
 
-  const fallback = await tryLowestQualityFetch(song);
-  if (fallback.ok) {
-    publishActualQuality(song, fallback.qualityLabel, fallback.crossSource ? fallback.crossSourceFrom : songSourceOf(song));
-    return fallback.url;
+  if (options.lockGlobalLowest) {
+    const fallback = await tryLowestQualityFetch(song);
+    if (fallback.ok) {
+      publishActualQuality(song, fallback.qualityLabel, fallback.crossSource ? fallback.crossSourceFrom : songSourceOf(song));
+      return fallback.url;
+    }
+    return (await fetchCrossSourceFallback(song))?.url || null;
   }
+
+  let candidateQuality = quality ? getDowngradedQuality(source, quality) : lowest;
+  while (candidateQuality) {
+    const step = await fetchSongUrlOnce(song, candidateQuality, { refresh: true });
+    if (step.ok && step.url) {
+      const entry = {
+        url: step.url,
+        qualityLabel: step.qualityLabel,
+        loudness: step.loudness,
+        duration: step.duration,
+      };
+      urlCache.set(urlCacheKey(song, quality), entry);
+      urlCache.set(trackKeyOf(song), entry);
+      trimUrlCache();
+      publishActualQuality(song, step.qualityLabel, songSourceOf(song));
+      return step.url;
+    }
+    candidateQuality = getDowngradedQuality(source, candidateQuality);
+  }
+
   return (await fetchCrossSourceFallback(song))?.url || null;
 }
 

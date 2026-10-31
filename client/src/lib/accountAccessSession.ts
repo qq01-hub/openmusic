@@ -16,6 +16,10 @@ export function hasAnonymousAccess(): boolean {
   return anonymousAccess;
 }
 
+export function hasVerifiedAccountSession(): boolean {
+  return anonymousAccess || (accessDeadline > Date.now() + 60_000);
+}
+
 export function setAnonymousAccess(allowed: boolean): void {
   anonymousAccess = allowed;
 }

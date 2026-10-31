@@ -11,8 +11,10 @@ import { refreshQualityCapabilities } from './api/music/quality';
 import { applyStoredRoomThemeColor } from './lib/roomThemeColor';
 import { installGuideUsageTracking } from './lib/userGuide';
 import { prefetchLoadingQuote } from './lib/loadingQuote';
+import { fetchAccountSession } from './lib/accountAuth';
 
 applyStoredRoomThemeColor();
+void fetchAccountSession().catch(() => undefined);
 installOpenMusicDebug();
 installVisibilitySync();
 installGuideUsageTracking();

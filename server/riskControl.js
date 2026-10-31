@@ -450,11 +450,12 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         local current = redis.call('HGET', KEYS[1], 'lastNetworkIp') or redis.call('HGET', KEYS[1], 'lastRequestIp') or redis.call('HGET', KEYS[1], 'lastLoginIp') or ''
         if current ~= ARGV[5] then return -1 end
         if tonumber(redis.call('HGET', KEYS[1], 'scoreAt') or '0') > tonumber(ARGV[1]) then return tonumber(redis.call('HGET', KEYS[1], 'score') or '0') end
+        local resetAt = tonumber(redis.call('HGET', KEYS[1], 'scoreResetAt') or '0')
+        local seen = tonumber(redis.call('HGET', KEYS[1], 'lastSeenAt') or ARGV[1])
         local shared = ARGV[4] == 'unknown' and 0 or redis.call('ZCOUNT', KEYS[4], tonumber(ARGV[1]) - 7776000000, '+inf')
-        local score = scoreRisk(KEYS[1], KEYS[2], KEYS[3], shared, KEYS[5], KEYS[6], tonumber(ARGV[1]), ARGV[2], KEYS[8], KEYS[9])
+        local score = resetAt >= seen and 0 or scoreRisk(KEYS[1], KEYS[2], KEYS[3], shared, KEYS[5], KEYS[6], tonumber(ARGV[1]), ARGV[2], KEYS[8], KEYS[9])
         redis.call('HSET', KEYS[1], 'score', score, 'scoreAt', ARGV[1])
         redis.call('ZADD', KEYS[7], score, ARGV[3])
-        local seen = tonumber(redis.call('HGET', KEYS[1], 'lastSeenAt') or ARGV[1])
         if redis.call('HGET', KEYS[1], 'status') == 'blocked' then
           redis.call('ZREM', KEYS[10], ARGV[3]); redis.call('ZREM', KEYS[11], ARGV[3]); redis.call('ZADD', KEYS[12], score, ARGV[3]); redis.call('ZADD', KEYS[13], seen, ARGV[3])
         else
@@ -844,7 +845,9 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       ]));
       const items = (await Promise.all(ids.map(async entry => {
         const item = await summary(entry.value);
-        return item && (pool === 'all' || (item.status === 'blocked') === (pool === 'blocked')) && { ...item, queueScore: order === 'risk' ? entry.score : item.sampledScore };
+        if (!item || (pool !== 'all' && (item.status === 'blocked') !== (pool === 'blocked'))) return null;
+        const resetZeroed = item.sampledScore === 0 && item.score === 0;
+        return { ...item, queueScore: resetZeroed ? 0 : (order === 'risk' ? entry.score : item.sampledScore) };
       }))).filter(Boolean);
       return { items, total, page: currentPage, pageSize: size, pool, high, blocked, scoreUpdatedOnActivity: true, timeZone: 'Asia/Shanghai', generatedAt: now() };
     }
@@ -950,6 +953,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('ZADD', KEYS[2] .. ARGV[2], ARGV[6], ARGV[1])
       local score = tonumber(redis.call('HGET', KEYS[1], 'score') or '0')
       local seen = tonumber(redis.call('HGET', KEYS[1], 'lastSeenAt') or ARGV[6])
+      redis.call('ZADD', KEYS[8], score, ARGV[1])
       if ARGV[2] == 'blocked' then
         redis.call('ZREM', KEYS[4], ARGV[1]); redis.call('ZREM', KEYS[5], ARGV[1]); redis.call('ZADD', KEYS[6], score, ARGV[1]); redis.call('ZADD', KEYS[7], seen, ARGV[1])
       else
@@ -959,7 +963,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('LTRIM', KEYS[3], 0, 99)
       redis.call('EXPIRE', KEYS[3], 7776000)
       return 1
-    `, { keys: [profileKey(id), `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [id, decision.status, JSON.stringify(decision.tags), decision.note, decision.reason, String(now())] }).then((result) => {
+    `, { keys: [profileKey(id), `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}scores`], arguments: [id, decision.status, JSON.stringify(decision.tags), decision.note, decision.reason, String(now())] }).then((result) => {
       if (!result) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     }));
     return decision;
@@ -985,13 +989,14 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('ZREM', KEYS[6], ARGV[2])
       redis.call('ZADD', KEYS[3], 0, ARGV[2])
       redis.call('ZADD', KEYS[4], ARGV[1], ARGV[2])
+      redis.call('ZADD', KEYS[9], 0, ARGV[2])
       for _, status in ipairs({'normal', 'watch', 'blocked'}) do redis.call('ZREM', KEYS[7] .. status, ARGV[2]) end
       redis.call('ZADD', KEYS[7] .. 'normal', ARGV[1], ARGV[2])
       redis.call('LPUSH', KEYS[8], cjson.encode({at=tonumber(ARGV[1]), previousStatus=ARGV[3], status='normal', reason=ARGV[4], reset=true}))
       redis.call('LTRIM', KEYS[8], 0, 99)
       redis.call('EXPIRE', KEYS[8], 7776000)
       return cjson.encode({ found = 1, latestIp = latestIp })
-    `, { keys: [profileKey(id), `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status:`, `${prefix}decisions:${id}`], arguments: [String(timestamp), id, previousStatus, reason] }));
+    `, { keys: [profileKey(id), `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}scores`], arguments: [String(timestamp), id, previousStatus, reason] }));
     const parsed = JSON.parse(result);
     if (!parsed.found) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     return { ok: true, status: 'normal', score: 0, latestIp: parsed.latestIp || '', resetAt: timestamp };

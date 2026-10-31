@@ -2249,6 +2249,20 @@ const coverResolveInflight = new Map();
 /** 解析失败负缓存，避免每次 listRooms 都打慢上游 */
 const coverResolveFailedAt = new Map();
 const COVER_RESOLVE_FAIL_TTL_MS = 2 * 60 * 1000;
+const MAX_COVER_RESOLVE_FAIL_CACHE = 512;
+
+function rememberCoverResolveFailure(key) {
+  const now = Date.now();
+  coverResolveFailedAt.delete(key);
+  coverResolveFailedAt.set(key, now);
+  if (coverResolveFailedAt.size <= MAX_COVER_RESOLVE_FAIL_CACHE) return;
+  for (const [entryKey, failedAt] of coverResolveFailedAt) {
+    if (now - failedAt >= COVER_RESOLVE_FAIL_TTL_MS || coverResolveFailedAt.size > MAX_COVER_RESOLVE_FAIL_CACHE) {
+      coverResolveFailedAt.delete(entryKey);
+    }
+    if (coverResolveFailedAt.size <= MAX_COVER_RESOLVE_FAIL_CACHE) break;
+  }
+}
 
 function normalizeDirectCoverInPlace(song) {
   if (!song || !isDirectCoverUrl(song.pic)) return false;
@@ -2276,6 +2290,7 @@ async function ensureCurrentSongCover(room) {
   if (failedAt && Date.now() - failedAt < COVER_RESOLVE_FAIL_TTL_MS) {
     return false;
   }
+  if (failedAt) coverResolveFailedAt.delete(key);
 
   let pending = coverResolveInflight.get(key);
   if (!pending) {
@@ -2289,7 +2304,7 @@ async function ensureCurrentSongCover(room) {
 
   const url = await pending;
   if (!url) {
-    coverResolveFailedAt.set(key, Date.now());
+    rememberCoverResolveFailure(key);
     return false;
   }
   coverResolveFailedAt.delete(key);

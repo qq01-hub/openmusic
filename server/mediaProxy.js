@@ -592,28 +592,29 @@ function unlinkSharedAudioFile(filePath) {
   fs.promises.unlink(filePath).catch(() => {});
 }
 
+function finalizeSharedAudioFileCleanup(entry) {
+  if (entry.activeReaders > 0 || entry.writing) return;
+  closeSharedAudioFd(entry);
+  unlinkSharedAudioFile(entry.filePath);
+  entry.filePath = '';
+}
+
 function removeSharedAudioEntry(key) {
   const existing = sharedAudioCache.get(key);
   if (!existing) return;
   sharedAudioCache.delete(key);
-  sharedAudioTotalBytes = Math.max(0, sharedAudioTotalBytes - existing.downloadedBytes);
+  sharedAudioTotalBytes = Math.max(0, sharedAudioTotalBytes - existing.countedBytes);
+  existing.countedBytes = 0;
   existing.tailChunks = [];
   existing.tailBytes = 0;
-  if (existing.activeReaders <= 0) {
-    closeSharedAudioFd(existing);
-    unlinkSharedAudioFile(existing.filePath);
-    existing.filePath = '';
-  } else {
-    existing.evicted = true;
-  }
+  existing.evicted = true;
+  finalizeSharedAudioFileCleanup(existing);
 }
 
 function releaseSharedAudioReader(entry) {
   entry.activeReaders = Math.max(0, entry.activeReaders - 1);
-  if (entry.activeReaders <= 0 && (entry.evicted || entry.failed)) {
-    closeSharedAudioFd(entry);
-    unlinkSharedAudioFile(entry.filePath);
-    entry.filePath = '';
+  if (entry.evicted || entry.failed) {
+    finalizeSharedAudioFileCleanup(entry);
   }
 }
 
@@ -681,9 +682,14 @@ function readFromTailSlidingWindow(entry, cursor, maxEnd) {
 
 function pumpSharedAudioStream(entry, response) {
   const stream = response.body instanceof Readable ? response.body : Readable.fromWeb(response.body);
+  entry.writing = true;
   (async () => {
     try {
       for await (const chunk of stream) {
+        if (entry.evicted || entry.failed) {
+          stream.destroy?.();
+          break;
+        }
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         if (!buf.byteLength) continue;
         if (entry.downloadedBytes + buf.byteLength > MAX_SHARED_AUDIO_FILE_BYTES) {
@@ -694,10 +700,13 @@ function pumpSharedAudioStream(entry, response) {
         }
         appendTailSlidingWindow(entry, buf);
         entry.downloadedBytes += buf.byteLength;
-        sharedAudioTotalBytes += buf.byteLength;
+        if (!entry.evicted && sharedAudioCache.get(entry.key) === entry) {
+          entry.countedBytes += buf.byteLength;
+          sharedAudioTotalBytes += buf.byteLength;
+        }
         notifySharedAudioWaiters(entry);
       }
-      if (entry.downloadedBytes > 0) {
+      if (!entry.evicted && !entry.failed && entry.downloadedBytes > 0) {
         entry.totalLength = entry.downloadedBytes;
         entry.complete = true;
         // 整曲落盘完成后立即清空内存滑动窗口，实现常驻 0 内存占用
@@ -715,6 +724,10 @@ function pumpSharedAudioStream(entry, response) {
       entry.error = err;
       removeSharedAudioEntry(entry.key);
     } finally {
+      entry.writing = false;
+      if (entry.evicted || entry.failed) {
+        finalizeSharedAudioFileCleanup(entry);
+      }
       notifySharedAudioWaiters(entry);
     }
   })();
@@ -761,7 +774,7 @@ async function getOrCreateSharedAudioEntry(rawUrl, fetchWithTimeout, options = {
     delete headers['If-Range'];
     delete headers['if-range'];
 
-    const response = await fetchMediaWithSafeRedirects(
+    let response = await fetchMediaWithSafeRedirects(
       fetchWithTimeout,
       fetchUrl,
       {
@@ -817,6 +830,8 @@ async function getOrCreateSharedAudioEntry(rawUrl, fetchWithTimeout, options = {
       tailBytes: 0,
       tailStartOffset: 0,
       downloadedBytes: 0,
+      countedBytes: 0,
+      writing: false,
       complete: false,
       failed: false,
       evicted: false,
@@ -1205,10 +1220,10 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
       if (contentType) res.set('Content-Type', contentType);
       const upstreamCacheControl = response.headers.get('cache-control') || '';
       const upstreamMaxAge = upstreamCacheControl.match(/\bmax-age\s*=\s*"?(\d+)/iu);
-      const maxAge = upstreamMaxAge ? Math.min(300, Number(upstreamMaxAge[1])) : 300;
-      if (isImage && response.status === 200 && maxAge > 0 && !/\b(?:no-store|no-cache)\b/iu.test(upstreamCacheControl)) {
-        // 仅复用浏览器内的封面，避免重复拉图占用音频带宽
-        res.set('Cache-Control', `private, max-age=${maxAge}, no-transform`);
+      const maxAge = upstreamMaxAge ? Math.min(3600, Math.max(300, Number(upstreamMaxAge[1]))) : 3600;
+      if (isImage && response.status === 200 && maxAge > 0) {
+        // 仅复用浏览器内的封面，避免翻页/切歌重复拉图占用 2GB 服务器带宽
+        res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
         res.removeHeader('Pragma');
       }
       res.status(200).send(buffer);

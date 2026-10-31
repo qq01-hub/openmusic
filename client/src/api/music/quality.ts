@@ -11,6 +11,7 @@ import {
 import { fetchWithTimeout } from '../http';
 import { requireSessionBootstrap } from '../../lib/sessionBootstrap';
 import { isWeakPlaybackDevice } from '../../lib/weakPlaybackDevice';
+import { isIOS } from '../../lib/audioUnlock';
 
 export type NeteaseQuality =
   | 'standard'
@@ -62,6 +63,9 @@ export const IMMERSIVE_PLAYBACK_QUALITY_CAP = 'exhigh';
 
 /** 弱设备本机播放音质上限：避开 FLAC / 臻音 / 母带等重解码档 */
 export const WEAK_DEVICE_PLAYBACK_QUALITY_CAP = 'exhigh';
+
+/** iOS / iPadOS WebKit 原生 <audio> 不支持 24-bit/96kHz Hi-Res FLAC（会报 MEDIA_ERR_SRC_NOT_SUPPORTED code=4），上限钳制到 16-bit 无损 */
+export const IOS_PLAYBACK_QUALITY_CAP = 'lossless';
 
 export interface QualityOption {
   value: string;
@@ -296,6 +300,13 @@ export function getUserPlaybackQuality(source: MusicSource): string | undefined 
   }
   if (isWeakPlaybackDevice()) {
     quality = applyWeakDevicePlaybackQualityCap(quality);
+  } else if (isIOS()) {
+    quality = {
+      netease: capQualityToMax('netease', quality.netease, IOS_PLAYBACK_QUALITY_CAP),
+      tencent: capQualityToMax('tencent', quality.tencent, IOS_PLAYBACK_QUALITY_CAP),
+      kugou: capQualityToMax('kugou', quality.kugou || 'exhigh', IOS_PLAYBACK_QUALITY_CAP),
+      qishui: capQualityToMax('qishui', quality.qishui || 'exhigh', IOS_PLAYBACK_QUALITY_CAP),
+    };
   }
   if (source === 'netease') return clampQualityToCapabilities('netease', quality.netease);
   if (source === 'tencent') return clampQualityToCapabilities('tencent', quality.tencent);

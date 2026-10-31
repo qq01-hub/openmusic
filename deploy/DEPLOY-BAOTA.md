@@ -28,12 +28,13 @@ services:
         aliases:
           - meting-api
     ports:
-      - "3000:3000"
+      # 仅绑定宿主机回环，远程维护请走 SSH 隧道：ssh -L 3000:127.0.0.1:3000 root@服务器IP
+      - "127.0.0.1:3000:3000"
     environment:
-      # 管理后台：http://<IP>:3000/admin （仅首次无数据时用下列账号初始化）
-      ADMIN_PATH: admin
-      ADMIN_USERNAME: admin
-      ADMIN_PASSWORD: admin123
+      # 管理后台：http://127.0.0.1:3000/<ADMIN_PATH>（请将路径和密码改为随机强凭据）
+      ADMIN_PATH: ${METING_ADMIN_PATH:-change_me_random_path}
+      ADMIN_USERNAME: ${METING_ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${METING_ADMIN_PASSWORD:-admin123}
     volumes:
       - ./data/meting:/app/data
     healthcheck:
@@ -45,12 +46,16 @@ services:
   openmusic:
     image: w3126197382/openmusic:latest
     restart: unless-stopped
+    stop_grace_period: 30s
     networks:
       - openmusic
     ports:
       - "4000:4000"
     environment:
       PORT: 4000
+      NODE_ENV: production
+      # 首次 IP/HTTP 部署允许 Cookie，HTTPS 上线后设为 0 强制 Secure
+      ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
       DOCKER_REDIS_URL: redis://redis:6379/0
       DOCKER_METING_URL: http://meting-api:3000
       ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:-}
@@ -114,9 +119,10 @@ for config_file in data/.env data/runtimeConfig.json data/adminConfig.json data/
     exit 1
   fi
 done
-touch data/.env data/setup.lock
-printf '{}\n' > data/runtimeConfig.json
-printf '{}\n' > data/adminConfig.json
+[ -f data/.env ] || touch data/.env
+[ -f data/setup.lock ] || touch data/setup.lock
+[ -f data/runtimeConfig.json ] || printf '{}\n' > data/runtimeConfig.json
+[ -f data/adminConfig.json ] || printf '{}\n' > data/adminConfig.json
 
 # 把上面的 yaml 保存为 docker-compose.yml，然后：
 if [ "$config_files_repaired" -eq 1 ]; then

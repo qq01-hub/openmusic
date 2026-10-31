@@ -60,6 +60,7 @@ function isInvalidPlaybackUrl(url: string | undefined | null): boolean {
   const trimmed = url.trim();
   if (!trimmed) return true;
   if (isBlockedPlaybackUrl(trimmed)) return true;
+  if (trimmed.startsWith('blob:')) return false;
   try {
     const parsed = new URL(trimmed, window.location.href);
     return !parsed.protocol.startsWith('http');

@@ -201,7 +201,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           catch (error) { message.error(error instanceof Error ? error.message : '保存失败'); throw error; }
           finally { setHumanSaving(false); }
         } });
-      }}><Form.Item name="reason" label="放行或撤销原因" rules={[{ required: true, whitespace: true }, { max: 200 }]}><Input.TextArea rows={2} maxLength={200} /></Form.Item><Button htmlType="submit" loading={humanSaving} disabled={saving}>{human?.bypass ? '撤销长期放行' : '长期放行验证码'}</Button></Form>
+      }}><Form.Item name="reason" label="放行或撤销原因" rules={[{ required: true, whitespace: true }, { max: 200 }]}><Input.TextArea rows={2} maxLength={200} showCount /></Form.Item><Button htmlType="submit" loading={humanSaving} disabled={saving}>{human?.bypass ? '撤销长期放行' : '长期放行验证码'}</Button></Form>
     </RiskSection>
 
     <RiskSection title="账户标记与处置" description="所有变更需要填写原因并确认，风险分只排序和提示，不自动封禁">

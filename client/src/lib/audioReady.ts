@@ -21,6 +21,10 @@ export function waitForAudioCanPlay(audio: HTMLAudioElement, timeoutMs?: number)
     };
     timer = window.setTimeout(() => {
       cleanup();
+      if (!audio.error && audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
+        resolve();
+        return;
+      }
       reject(new Error(`音频缓冲不足（readyState=${audio.readyState}, bufferedAhead=${getBufferedAheadSeconds(audio).toFixed(3)}s）`));
     }, timeout);
     audio.addEventListener('canplay', onReady);

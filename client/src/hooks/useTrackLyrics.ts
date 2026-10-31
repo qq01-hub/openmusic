@@ -3,7 +3,7 @@ import { getLyrics, parseLrc, getLrcFallbackDurationMs, getTrackKey } from '../a
 import { useAudioStore } from '../stores/audioStore';
 import type { LyricLine, Song } from '../types';
 
-export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc' | 'duration'> & Partial<Pick<Song, 'artist' | 'album'>>) | null | undefined) {
+export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc' | 'duration'> & Partial<Pick<Song, 'artist' | 'album'>> & { queueId?: string }) | null | undefined) {
   const setLrcDuration = useAudioStore((s) => s.setLrcDuration);
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
 
@@ -13,6 +13,8 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
       return;
     }
 
+    let cancelled = false;
+    const trackKey = getTrackKey(song);
     setLyrics([]);
     getLyrics({
       id: song.id,
@@ -22,15 +24,21 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
       lrc: song.lrc,
     })
       .then((lrc) => {
+        if (cancelled) return;
         const lines = parseLrc(lrc);
         setLyrics(lines);
         if (!song.duration) {
           const ms = getLrcFallbackDurationMs(lrc);
-          if (ms) setLrcDuration(getTrackKey(song), ms);
+          if (ms) setLrcDuration(trackKey, ms);
         }
       })
-      .catch(() => setLyrics([]));
-  }, [song?.id, song?.source, song?.name, song?.lrc, song?.duration, setLrcDuration]);
+      .catch(() => {
+        if (!cancelled) setLyrics([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [song?.id, song?.source, song?.queueId, song?.name, song?.lrc, song?.duration, setLrcDuration]);
 
   return lyrics;
 }

@@ -4,11 +4,13 @@ import { analyzeAudioBeatMap } from './beatMapAnalyzer';
 import type { BeatMap, BeatMapEvent, BeatMapPulseEvent } from './beatMapTypes';
 import { getCameraDynamicsScale, resetGalaxyCinema, scheduleMapBeatCamera } from './galaxyCinema';
 
+const MAX_BEAT_MAP_CACHE = 6;
 const beatMapCache = new Map<string, BeatMap>();
 let currentBeatMap: BeatMap | null = null;
 let currentBeatMapKey = '';
 let beatMapToken = 0;
 let beatMapBusy = false;
+let analysisAbort: AbortController | null = null;
 let beatMapNextIdx = 0;
 let cameraBeatNextIdx = 0;
 let analysisTimer: ReturnType<typeof setTimeout> | null = null;
@@ -91,7 +93,13 @@ function syncBeatMapPlaybackCursor(t: number, preserveVisual = false): void {
 }
 
 function applyBeatMap(key: string, map: BeatMap): void {
+  beatMapCache.delete(key);
   beatMapCache.set(key, map);
+  while (beatMapCache.size > MAX_BEAT_MAP_CACHE) {
+    const oldest = beatMapCache.keys().next().value;
+    if (!oldest) break;
+    beatMapCache.delete(oldest);
+  }
   currentBeatMap = map;
   currentBeatMapKey = key;
   const audio = getSharedAudio();
@@ -166,6 +174,10 @@ export function cancelBeatMapAnalysis(): void {
     clearTimeout(analysisTimer);
     analysisTimer = null;
   }
+  if (analysisAbort) {
+    analysisAbort.abort();
+    analysisAbort = null;
+  }
   beatMapBusy = false;
 }
 
@@ -206,14 +218,19 @@ export function scheduleBeatMapAnalysis(
     const startAnalysis = async () => {
       if (token !== beatMapToken || beatMapBusy || beatMapCache.has(key)) return;
       beatMapBusy = true;
+      const controller = new AbortController();
+      analysisAbort = controller;
       try {
-        const map = await analyzeAudioBeatMap(audioUrl);
-        if (token !== beatMapToken || !map) return;
+        const map = await analyzeAudioBeatMap(audioUrl, { signal: controller.signal });
+        if (token !== beatMapToken || controller.signal.aborted || !map) return;
         applyBeatMap(key, map);
       } catch (err) {
-        console.warn('beat map analysis failed:', err);
+        if (!controller.signal.aborted) {
+          console.warn('beat map analysis failed:', err);
+        }
       } finally {
-        beatMapBusy = false;
+        if (analysisAbort === controller) analysisAbort = null;
+        if (token === beatMapToken) beatMapBusy = false;
       }
     };
 

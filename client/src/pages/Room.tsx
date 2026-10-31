@@ -146,8 +146,10 @@ const RoomQualityModal = lazyWithRetry(() => import('../components/RoomQualityMo
 const RoomAnnouncementPopup = lazyWithRetry(() => import('../components/RoomAnnouncementPopup'), 'RoomAnnouncementPopup');
 
 let roomShellPreload: Promise<void> | null = null;
+let roomShellReadyLoaded = false;
 
 export function preloadRoomShell() {
+  if (roomShellReadyLoaded) return Promise.resolve();
   if (!roomShellPreload) {
     roomShellPreload = Promise.all([
       import('../components/ChatPanel'),
@@ -159,7 +161,9 @@ export function preloadRoomShell() {
       import('../components/RoomAmbientBackground'),
       import('../components/RoomAnnouncementPopup'),
       import('../components/RoomQualityModal'),
-    ]).then(() => undefined).catch((error) => {
+    ]).then(() => {
+      roomShellReadyLoaded = true;
+    }).catch((error) => {
       roomShellPreload = null;
       throw error;
     });
@@ -176,7 +180,8 @@ import {
   patchRoomVisualFx,
   roomVisualFxLive,
 } from '../lib/roomVisualFxLive';
-import { resetSharedAudioElement } from '../lib/audioElement';
+import { getSharedAudio, resetSharedAudioElement } from '../lib/audioElement';
+import { isProxiedMediaUrl, isSameOriginMediaUrl } from '../lib/mediaProxyUrl';
 import { useAudioStore } from '../stores/audioStore';
 import { markGuideFeatureUsed } from '../lib/userGuide';
 import UserGuideTour from '../components/UserGuideTour';
@@ -360,6 +365,7 @@ export default function Room() {
   const [searching, setSearching] = useState(false);
   const [playlistSearchLoading, setPlaylistSearchLoading] = useState(false);
   const [joinError, setJoinError] = useState('');
+  const [shellReady, setShellReady] = useState(() => roomShellReadyLoaded);
 
   const [addingId, setAddingId] = useState<string | null>(null);
   const cancelSongPendingRef = useRef(false);
@@ -1047,6 +1053,11 @@ export default function Room() {
     if (!roomId) return;
     let cancelled = false;
     let redirectTimer: number | undefined;
+    void preloadRoomShell().then(() => {
+      if (!cancelled) setShellReady(true);
+    }).catch(() => {
+      if (!cancelled) setShellReady(true);
+    });
 
     // 清除上一次会话残留的退出原因（如“房间已被站点管理员解散”），
     // 否则新建/加入房间后页面会误判为已被踢出并弹回大厅
@@ -1070,7 +1081,10 @@ export default function Room() {
     }
 
     let recoveryAttempt = 0;
-    const attemptJoin = () => joinRoom(roomId, nick, roomPassword).then((res) => {
+    const attemptJoin = () => Promise.all([
+      joinRoom(roomId, nick, roomPassword),
+      preloadRoomShell().catch(() => undefined),
+    ]).then(([res]) => {
       if (cancelled) return;
       if (!res.success) {
         if (res.needsPassword) {
@@ -2193,7 +2207,8 @@ export default function Room() {
       const shouldReloadAudio = options?.reloadAudio !== false;
       // 汽水始终本地解密为 blob:，沉浸开关不改变代理需求，避免无谓重解密占内存
       const currentIsQishui = (room?.current?.source || '') === 'qishui';
-      if (shouldReloadAudio && prevNeedsProxy !== nextNeedsProxy && room?.current && !currentIsQishui) {
+      const currentIsKugou = (room?.current?.source || '') === 'kugou';
+      if (shouldReloadAudio && prevNeedsProxy !== nextNeedsProxy && room?.current && !currentIsQishui && !currentIsKugou) {
         resetSharedAudioElement();
         useAudioStore.getState().requestTrackReload();
         if (options?.notifyProxyChange !== false) {
@@ -2299,9 +2314,15 @@ export default function Room() {
     const currentSong = liveRoom?.current ?? null;
     const targetMode: RoomVisualMode = visualMode === 'cover-bg' ? 'emily' : visualMode;
     const needsModeSwitch = visualMode === 'cover-bg';
+    const currentAudio = getSharedAudio();
+    const currentAudioSrc = currentAudio.currentSrc || currentAudio.src || '';
+    const alreadyProxiedOrSameOrigin = Boolean(
+      currentAudioSrc && (isProxiedMediaUrl(currentAudioSrc) || isSameOriginMediaUrl(currentAudioSrc)),
+    );
     const needsProxyReload =
       Boolean(currentSong)
       && (currentSong?.source || '') !== 'qishui'
+      && !alreadyProxiedOrSameOrigin
       && shouldProxySongPlaybackUrl(targetMode)
       && !shouldProxySongPlaybackUrl(visualMode);
     const needsCover = Boolean(currentSong);
@@ -2554,7 +2575,7 @@ export default function Room() {
 
   }
 
-  if (!room) {
+  if (!room || !shellReady) {
 
     return (
 
@@ -3120,16 +3141,18 @@ export default function Room() {
         </Suspense>
       ) : null}
 
-      <Suspense fallback={null}>
-        <RoomVisualFxPanel
-          open={visualFxOpen && !immersiveMode}
-          value={visualFx}
-          onPatch={patchVisualFx}
-          onReset={resetVisualFx}
-          onClose={() => setVisualFxOpen(false)}
-          onDraggingChange={setVisualFxDragging}
-        />
-      </Suspense>
+      {visualFxOpen && !immersiveMode ? (
+        <Suspense fallback={null}>
+          <RoomVisualFxPanel
+            open
+            value={visualFx}
+            onPatch={patchVisualFx}
+            onReset={resetVisualFx}
+            onClose={() => setVisualFxOpen(false)}
+            onDraggingChange={setVisualFxDragging}
+          />
+        </Suspense>
+      ) : null}
 
       <AudioEngine />
 
@@ -3151,6 +3174,7 @@ export default function Room() {
         />
       )}
 
+      {settingsOpen ? (
       <Suspense fallback={null}>
       <RoomSettingsModal
         open={settingsOpen}
@@ -3244,7 +3268,9 @@ export default function Room() {
         onSavePlaybackRate={handleSavePlaybackRate}
       />
       </Suspense>
+      ) : null}
 
+      {memberOpen ? (
       <Suspense fallback={null}>
       <RoomMemberModal
         open={memberOpen}
@@ -3264,13 +3290,18 @@ export default function Room() {
         onRemoveTier={handleRemoveMemberTier}
       />
       </Suspense>
+      ) : null}
 
-      <RoomQualityModal
-        open={qualityOpen}
-        value={resolveEffectiveAudioQuality(room?.audioQuality)}
-        onClose={() => setQualityOpen(false)}
-        onSave={handleSaveUserQuality}
-      />
+      {qualityOpen ? (
+        <Suspense fallback={null}>
+          <RoomQualityModal
+            open={qualityOpen}
+            value={resolveEffectiveAudioQuality(room?.audioQuality)}
+            onClose={() => setQualityOpen(false)}
+            onSave={handleSaveUserQuality}
+          />
+        </Suspense>
+      ) : null}
 
       <RoomShareModal
         open={sharePayload !== null}
@@ -3280,11 +3311,15 @@ export default function Room() {
         onCopied={() => showToast('邀请文案已复制', 'success')}
       />
 
-      <RoomAnnouncementPopup
-        open={announcementPopupOpen}
-        text={room?.announcementText || ''}
-        onClose={handleCloseAnnouncementPopup}
-      />
+      {announcementPopupOpen ? (
+        <Suspense fallback={null}>
+          <RoomAnnouncementPopup
+            open={announcementPopupOpen}
+            text={room?.announcementText || ''}
+            onClose={handleCloseAnnouncementPopup}
+          />
+        </Suspense>
+      ) : null}
 
       <div
         className={`room-page-chrome relative z-10 flex min-h-0 flex-1 flex-col transition-opacity duration-200 ${

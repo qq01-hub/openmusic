@@ -4129,39 +4129,69 @@ try {
 
 app.get(['/', '/index.html'], sendSpaIndexHtml);
 
-// Node 直出时复用构建期预压缩文件，避免未经过 Nginx 的部署退化为原始大包传输。
-app.use('/assets', (req, res, next) => {
-  const relative = decodeURIComponent(req.path).replace(/^\/+/, '');
-  if (!relative || relative.includes('..') || !/-[a-z0-9_-]{6,}\.(?:js|css|json|svg|map)$/i.test(relative)) {
-    next();
-    return;
-  }
-  const originalPath = path.join(clientDist, 'assets', relative);
-  const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
-  const candidates = acceptEncoding.includes('br')
-    ? [[`${originalPath}.br`, 'br'], [`${originalPath}.gz`, 'gzip']]
-    : acceptEncoding.includes('gzip')
-      ? [[`${originalPath}.gz`, 'gzip']]
-      : [];
-  const selected = candidates.find(([filePath]) => fs.existsSync(filePath));
-  if (!selected || !fs.existsSync(originalPath)) {
-    next();
-    return;
-  }
-  const [compressedPath, encoding] = selected;
-  const contentType = relative.endsWith('.css')
-    ? 'text/css; charset=utf-8'
-    : relative.endsWith('.json')
-      ? 'application/json; charset=utf-8'
-      : relative.endsWith('.svg')
-        ? 'image/svg+xml'
-      : 'application/javascript; charset=utf-8';
-  res.setHeader('Content-Type', contentType);
-  res.setHeader('Content-Encoding', encoding);
-  res.setHeader('Vary', 'Accept-Encoding');
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  fs.createReadStream(compressedPath).on('error', next).pipe(res);
-});
+function servePrecompressedStatic(baseDir, urlPattern, resolveCacheControl) {
+  return (req, res, next) => {
+    let relative = '';
+    try {
+      relative = decodeURIComponent(req.path).replace(/^\/+/, '');
+    } catch {
+      next();
+      return;
+    }
+    if (!relative || relative.includes('..') || !urlPattern.test(relative)) {
+      next();
+      return;
+    }
+    const originalPath = path.join(baseDir, relative);
+    const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
+    const candidates = acceptEncoding.includes('br')
+      ? [[`${originalPath}.br`, 'br'], [`${originalPath}.gz`, 'gzip']]
+      : acceptEncoding.includes('gzip')
+        ? [[`${originalPath}.gz`, 'gzip']]
+        : [];
+    const selected = candidates.find(([filePath]) => fs.existsSync(filePath));
+    if (!selected || !fs.existsSync(originalPath)) {
+      next();
+      return;
+    }
+    const [compressedPath, encoding] = selected;
+    const contentType = relative.endsWith('.css')
+      ? 'text/css; charset=utf-8'
+      : relative.endsWith('.json')
+        ? 'application/json; charset=utf-8'
+        : relative.endsWith('.svg')
+          ? 'image/svg+xml'
+          : relative.endsWith('.html')
+            ? 'text/html; charset=utf-8'
+            : 'application/javascript; charset=utf-8';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Encoding', encoding);
+    res.setHeader('Vary', 'Accept-Encoding');
+    const cacheControl = resolveCacheControl(relative);
+    if (cacheControl) res.setHeader('Cache-Control', cacheControl);
+    if (baseDir.endsWith('sonic-workshop')) {
+      res.setHeader('Access-Control-Allow-Origin', 'null');
+    }
+    fs.createReadStream(compressedPath).on('error', next).pipe(res);
+  };
+}
+
+// Node 直出时复用构建期预压缩文件（.br / .gz），避免未经过 Nginx 的部署退化为原始大包传输
+app.use('/assets', servePrecompressedStatic(
+  path.join(clientDist, 'assets'),
+  /-[a-z0-9_-]{6,}\.(?:js|css|json|svg|map)$/i,
+  () => 'public, max-age=31536000, immutable',
+));
+app.use('/vendor/folia/assets', servePrecompressedStatic(
+  path.join(clientDist, 'vendor', 'folia', 'assets'),
+  /\.(?:js|css|json|svg|map)$/i,
+  () => 'public, max-age=31536000, immutable',
+));
+app.use('/vendor/sonic-workshop', servePrecompressedStatic(
+  path.join(clientDist, 'vendor', 'sonic-workshop'),
+  /\.(?:js|css|html|json|svg)$/i,
+  () => 'public, max-age=2592000',
+));
 
 app.use(express.static(clientDist, {
   index: false,

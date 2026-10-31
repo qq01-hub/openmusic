@@ -20,8 +20,11 @@ interface KugouDetail {
   lrc: string;
 }
 
-const detailCache = new Map<string, KugouDetail | null>();
+const detailCache = new Map<string, { detail: KugouDetail | null; expires: number }>();
 const detailInflight = new Map<string, Promise<KugouDetail | null>>();
+const MAX_KUGOU_DETAIL_CACHE = 64;
+const KUGOU_DETAIL_TTL_MS = 10 * 60_000;
+const KUGOU_DETAIL_FAIL_TTL_MS = 30_000;
 
 function normalizeKugou(raw: KugouListItem): SearchResult {
   return {
@@ -39,14 +42,31 @@ function isPlayableUrl(url: string | undefined): boolean {
   return Boolean(url?.trim().startsWith('http'));
 }
 
+function rememberKugouDetail(key: string, detail: KugouDetail | null) {
+  detailCache.delete(key);
+  detailCache.set(key, {
+    detail,
+    expires: Date.now() + (detail ? KUGOU_DETAIL_TTL_MS : KUGOU_DETAIL_FAIL_TTL_MS),
+  });
+  while (detailCache.size > MAX_KUGOU_DETAIL_CACHE) {
+    const oldest = detailCache.keys().next().value;
+    if (!oldest) break;
+    detailCache.delete(oldest);
+  }
+}
+
 /** 同一首歌 url/lrc 共用一次详情请求，避免 getSongUrl + getLyrics 各打一遍 */
 async function fetchKugouDetail(id: string): Promise<KugouDetail | null> {
   const key = id.trim();
   if (!key) return null;
 
-  if (detailCache.has(key)) {
-    return detailCache.get(key) ?? null;
+  const cached = detailCache.get(key);
+  if (cached && cached.expires > Date.now()) {
+    detailCache.delete(key);
+    detailCache.set(key, cached);
+    return cached.detail;
   }
+  if (cached) detailCache.delete(key);
 
   const inflight = detailInflight.get(key);
   if (inflight) return inflight;
@@ -55,14 +75,14 @@ async function fetchKugouDetail(id: string): Promise<KugouDetail | null> {
     try {
       const res = await fetchWithTimeout(`/api/music/kugou/song?id=${encodeURIComponent(key)}`);
       if (!res.ok) {
-        detailCache.set(key, null);
+        rememberKugouDetail(key, null);
         return null;
       }
       const detail = await res.json() as KugouDetail;
-      detailCache.set(key, detail);
+      rememberKugouDetail(key, detail);
       return detail;
     } catch {
-      detailCache.set(key, null);
+      rememberKugouDetail(key, null);
       return null;
     } finally {
       detailInflight.delete(key);

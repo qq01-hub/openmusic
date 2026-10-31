@@ -48,6 +48,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import AdminProviders from './admin/AdminProviders';
+import MusicLoading from '../components/MusicLoading';
 import AdminLoading from './admin/AdminLoading';
 import { ADMIN_TABS, AUDIT_ACTION_OPTIONS, AUDIT_PAGE_SIZE, LIST_PAGE_SIZE, TAB_META } from './admin/constants';
 import CredentialsPanel from './admin/CredentialsPanel';
@@ -271,50 +272,15 @@ function AdminPage() {
   const refreshGenRef = useRef(0);
   const savedEntryPathRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await adminFetch('/api/admin/session');
-        if (!cancelled) setLoggedIn(true);
-      } catch {
-        if (!cancelled) setLoggedIn(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const logout = useCallback(async () => {
-    try {
-      await adminFetch('/api/admin/logout', { method: 'POST' });
-    } catch {
-      // 即使请求失败也清本地 UI 状态
-    }
-    setLoggedIn(false);
-    setLastRefreshedAt(null);
-    setRefreshError('');
-    setOverview(null);
-    setRooms([]);
-    setRiskReturnAccountId('');
-    setRevealedPasswords({});
-    setRevealingPasswordId(null);
-    setBans([]);
-    setErrorReports([]);
-    setReportDetail(null);
-    setAuditItems([]);
-    setAuditTotal(0);
-    setAuditPage(1);
-  }, []);
-
-  const refresh = useCallback(async (opts?: { force?: boolean }) => {
+  const initialLoadedRef = useRef(false);
+  const refresh = useCallback(async (opts?: { force?: boolean; light?: boolean }) => {
     if (loadingRef.current) {
       if (opts?.force) pendingForceRefreshRef.current = true;
       return;
     }
 
     do {
+      const isLight = Boolean(opts?.light && initialLoadedRef.current && !pendingForceRefreshRef.current);
       pendingForceRefreshRef.current = false;
       loadingRef.current = true;
       setRefreshing(true);
@@ -323,14 +289,15 @@ function AdminPage() {
         const [ov, rm, banRes, reportRes] = await Promise.all([
           adminFetch<AdminOverview>('/api/admin/overview'),
           adminFetch<{ rooms: AdminRoom[] }>('/api/admin/rooms'),
-          adminFetch<{ bans: SiteBanEntry[] }>('/api/admin/bans'),
-          adminFetch<{ reports: ErrorReportSummary[] }>('/api/admin/error-reports'),
+          isLight ? Promise.resolve(null) : adminFetch<{ bans: SiteBanEntry[] }>('/api/admin/bans'),
+          isLight ? Promise.resolve(null) : adminFetch<{ reports: ErrorReportSummary[] }>('/api/admin/error-reports'),
         ]);
         if (gen !== refreshGenRef.current) continue;
+        initialLoadedRef.current = true;
         setOverview(ov);
         setRooms(rm.rooms);
-        setBans(banRes.bans);
-        setErrorReports(reportRes.reports);
+        if (banRes) setBans(banRes.bans);
+        if (reportRes) setErrorReports(reportRes.reports);
         setLastRefreshedAt(Date.now());
         setRefreshError('');
         if (ov.entryPath) {
@@ -361,11 +328,55 @@ function AdminPage() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await adminFetch('/api/admin/session');
+        if (cancelled) return;
+        await refresh({ force: true });
+        if (!cancelled) setLoggedIn((prev) => (prev === false ? false : true));
+      } catch {
+        if (!cancelled) setLoggedIn(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
+
+  const logout = useCallback(async () => {
+    try {
+      await adminFetch('/api/admin/logout', { method: 'POST' });
+    } catch {
+      // 即使请求失败也清本地 UI 状态
+    }
+    initialLoadedRef.current = false;
+    setLoggedIn(false);
+    setLastRefreshedAt(null);
+    setRefreshError('');
+    setOverview(null);
+    setRooms([]);
+    setRiskReturnAccountId('');
+    setRevealedPasswords({});
+    setRevealingPasswordId(null);
+    setBans([]);
+    setErrorReports([]);
+    setReportDetail(null);
+    setAuditItems([]);
+    setAuditTotal(0);
+    setAuditPage(1);
+  }, []);
+
+  useEffect(() => {
     if (!shouldAutoRefreshAdminTab(loggedIn === true, activeTab)) return undefined;
-    // 重新进入看板时即使上一次请求尚未结束，也要排队执行一次最新加载。
-    void refresh({ force: true });
+    // 首次登录鉴权时已并行完成首轮数据拉取，避免挂载看板时再重复触发一次全量加载
+    if (!initialLoadedRef.current) {
+      void refresh({ force: true });
+    } else if (activeTab === 'overview') {
+      void refresh({ light: true });
+    }
     const refreshWhenVisible = () => {
-      if (!document.hidden) void refresh();
+      if (!document.hidden) void refresh({ light: true });
     };
     const timer = setInterval(refreshWhenVisible, 10_000);
     document.addEventListener('visibilitychange', refreshWhenVisible);
@@ -2185,17 +2196,17 @@ function AdminPage() {
   };
 
   if (loggedIn === null) {
-    return (
-      <Layout style={{ minHeight: '100vh', background: '#f5f7fa' }}>
-        <Content style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <AdminLoading minHeight="100vh" tip="加载中…" />
-        </Content>
-      </Layout>
-    );
+    return <MusicLoading label="正在连接音乐空间" />;
   }
 
   if (!loggedIn) {
-    return <LoginForm onLoggedIn={() => setLoggedIn(true)} />;
+    return (
+      <LoginForm
+        onLoggedIn={() => {
+          void refresh({ force: true }).finally(() => setLoggedIn(true));
+        }}
+      />
+    );
   }
 
   return (

@@ -59,7 +59,9 @@ async function readAccountResponse(response: Response): Promise<AccountProfile> 
   return acceptAccountProfile(data.account);
 }
 
-export async function fetchAccountSession(): Promise<AccountProfile | null> {
+let inflightSessionFetch: { generation: string; promise: Promise<AccountProfile | null> } | null = null;
+
+async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
   const generation = getAccountSessionGeneration();
   const assertCurrent = () => {
     if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新验证');
@@ -148,6 +150,20 @@ export async function fetchAccountSession(): Promise<AccountProfile | null> {
     });
   }
   return account;
+}
+
+export function fetchAccountSession(): Promise<AccountProfile | null> {
+  const generation = getAccountSessionGeneration();
+  if (inflightSessionFetch && inflightSessionFetch.generation === generation) {
+    return inflightSessionFetch.promise;
+  }
+  const promise = fetchAccountSessionInternal().finally(() => {
+    if (inflightSessionFetch?.promise === promise) {
+      inflightSessionFetch = null;
+    }
+  });
+  inflightSessionFetch = { generation, promise };
+  return promise;
 }
 
 let nicknameSave: Promise<void> = Promise.resolve();

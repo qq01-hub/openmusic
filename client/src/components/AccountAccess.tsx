@@ -602,9 +602,9 @@ export default function AccountAccess({
               <span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-black"><ShieldCheck className="h-5 w-5" /></span>
               <div className="min-w-0"><p className="truncate text-[15px] font-semibold text-white">{account.email || 'OpenMusic 账户'}</p><p className="mt-1 text-xs text-netease-muted">已绑定 {account.identities.length} 种登录方式</p></div>
             </div>
-            <div className="account-manage-sections space-y-2.5">
+            <div className="account-manage-sections">
               <div className="account-section-card rounded-2xl p-3.5">
-                <div className="account-section-heading mb-3 flex items-center justify-between gap-3">
+                <div className="account-section-heading mb-3 flex items-start justify-between gap-3">
                   <div><p className="text-sm font-medium text-white">音乐会员</p><p className="mt-1 text-xs text-netease-muted">新建房间时会自动使用已保存的会员账号</p></div>
                   {accountDataLoading && <Loader2 className="h-4 w-4 animate-spin text-white/45" />}
                 </div>
@@ -624,7 +624,7 @@ export default function AccountAccess({
                 </div>
               </div>
                <div className="account-section-card rounded-2xl p-3.5">
-                <div className="account-section-heading mb-3">
+                <div className="account-section-heading mb-3 flex items-start justify-between gap-3">
                   <p className="text-sm font-medium text-white">我的房间</p>
                   <p className="mt-1 text-xs text-netease-muted">管理已创建的房间</p>
                 </div>

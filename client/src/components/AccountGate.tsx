@@ -10,10 +10,12 @@ import PermanentDecisionGate from './PermanentDecisionGate';
 import { fetchAccountSession, logoutAccount } from '../lib/accountAuth';
 import { isAccountSessionRevisionEvent } from '../lib/accountSessionSignal';
 import { stopSharedAudio } from '../lib/audioElement';
-import { hasAnonymousAccess } from '../lib/accountAccessSession';
+import { hasAnonymousAccess, hasVerifiedAccountSession } from '../lib/accountAccessSession';
 
 export default function AccountGate({ children, onReady, allowPreview = false }: { children: ReactNode; onReady?: () => void; allowPreview?: boolean }) {
-  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
+  const [authenticated, setAuthenticated] = useState<boolean | null>(() => (
+    hasVerifiedAccountSession() ? true : null
+  ));
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [retrying, setRetrying] = useState(false);

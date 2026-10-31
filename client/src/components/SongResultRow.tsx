@@ -49,7 +49,7 @@ function SongResultRow({
 }: Props) {
   const key = songKey(song);
   const artistLine = `${song.artist}${song.album ? ` · ${song.album}` : ''}`;
-  const preview = useSongPreviewState();
+  const preview = useSongPreviewState(key);
   const isThisPreview = preview.key === key;
   const previewLoading = isThisPreview && preview.status === 'loading';
   const previewPlaying = isThisPreview && preview.status === 'playing';

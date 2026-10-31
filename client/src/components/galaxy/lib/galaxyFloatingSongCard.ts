@@ -35,6 +35,7 @@ export interface FloatingSongCardActionRegion {
   h: number;
 }
 
+const MAX_FLOATING_COVER_CACHE = 48;
 const coverCache = new Map<string, HTMLImageElement | 'loading' | 'failed'>();
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
@@ -168,7 +169,13 @@ function requestCover(url: string, onReady: () => void): void {
   img.crossOrigin = 'anonymous';
   img.decoding = 'async';
   img.onload = () => {
+    coverCache.delete(url);
     coverCache.set(url, img);
+    while (coverCache.size > MAX_FLOATING_COVER_CACHE) {
+      const oldest = coverCache.keys().next().value;
+      if (!oldest) break;
+      coverCache.delete(oldest);
+    }
     onReady();
   };
   img.onerror = () => {

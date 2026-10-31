@@ -41,7 +41,8 @@ export default memo(function SongCover({
     : null;
   const target = stage === 'proxy' && proxyUrl ? proxyUrl : raw;
   const signed = useSignedApiUrl(target);
-  const src = stage === 'failed' || !signed ? getFallbackCoverUrl() : signed;
+  const resolvedSrc = signed || (target && !target.startsWith('/api/media-proxy') ? target : null);
+  const src = stage === 'failed' || !resolvedSrc ? getFallbackCoverUrl() : resolvedSrc;
 
   return (
     <img

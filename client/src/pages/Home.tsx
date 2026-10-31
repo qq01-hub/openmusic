@@ -595,6 +595,10 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   }, [siteAnnouncement?.id]);
 
   const goToRoom = (roomId: string, password?: string) => {
+    const currentRoom = useRoomStore.getState().room;
+    if (currentRoom && currentRoom.id.toUpperCase() !== roomId.toUpperCase()) {
+      void leaveRoom();
+    }
     navigate(`/room/${roomId}`, { state: password ? { password } : undefined });
   };
 
