@@ -23,7 +23,7 @@
     "desktop:build": "npm run build:client && npm run electron:package"
   },
   "devDependencies": {
-    "concurrently": "^9.2.4",
+    "concurrently": "^9.2.5",
     "cross-env": "^7.0.3",
     "electron": "^44.2.0",
     "electron-builder": "^26.0.12",
