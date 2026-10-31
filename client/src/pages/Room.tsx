@@ -4137,7 +4137,7 @@ export default function Room() {
 
       {favoritesOpen &&
         createPortal(
-          <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-24 pb-8">
+          <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-16 pb-6 sm:pt-24 sm:pb-8">
           <button
             type="button"
             className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-black/65 backdrop-blur-sm'}`}
@@ -4145,25 +4145,25 @@ export default function Room() {
             aria-label="关闭收藏"
           />
           <div
-            className={`relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
+            className={`relative z-10 flex max-h-[min(80vh,680px)] sm:max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
               immersiveMode ? immersiveGlassModal : 'rounded-2xl border border-white/10 glass'
             }`}
           >
             <div
-              className={`flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
+              className={`relative flex flex-shrink-0 flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${
                 immersiveMode ? immersiveGlassSheetHeader : 'border-b border-netease-border/50'
               }`}
             >
-              <div>
+              <div className="pr-9 sm:pr-0">
                 <h2 className="text-sm font-medium text-white">我的收藏</h2>
                 <p className="mt-0.5 text-xs text-netease-muted">
                   共 {favorites.length} 首{favoriteQuery.trim() || favoriteDuplicateMode !== 'none' ? `，筛选 ${filteredFavorites.length} 首` : ''}
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
                 <Tooltip content="分享收藏">
-                  <button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareOpen(true); setFavoriteShareSongs([]); }} className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white">
-                    <Share2 className="h-4 w-4" /> 分享收藏
+                  <button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareOpen(true); setFavoriteShareSongs([]); }} className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-netease-muted hover:bg-white/10 hover:text-white sm:gap-1.5 sm:px-2 sm:py-1.5">
+                    <Share2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" /> 分享收藏
                   </button>
                 </Tooltip>
                 <Tooltip content="导入歌单">
@@ -4171,9 +4171,9 @@ export default function Room() {
                     type="button"
                     onClick={handleImportFavoritesJson}
                     disabled={importingFavorites}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
+                    className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50 sm:gap-1.5 sm:px-2 sm:py-1.5"
                   >
-                    {importingFavorites ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                    {importingFavorites ? <Loader2 className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" /> : <Download className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
                     {favoritesImportProgress || '导入歌单'}
                   </button>
                 </Tooltip>
@@ -4182,9 +4182,9 @@ export default function Room() {
                     type="button"
                     onClick={handleExportFavoritesJson}
                     disabled={favorites.length === 0 || importingFavorites}
-                    className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50"
+                    className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-netease-muted hover:bg-white/10 hover:text-white disabled:opacity-50 sm:gap-1.5 sm:px-2 sm:py-1.5"
                   >
-                    <Upload className="h-4 w-4" />
+                    <Upload className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                     导出歌单
                   </button>
                 </Tooltip>
@@ -4194,14 +4194,14 @@ export default function Room() {
                       type="button"
                       onClick={() => void handleAddPageFavorites()}
                       disabled={pagedFavorites.length === 0 || addingAllFavorites || importingFavorites}
-                      className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs text-netease-red hover:bg-netease-red/10 hover:text-netease-red disabled:opacity-50"
+                      className="flex items-center gap-1 rounded-lg px-1.5 py-1 text-xs text-netease-red hover:bg-netease-red/10 hover:text-netease-red disabled:opacity-50 sm:gap-1.5 sm:px-2 sm:py-1.5"
                     >
-                      {addingAllFavorites ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListPlus className="h-4 w-4" />}
+                      {addingAllFavorites ? <Loader2 className="h-3.5 w-3.5 animate-spin sm:h-4 sm:w-4" /> : <ListPlus className="h-3.5 w-3.5 sm:h-4 sm:w-4" />}
                       一键点歌
                     </button>
                   </Tooltip>
                 )}
-                <button type="button" onClick={() => setFavoritesOpen(false)} className="rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
+                <button type="button" onClick={() => setFavoritesOpen(false)} aria-label="关闭" className="absolute right-3 top-2.5 rounded-lg p-1.5 text-netease-muted hover:bg-white/10 hover:text-white sm:static"><X className="h-5 w-5" /></button>
               </div>
             </div>
             <div className="flex-shrink-0 border-b border-netease-border/50 px-4 py-2.5">
@@ -4249,7 +4249,7 @@ export default function Room() {
                 </button>
               </div>
             </div>
-            <div ref={favoritesScrollRef} className="min-h-[360px] min-w-0 flex-1 overflow-y-auto p-3">
+            <div ref={favoritesScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
               {favoritesLoading ? (
                 <MusicLoading label="正在加载收藏歌曲" compact />
               ) : filteredFavorites.length === 0 ? (
