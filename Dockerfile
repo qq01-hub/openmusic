@@ -9,6 +9,7 @@ WORKDIR /app
 COPY server ./server
 COPY scripts ./scripts
 COPY vendor/folia ./vendor/folia
+COPY docs/FOLIA_IMMERSIVE.md ./docs/FOLIA_IMMERSIVE.md
 COPY release-notes.json ./release-notes.json
 COPY client/package.json client/package-lock.json* ./client/
 RUN --mount=type=cache,target=/root/.npm cd client && npm ci
