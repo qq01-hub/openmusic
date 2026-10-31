@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { Space, Tag, Typography } from 'antd';
+import { Space, Tag } from 'antd';
 import { formatAuditTime } from './utils';
 
 export type AccountStatus = 'normal' | 'watch' | 'blocked';
@@ -56,6 +56,7 @@ export const POLICY_LABELS: Record<keyof Policy, string> = { minuteLimit: '账�
 export const time = (value: number) => value ? formatAuditTime(value) : '未记录';
 export const count = (value: number | string | undefined) => Number(value || 0).toLocaleString('zh-CN');
 export const statusLabel = (status: AccountStatus) => STATUS_OPTIONS.find(entry => entry.value === status)?.label || status;
+export const statusColor = (status: AccountStatus) => status === 'blocked' ? 'red' : status === 'watch' ? 'orange' : 'green';
 export const riskColor = (score: number) => score >= 60 ? 'red' : score >= 30 ? 'orange' : 'green';
 export const riskLabel = (score: number) => score >= 60 ? '高风险' : score >= 30 ? '待关注' : '低风险';
 export const queueScore = (account: RiskAccount) => account.queueScore ?? account.sampledScore ?? account.score;
@@ -69,5 +70,5 @@ export function RiskSection({ title, description, children, actions }: { title: 
 }
 
 export function IdentityTags({ account }: { account: RiskAccount }) {
-  return <Space size={[0, 4]} wrap>{account.email && <Tag color={account.emailVerified ? 'blue' : 'default'}>{account.emailVerified ? '已验证邮箱' : '邮箱验证待确认'}</Tag>}{account.identities?.filter(identity => identity.provider !== 'email').map(identity => <Tag key={identity.provider}>{PROVIDERS[identity.provider] || identity.provider}</Tag>)}{!account.identityAvailable && <Typography.Text type="secondary">历史身份待补全</Typography.Text>}</Space>;
+  return <Space size={[4, 4]} wrap>{account.email && <Tag color={account.emailVerified ? 'blue' : 'default'}>{account.emailVerified ? '已验证邮箱' : '邮箱待验证'}</Tag>}{account.identities?.filter(identity => identity.provider !== 'email').map(identity => <Tag key={identity.provider} color="geekblue">{PROVIDERS[identity.provider] || identity.provider}</Tag>)}{!account.identityAvailable && <Tag>身份待补全</Tag>}</Space>;
 }

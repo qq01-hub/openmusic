@@ -1,5 +1,7 @@
 .om-music-loading { min-height: 50vh; height: 100%; width: 100%; display: grid; place-items: center; padding: 32px 24px; color: var(--om-text); background: radial-gradient(ellipse 230px 170px at 50% 44%, rgb(var(--om-accent-rgb) / .055), transparent); }
-.om-music-loading__content { display: flex; flex-direction: column; align-items: center; text-align: center; width: min(100%, 360px); animation: om-loading-in .35s ease-out both; }
+.om-music-loading--fullscreen { position: fixed; inset: 0; z-index: 60; min-height: 100dvh; height: 100dvh; background: radial-gradient(ellipse 230px 170px at 50% 44%, rgb(var(--om-accent-rgb) / .055), transparent), var(--om-canvas); }
+.om-music-loading__content { display: flex; flex-direction: column; align-items: center; text-align: center; width: min(100%, 360px); animation: om-loading-in .28s ease-out both; }
+.om-music-loading__content--instant { animation: none; }
 .om-music-loading__record { position: relative; display: grid; place-items: center; width: 90px; height: 90px; border: 1px solid var(--om-border); border-radius: 50%; background: repeating-radial-gradient(circle, transparent 0 6px, #ffffff04 7px 8px); }
 .om-music-loading__record > i { position: absolute; inset: -1px; border: 1px solid transparent; border-top-color: rgb(var(--om-accent-rgb) / .4); border-radius: 50%; animation: om-loading-orbit 4s linear infinite; }
 .om-music-loading__mark { width: 42px; height: 42px; }

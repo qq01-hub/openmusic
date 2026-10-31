@@ -470,7 +470,7 @@ function ChatMessageRow({
     <div className={`group flex w-full min-w-0 max-w-full items-start gap-2 ${isMe ? 'flex-row-reverse' : ''}`}>
       {avatarNode}
       <div className={`flex min-w-0 flex-1 flex-col ${showAvatars ? 'max-w-[calc(100%-2.5rem)]' : 'max-w-full'} ${isMe ? 'items-end' : 'items-start'}`}>
-        <div className={`mb-0.5 flex max-w-full min-w-0 items-center gap-1.5 ${isMe ? 'flex-row-reverse' : ''}`}>
+        <div className={`mb-1 flex max-w-full min-w-0 items-center gap-1.5 ${isMe ? 'flex-row-reverse' : ''}`}>
           <button
             type="button"
             onClick={handleMention}

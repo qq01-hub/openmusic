@@ -364,21 +364,11 @@ function getEffectivePlaybackQuality(song: Pick<QueueItem, 'id' | 'source'>): st
 }
 
 export function shouldProxyQishuiTrack(
-  song: Pick<QueueItem, 'queueId' | 'id'>,
+  _song: Pick<QueueItem, 'queueId' | 'id'>,
   enabled: boolean,
-  percent: number,
+  _percent?: number,
 ): boolean {
-  if (!enabled) return false;
-  const ratio = Math.min(100, Math.max(0, Math.floor(Number(percent) || 0)));
-  if (ratio <= 0) return false;
-  if (ratio >= 100) return true;
-  const source = `${song.queueId || ''}:${song.id || ''}`;
-  let hash = 2166136261;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0) % 100 < ratio;
+  return Boolean(enabled);
 }
 
 function songLikelyNeedsPlaybackProxy(song: Pick<QueueItem, 'source' | 'url'>): boolean {

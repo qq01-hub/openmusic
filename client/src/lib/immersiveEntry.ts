@@ -1,5 +1,7 @@
 import { getCoverUrl } from '../api/music';
 import { resolveSignedApiUrl } from './signedApiUrl';
+import { cacheCoverImage, getCachedCoverImage } from './coverImageCache';
+import { loadSharedCoverResource } from './sharedCoverResource';
 import type { QueueItem } from '../types';
 import type { RoomVisualMode } from './roomVisualPreset';
 import {
@@ -12,7 +14,7 @@ import {
 import { getSharedAudio } from './audioElement';
 import { isAudioBoundToQueue } from './audioTrackBinding';
 import { waitForAudioMinimumReady } from './audioReady';
-import { isProxiedMediaUrl, isSameOriginMediaUrl } from './mediaProxyUrl';
+import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from './mediaProxyUrl';
 import { flushPendingPlaybackSnapshot } from './playbackSchedule';
 import { applyFollowerSync } from './playbackSync';
 import { getClientPlaybackState, getPlaybackTime } from './playbackState';
@@ -24,13 +26,28 @@ import { ensureGalaxyAudioOutput } from '../components/galaxy/lib/galaxyAudio';
 const TRACK_READY_POLL_MS = 50;
 const TRACK_READY_TIMEOUT_MS = 20000;
 
-function preloadImage(url: string): Promise<void> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve();
-    img.onerror = () => resolve();
-    img.src = url;
-  });
+async function preloadImage(url: string): Promise<void> {
+  if (!url) return;
+  const proxied = toProxiedMediaUrl(url);
+  if (getCachedCoverImage(proxied)) return;
+  try {
+    const signed = (await resolveSignedApiUrl(proxied)) || proxied;
+    const sharedUrl = await loadSharedCoverResource(signed);
+    if (!sharedUrl) return;
+    await new Promise<void>((resolve) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.decoding = 'async';
+      img.onload = () => {
+        cacheCoverImage(proxied, img);
+        resolve();
+      };
+      img.onerror = () => resolve();
+      img.src = sharedUrl;
+    });
+  } catch {
+    // 封面预加载失败不阻断沉浸进入，由 GalaxyParticles 内部继续回退
+  }
 }
 
 export { preloadImage };
@@ -44,10 +61,16 @@ export function preloadSonicWorkshopBackground(): Promise<unknown> {
 }
 
 export function preloadImmersiveBackground(mode: RoomVisualMode): Promise<unknown> {
-  if (mode === 'folia') return import('../components/immersive/FoliaBackground').then(module => module.preloadFoliaStage());
-  if (mode === 'topography') return import('../components/topography/TopographyBackground3D');
-  if (mode === 'topography-we') return preloadSonicWorkshopBackground();
-  return preloadGalaxyBackground();
+  const shellPromise = import('../components/immersive/RoomImmersiveShell');
+  const settingsPromise = import('../components/immersive/ImmersiveFxSettingsPanel');
+  const stagePromise = mode === 'folia'
+    ? import('../components/immersive/FoliaBackground').then(module => module.preloadFoliaStage())
+    : mode === 'topography'
+      ? import('../components/topography/TopographyBackground3D')
+      : mode === 'topography-we'
+        ? preloadSonicWorkshopBackground()
+        : preloadGalaxyBackground();
+  return Promise.all([stagePromise, shellPromise, settingsPromise]);
 }
 
 async function waitForCurrentTrackProxyReady(

@@ -105,7 +105,15 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
     {children}
     {authenticated && connectionNotice}
   </>;
-  if (authenticated === null) return <><MusicLoading label={error ? '正在等待账户服务恢复' : '正在验证账户'} />{connectionNotice}</>;
+  if (authenticated === null) {
+    const path = typeof window !== 'undefined' ? window.location.pathname : '';
+    const loadingLabel = error
+      ? '正在等待账户服务恢复'
+      : (path.startsWith('/room/') || path.startsWith('/tv/'))
+        ? '正在连接房间'
+        : '正在连接音乐空间';
+    return <><MusicLoading label={loadingLabel} />{connectionNotice}</>;
+  }
   return (
     <main className="flex min-h-dvh items-center justify-center bg-netease-dark px-6 text-white">
       <div className="max-w-sm text-center">

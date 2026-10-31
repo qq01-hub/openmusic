@@ -145,7 +145,7 @@ export const GUIDE_STEPS: GuideStep[] = [
     id: 'room-queue',
     scope: 'room',
     title: '播放队列',
-    body: '查看待播歌曲，点赞支持喜欢的歌，点心形收藏\n房主或管理员可调整顺序、切歌和清空队列',
+    body: '查看待播歌曲，点赞支持喜欢的歌，点心形收藏，点右上随机图标可从收藏随机点歌\n房主或管理员可调整顺序、切歌和清空队列',
     side: 'top',
   },
   {

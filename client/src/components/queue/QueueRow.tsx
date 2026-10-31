@@ -245,6 +245,7 @@ function QueueRow({
               song={song}
               className="w-7 h-7 text-netease-muted hover:text-rose-300"
               iconClassName="w-3.5 h-3.5"
+              useQueueTip
               onDoubleClick={handleFavoriteDoubleClick}
             />
             {categoryPickerOpen && (

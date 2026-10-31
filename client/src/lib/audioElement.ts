@@ -197,13 +197,20 @@ function releaseAudioOutput(): void {
 
 export function applyTrackLoudness(
   loudness?: { gain?: number; peak?: number; lra?: number } | null,
+  source?: string,
+  qishuiVolumeDeltaPercent = -30,
 ): void {
   const gain = Number(loudness?.gain);
   const peak = Number(loudness?.peak);
   const safeGainDb = Number.isFinite(gain) ? Math.min(0, Math.max(-24, gain)) : 0;
   const gainMultiplier = 10 ** (safeGainDb / 20);
   const peakMultiplier = Number.isFinite(peak) && peak > 1 ? 0.98 / peak : 1;
-  loudnessMultiplier = Math.min(1, gainMultiplier, peakMultiplier);
+  const rawDelta = Number.isFinite(Number(qishuiVolumeDeltaPercent))
+    ? (Number(qishuiVolumeDeltaPercent) === 100 ? -30 : Number(qishuiVolumeDeltaPercent))
+    : -30;
+  const qishuiMultiplier = Math.min(1.5, Math.max(0.1, 1 + Math.min(50, Math.max(-90, rawDelta)) / 100));
+  const sourceMultiplier = source === 'qishui' ? qishuiMultiplier : source === 'kugou' ? 1.2 : 1;
+  loudnessMultiplier = Math.min(1.5, Math.max(0.05, Math.min(1, gainMultiplier, peakMultiplier) * sourceMultiplier));
   applyAudioVolume(useAudioStore.getState().volume);
 }
 

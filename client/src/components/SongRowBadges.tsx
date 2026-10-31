@@ -6,7 +6,7 @@ import { getRoomSongStatus } from '../lib/roomSongStatus';
 import SourceBadge from './SourceBadge';
 
 const BADGE_CLASS =
-  'inline-flex flex-shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium leading-none whitespace-nowrap';
+  'inline-flex h-[18px] flex-shrink-0 items-center justify-center rounded-md px-1.5 text-[10px] font-medium leading-none tracking-tight whitespace-nowrap select-none';
 
 interface Props {
   song: Pick<SearchResult, 'source' | 'id'>;
@@ -24,21 +24,21 @@ function SongRowBadgesContent({
   played: boolean;
 }) {
   return (
-    <div className="flex flex-shrink-0 flex-row items-center gap-1">
+    <div className="flex flex-shrink-0 flex-row items-center gap-1.5">
       {inQueue && (
-        <span className={`${BADGE_CLASS} bg-netease-red/15 text-netease-red`}>
+        <span className={`${BADGE_CLASS} bg-netease-red/[0.12] text-netease-red ring-1 ring-inset ring-netease-red/20`}>
           已点歌
         </span>
       )}
       {played && (
-        <span className={`${BADGE_CLASS} bg-white/6 text-netease-muted`}>
+        <span className={`${BADGE_CLASS} bg-white/[0.045] text-white/45 ring-1 ring-inset ring-white/[0.07]`}>
           已播放
         </span>
       )}
       <SourceBadge
         source={song.source}
         variant="muted"
-        className="hidden leading-none sm:inline-flex"
+        className="hidden sm:inline-flex"
       />
     </div>
   );

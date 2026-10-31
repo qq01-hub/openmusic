@@ -1886,7 +1886,7 @@ app.get('/api/qishui-source', async (req, res) => {
     const { sourceUrl, auth } = await resolveQishuiPlaybackSource(rawUrl);
     const presence = findUserRoomPresence(identity.userId);
     const room = presence?.roomId ? getRoomInternal(presence.roomId) : null;
-    if (room?.qishuiProxyEnabled && Number(room?.qishuiProxyPercent ?? 100) > 0) {
+    if (room?.qishuiProxyEnabled) {
       warmSharedUpstreamMedia(sourceUrl);
     }
     res.set('Cache-Control', 'no-store, private');
@@ -1912,7 +1912,7 @@ app.get('/api/media-proxy', async (req, res) => {
   }
 
   const raw = String(req.query.url || '').trim();
-  const thumbPx = Math.min(512, Math.max(0, parseInt(String(req.query.size || ''), 10) || 0));
+  const thumbPx = Math.min(2048, Math.max(0, parseInt(String(req.query.size || ''), 10) || 0));
   let fetchUrl = raw;
   let parsed;
   try {

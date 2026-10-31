@@ -8,8 +8,7 @@
 }
 
 .chat-message-render-boundary {
-  content-visibility: auto;
-  contain: layout paint style;
+  contain: layout style;
 }
 
 :root {
@@ -1273,21 +1272,24 @@ body {
 .role-badge {
   position: relative;
   isolation: isolate;
+  overflow: hidden;
+  border-radius: 9999px;
   font-weight: 600;
   letter-spacing: 0.03em;
 }
 
 .role-badge-owner {
-  background: linear-gradient(145deg, rgba(120, 72, 0, 0.55) 0%, rgba(68, 40, 0, 0.42) 55%, rgba(42, 24, 0, 0.5) 100%);
+  background: linear-gradient(145deg, rgba(120, 72, 0, 0.58) 0%, rgba(68, 40, 0, 0.46) 55%, rgba(42, 24, 0, 0.54) 100%);
   border: 1px solid rgba(252, 211, 77, 0.72);
   color: #fff8dc;
   box-shadow:
-    0 0 0 1px rgba(251, 191, 36, 0.22),
-    0 0 20px rgba(251, 191, 36, 0.42),
-    0 2px 8px rgba(0, 0, 0, 0.28),
+    0 0 0 0.5px rgba(251, 191, 36, 0.22),
+    0 0 7px rgba(251, 191, 36, 0.24),
+    0 1px 3px rgba(0, 0, 0, 0.26),
     inset 0 1px 0 rgba(255, 255, 255, 0.32),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.22);
-  text-shadow: 0 0 10px rgba(251, 191, 36, 0.75), 0 1px 2px rgba(0, 0, 0, 0.35);
+    inset 0 -1px 0 rgba(0, 0, 0, 0.22),
+    inset 0 0 10px rgba(251, 191, 36, 0.18);
+  text-shadow: 0 0 8px rgba(251, 191, 36, 0.65), 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 .role-badge-owner::before {
@@ -1302,20 +1304,19 @@ body {
 .role-badge-admin {
   background: linear-gradient(
     145deg,
-    rgba(14, 116, 178, 0.34) 0%,
-    rgba(56, 189, 248, 0.16) 50%,
-    rgba(12, 74, 110, 0.3) 100%
+    rgba(14, 116, 178, 0.36) 0%,
+    rgba(56, 189, 248, 0.18) 50%,
+    rgba(12, 74, 110, 0.32) 100%
   );
   border: 1px solid rgba(56, 189, 248, 0.52);
   color: #7dd3fc;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
   box-shadow:
-    0 0 0 1px rgba(56, 189, 248, 0.12),
-    0 0 12px rgba(56, 189, 248, 0.22),
+    0 0 0 0.5px rgba(56, 189, 248, 0.16),
+    0 0 7px rgba(56, 189, 248, 0.2),
+    0 1px 3px rgba(0, 0, 0, 0.24),
     inset 0 1px 0 rgba(255, 255, 255, 0.16),
-    inset 0 0 10px rgba(56, 189, 248, 0.08);
-  text-shadow: 0 0 8px rgba(56, 189, 248, 0.45);
+    inset 0 0 10px rgba(56, 189, 248, 0.1);
+  text-shadow: 0 0 6px rgba(56, 189, 248, 0.42);
 }
 
 .role-badge-admin::before {

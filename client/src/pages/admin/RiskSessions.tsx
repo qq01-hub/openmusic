@@ -37,9 +37,9 @@ export default function RiskSessions({ accountId }: { accountId: string }) {
     {error && <Alert type="error" showIcon title={error} />}
     <Table<Session> size="small" rowKey="id" loading={loading} dataSource={items} scroll={{ x: 760 }} pagination={{ pageSize: 8, showSizeChanger: false }} columns={[
       { title: '设备验证', render: (_, row) => <Tag color={row.deviceBound ? 'green' : 'orange'}>{row.deviceBound ? '已绑定' : '需重登'}</Tag> },
-      { title: '最近 IP', dataIndex: 'lastIp', render: value => value || '暂无请求' },
+      { title: '最近 IP', dataIndex: 'lastIp', render: value => value ? <Tag color="cyan">{value}</Tag> : <Tag>暂无请求</Tag> },
       { title: '最近请求', dataIndex: 'lastSeenAt', render: value => value ? time(value) : '—' },
-      { title: '网络行为', render: (_, row) => row.sharedAt ? <Tag color="orange">疑似共享</Tag> : '正常' },
+      { title: '网络行为', render: (_, row) => row.sharedAt ? <Tag color="orange">疑似共享</Tag> : <Tag color="green">正常</Tag> },
       { title: '登录时间', dataIndex: 'createdAt', render: time },
       { title: '操作', render: (_, row) => <Button type="text" danger onClick={() => revoke(row)}>撤销</Button> },
     ]} />

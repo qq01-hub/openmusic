@@ -14,7 +14,7 @@ function stripNeteaseParam(url) {
   }
 }
 
-/** 将封面 CDN 地址转为指定边长的缩略图 URL（服务端 meting 重定向用） */
+/** 将封面 CDN 地址转为指定边长的缩略图或高清图 URL（服务端 meting 重定向与媒体代理用） */
 export function resizeCoverForThumb(url, px) {
   if (!url || !px || px <= 0) return url;
 
@@ -25,19 +25,34 @@ export function resizeCoverForThumb(url, px) {
     return stripNeteaseParam(next);
   }
 
-  if (/\.gtimg\.com\/music\/photo_new\//i.test(next) || /y\.qq\.com\/music\/photo_new\//i.test(next)) {
-    const code = px <= 58 ? 'T001R' : px <= 300 ? 'T002R' : 'T003R';
-    if (/T00\dR/i.test(next)) return next.replace(/T00\dR/i, code);
-    if (/\d+x\d+/.test(next)) return next.replace(/\d+x\d+/g, `${px}x${px}`);
+  if (/\.gtimg\.(?:com|cn)\/music\/photo_new\//i.test(next) || /y\.qq\.com\/music\/photo_new\//i.test(next)) {
+    const target = px <= 150 ? 150 : px <= 320 ? 300 : 800;
+    if (/T00[123](?:R\d+x\d+)?M000/i.test(next)) {
+      return next.replace(/T00([123])(?:R\d+x\d+)?(M000)/i, (_, kind, m000) => {
+        const prefix = kind === '1' ? 'T001' : 'T002';
+        return `${prefix}R${target}x${target}${m000}`;
+      });
+    }
+    if (/\d+x\d+/.test(next)) return next.replace(/\d+x\d+/g, `${target}x${target}`);
     return next;
   }
 
   if (/(?:^|\.|\/)(?:kugou\.com|kugou\.net|kgimg\.com|kgimg\.net|kgcdn\.com)(?:\/|:|$)/i.test(next)) {
-    const bucket = px <= 64 ? 64 : px <= 120 ? 120 : px <= 240 ? 240 : 400;
+    const bucket = px <= 64 ? 64 : px <= 120 ? 120 : px <= 240 ? 240 : px <= 400 ? 400 : 1024;
+    const stdResized = next.replace(/(\/(?:stdmusic|softhead)\/)(\d+)(\/)/i, `$1${bucket}$3`);
+    if (stdResized !== next) return stdResized;
     const resized = next.replace(/\/(\d+)\//, `/${bucket}/`);
     if (resized !== next) return resized;
-    const fallbackResized = next.replace(/\/(480|400|240|200|150)\//, `/${bucket}/`);
+    const fallbackResized = next.replace(/\/(1024|1000|720|480|400|240|200|150|120|64)\//, `/${bucket}/`);
     if (fallbackResized !== next) return fallbackResized;
+  }
+
+  if (/douyinpic\.com/i.test(next)) {
+    const target = px <= 120 ? 120 : px <= 320 ? 300 : 1080;
+    const c5 = next.replace(/(~c5_)\d+x\d+(\.)/i, `$1${target}x${target}$2`);
+    if (c5 !== next) return c5;
+    const tplv = next.replace(/(~tplv-[^:?#]+?:)\d+:\d+(\.)/i, `$1${target}:${target}$2`);
+    if (tplv !== next) return tplv;
   }
 
   if (/param=\d+y\d+/i.test(next)) {

@@ -63,7 +63,7 @@ const DEFAULT_QUEUE_MAX_LENGTH = 200;
 export const MIN_PLAYBACK_RATE = 0.1;
 export const MAX_PLAYBACK_RATE = 3;
 export const DEFAULT_PLAYBACK_RATE = 1;
-export const DEFAULT_QISHUI_PROXY_PERCENT = 100;
+export const DEFAULT_QISHUI_PROXY_PERCENT = -30;
 const ALLOWED_QUEUE_MAX_LENGTHS = [50, 100, 200];
 const ALLOWED_SONG_REQUEST_COOLDOWNS_SEC = [0, 10, 30, 60, 120];
 const DEFAULT_DISLIKE_SKIP_THRESHOLD = 5;
@@ -1724,9 +1724,11 @@ export function normalizePlaybackRate(value) {
 }
 
 export function normalizeQishuiProxyPercent(value) {
-  const percent = Math.floor(Number(value));
+  const percent = Math.trunc(Number(value));
   if (!Number.isFinite(percent)) return DEFAULT_QISHUI_PROXY_PERCENT;
-  return Math.min(100, Math.max(0, percent));
+  // 兼容旧版默认 100（原误作代理比例）并迁移为默认音量基准 -30%
+  if (percent === 100) return DEFAULT_QISHUI_PROXY_PERCENT;
+  return Math.min(50, Math.max(-90, percent));
 }
 
 function normalizeQueueMaxLength(value) {
@@ -2266,7 +2268,8 @@ function rememberCoverResolveFailure(key) {
 
 function normalizeDirectCoverInPlace(song) {
   if (!song || !isDirectCoverUrl(song.pic)) return false;
-  const normalized = resizeCoverForThumb(String(song.pic).trim(), 96) || String(song.pic).trim();
+  // 房间内当前曲需保留高清封面供播放器与沉浸舞台使用，大厅缩略图由 serializeLobbyCoverPic 单独缩放到 96px
+  const normalized = resizeCoverForThumb(String(song.pic).trim(), 1024) || String(song.pic).trim();
   if (normalized === song.pic) return false;
   song.pic = normalized;
   return true;
@@ -2294,7 +2297,7 @@ async function ensureCurrentSongCover(room) {
 
   let pending = coverResolveInflight.get(key);
   if (!pending) {
-    pending = resolveSongCoverUrl(song.source || "netease", song.id, 96)
+    pending = resolveSongCoverUrl(song.source || "netease", song.id, 1024)
       .catch(() => "")
       .finally(() => {
         coverResolveInflight.delete(key);

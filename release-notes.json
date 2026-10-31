@@ -2,5 +2,5 @@
   "notes": [
     "修复已知问题"
   ],
-  "forcePrompt": true
+  "forcePrompt": false
 }

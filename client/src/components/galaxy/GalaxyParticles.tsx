@@ -618,8 +618,12 @@ export default function GalaxyParticles({
       if (prevMain && prevMain !== prevCoverTex.current) prevMain.dispose();
 
       const edgeCacheKey = `${proxiedCover ?? ''}|${texSize}`;
-      const cachedEdge = getCoverEdgeCanvas(edgeCacheKey);
+      let cachedEdge = getCoverEdgeCanvas(edgeCacheKey);
       depthTweenCancelRef.current?.();
+      if (!cachedEdge && !hasPrevCover) {
+        cachedEdge = buildCoverEdgeTexture(cv);
+        setCoverEdgeCanvas(edgeCacheKey, cachedEdge);
+      }
       if (cachedEdge) {
         swapEdgeTexture(cachedEdge);
         depthTweenCancelRef.current = tweenCoverDepthUniforms(uniforms, 1, 0.55, 120);
@@ -649,7 +653,9 @@ export default function GalaxyParticles({
       };
 
       heavyCoverCancelRef.current?.();
-      if (cachedEdge) {
+      if (!hasPrevCover) {
+        refreshCoverDependentColors();
+      } else if (cachedEdge) {
         heavyCoverCancelRef.current = scheduleVisualApply(refreshCoverDependentColors, 90, 700);
       } else {
         heavyCoverCancelRef.current = scheduleVisualApply(() => {
@@ -667,8 +673,15 @@ export default function GalaxyParticles({
     };
 
     if (!signedCover) {
-      // 新封面的签名还在算：保持当前这张，退回占位图会让粒子先塌一下再弹回来
-      if (proxiedCover) return;
+      if (proxiedCover) {
+        const cachedBeforeSign = getCachedCoverImage(proxiedCover);
+        if (cachedBeforeSign) {
+          coverImageCacheRef.current = cachedBeforeSign;
+          applyLoadedCover(cachedBeforeSign);
+          invalidate();
+        }
+        return;
+      }
       coverImageCacheRef.current = null;
       uniforms.uHasDepth.value = 0;
       uniforms.uAiBoost.value = 0;
@@ -693,6 +706,8 @@ export default function GalaxyParticles({
         depthTweenCancelRef.current = null;
         colorMixCancelRef.current?.();
         colorMixCancelRef.current = null;
+        heavyCoverCancelRef.current?.();
+        heavyCoverCancelRef.current = null;
       };
     }
 
@@ -732,6 +747,8 @@ export default function GalaxyParticles({
       depthTweenCancelRef.current = null;
       colorMixCancelRef.current?.();
       colorMixCancelRef.current = null;
+      heavyCoverCancelRef.current?.();
+      heavyCoverCancelRef.current = null;
       img.onload = null;
       img.onerror = null;
     };

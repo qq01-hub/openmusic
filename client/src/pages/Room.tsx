@@ -7,7 +7,8 @@ import { filterCrossPlatformDuplicates, type FavoriteDuplicateMode } from '../li
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2 } from 'lucide-react';
+import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle } from 'lucide-react';
+import { isSongInRoomQueue } from '../lib/roomSongStatus';
 
 import { searchAllSongs, getAvailableSources, listRooms, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform, type PlaylistChannelFilter as PlaylistChannelFilterMode } from '../api/music/playlist';
@@ -469,6 +470,7 @@ export default function Room() {
   const [favoritePage, setFavoritePage] = useState(1);
   const [favoritePageSize, setFavoritePageSize] = useState<FavoritesPageSize>(DEFAULT_FAVORITES_PAGE_SIZE);
   const [addingAllFavorites, setAddingAllFavorites] = useState(false);
+  const [addingRandomFavorite, setAddingRandomFavorite] = useState(false);
   const [importingFavorites, setImportingFavorites] = useState(false);
   const [favoritesImportProgress, setFavoritesImportProgress] = useState('');
   const [deletingFavoriteCategory, setDeletingFavoriteCategory] = useState<string | null>(null);
@@ -977,6 +979,56 @@ export default function Room() {
       setAddingAllFavorites(false);
     }
   }, [addingAllFavorites, pagedFavorites, addSong, addSongs, showToast]);
+
+  const handleAddRandomFavorite = useCallback(async () => {
+    if (addingRandomFavorite) return;
+    if (songRequestBlockReason) {
+      showToast(songRequestBlockReason, 'error');
+      return;
+    }
+    setAddingRandomFavorite(true);
+    try {
+      const res = await listFavorites();
+      if (!res.success) {
+        showToast(res.error || '收藏列表加载失败', 'error');
+        return;
+      }
+      const allFavorites = res.favorites || [];
+      setFavorites(allFavorites);
+      applyFavorites(allFavorites);
+      if (allFavorites.length === 0) {
+        showToast('收藏夹暂无歌曲', 'error');
+        return;
+      }
+      const currentRoom = useRoomStore.getState().room;
+      const candidates = allFavorites.filter((song) => !isSongInRoomQueue(currentRoom, song));
+      if (candidates.length === 0) {
+        showToast('收藏歌曲均已在播放队列中', 'error');
+        return;
+      }
+      const picked = candidates[Math.floor(Math.random() * candidates.length)];
+      const addRes = await addSong({
+        id: picked.id,
+        source: picked.source,
+        name: picked.name,
+        artist: picked.artist,
+        album: picked.album,
+        pic: picked.pic,
+        duration: picked.duration,
+        url: picked.url,
+        lrc: picked.lrc,
+      });
+      if (addRes.success) {
+        markGuideFeatureUsed('room-queue');
+        lastSongRequestAtRef.current = Date.now();
+        showToast(`已随机点入：${picked.name}`, 'success');
+      } else if (addRes.error) {
+        showToast(addRes.error, 'error');
+      }
+    } finally {
+      setAddingRandomFavorite(false);
+    }
+  }, [addingRandomFavorite, songRequestBlockReason, listFavorites, applyFavorites, addSong, showToast]);
 
   const handleImportFavoritesJson = useCallback(() => {
     const input = document.createElement('input');
@@ -1833,20 +1885,25 @@ export default function Room() {
     }
   }, [fmSaving, setRoomFmMode, showToast]);
 
-  const handleSaveQishuiProxy = useCallback(async (enabled: boolean, percent = Number(room?.qishuiProxyPercent ?? 100)) => {
+  const handleSaveQishuiProxy = useCallback(async (enabled: boolean, percent = Number(room?.qishuiProxyPercent ?? -30)) => {
     if (qishuiProxySaving) return;
+    const prevEnabled = Boolean(room?.qishuiProxyEnabled);
     setQishuiProxySaving(true);
     const res = await setRoomQishuiProxy(enabled, percent);
     setQishuiProxySaving(false);
     if (res.success) {
-      showToast(enabled ? '汽水同源代理已开启' : '汽水同源代理已关闭', 'success');
-      if (room?.current?.source === 'qishui') {
-        useAudioStore.getState().requestTrackReload();
+      if (enabled !== prevEnabled) {
+        showToast(enabled ? '汽水同源代理已开启' : '汽水同源代理已关闭', 'success');
+        if (room?.current?.source === 'qishui') {
+          useAudioStore.getState().requestTrackReload();
+        }
+      } else {
+        showToast(`汽水音量基准已调整为 ${percent > 0 ? `+${percent}` : percent}%`, 'success');
       }
     } else {
       showToast(res.error || '汽水代理设置失败', 'error');
     }
-  }, [qishuiProxySaving, room?.qishuiProxyPercent, setRoomQishuiProxy, showToast]);
+  }, [qishuiProxySaving, room?.current?.source, room?.qishuiProxyEnabled, room?.qishuiProxyPercent, setRoomQishuiProxy, showToast]);
 
   const handleSavePlaylistRoaming = useCallback(async (payload: { platform?: 'netease' | 'qq' | 'kugou' | 'qishui'; input?: string; clear?: boolean; playlistId?: string; playlistSource?: FmSource; playlistName?: string; dedupeByName?: boolean; playlistEnabled?: boolean }) => {
     const res = await setRoomPlaylistRoaming(payload);
@@ -2675,7 +2732,7 @@ export default function Room() {
     >
       <div className="room-panel-divider relative flex items-center justify-between px-4 py-2.5 sm:py-3 border-b flex-shrink-0">
         <h2 className="text-sm font-medium">播放队列</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           {canClearQueue && (
             <button
               type="button"
@@ -2685,6 +2742,21 @@ export default function Room() {
               清空列表
             </button>
           )}
+          <Tooltip content="从收藏随机点歌" side="bottom">
+            <button
+              type="button"
+              onClick={() => void handleAddRandomFavorite()}
+              disabled={addingRandomFavorite}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md text-netease-muted transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+              aria-label="从收藏随机点歌"
+            >
+              {addingRandomFavorite ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Shuffle className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
           <span className="text-xs text-netease-muted">
             {queueCount > 0 ? `共 ${queueCount} 首` : '暂无歌曲'}
           </span>
@@ -3183,7 +3255,7 @@ export default function Room() {
         fmMode={normalizeFmMode(room?.neteaseFmMode)}
         fmSource={activeFmSource}
         qishuiProxyEnabled={Boolean(room?.qishuiProxyEnabled)}
-        qishuiProxyPercent={Number(room?.qishuiProxyPercent ?? 100)}
+        qishuiProxyPercent={Number(room?.qishuiProxyPercent ?? -30)}
         qishuiProxySaving={qishuiProxySaving}
         enabledFmSources={enabledFmSources}
         enabledMusicAccountPlatforms={enabledFmSources}
@@ -3365,8 +3437,15 @@ export default function Room() {
                     />
                   ) : null}
                   {room.isPlaying && headerCoverSong && (
-                    <span className="absolute -bottom-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full border-2 border-surface-base bg-netease-red shadow-md shadow-netease-red/30">
-                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -bottom-1 -right-1 flex h-4 w-4 rounded-full shadow-md shadow-netease-red/30"
+                    >
+                      <svg viewBox="0 0 16 16" className="h-full w-full">
+                        <circle cx="8" cy="8" r="8" className="fill-surface-base" />
+                        <circle cx="8" cy="8" r="6" className="fill-netease-red" />
+                        <circle cx="8" cy="8" r="3" className="animate-pulse fill-white" />
+                      </svg>
                     </span>
                   )}
                 </div>

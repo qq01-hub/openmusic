@@ -13,7 +13,7 @@ export const SOURCE_COLORS: Record<MusicSource, string> = {
   netease: '#ec4141',
   tencent: '#31c27c',
   kugou: '#2688ee',
-  qishui: '#ff5b73',
+  qishui: '#f5c542',
 };
 
 export const PLAYLIST_PLATFORM_LABELS: Record<PlaylistPlatform, string> = {

@@ -46,18 +46,24 @@ function preloadAdminBundle() {
   return adminBundlePreload;
 }
 
+let initialRouteBundleReady = false;
+let initialRoutePreloadPromise: Promise<unknown> = Promise.resolve();
+
 if (typeof window !== 'undefined') {
   const initialPath = window.location.pathname;
-  void import('./components/AccountGate').catch(() => undefined);
+  const tasks: Promise<unknown>[] = [import('./components/AccountGate').catch(() => undefined)];
   if (initialPath === '/') {
-    void import('./pages/Home').catch(() => undefined);
+    tasks.push(import('./pages/Home').catch(() => undefined));
   } else if (initialPath.startsWith('/room/')) {
-    void import('./pages/Room').then((m) => m.preloadRoomShell()).catch(() => undefined);
+    tasks.push(import('./pages/Room').then((m) => m.preloadRoomShell()).catch(() => undefined));
   } else if (initialPath.startsWith('/tv/')) {
-    void import('./pages/TvDisplay').catch(() => undefined);
+    tasks.push(import('./pages/TvDisplay').catch(() => undefined));
   } else if (initialPath === '/admin' || /^\/[A-Za-z0-9_-]{8,64}$/.test(initialPath)) {
-    void preloadAdminBundle();
+    tasks.push(preloadAdminBundle());
   }
+  initialRoutePreloadPromise = Promise.all(tasks).finally(() => {
+    initialRouteBundleReady = true;
+  });
 }
 
 function RouteFallback() {
@@ -161,14 +167,16 @@ export default function App() {
     let cancelled = false;
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 10000);
-    fetch('/api/setup/status', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
+    const setupFetch = fetch('/api/setup/status', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
       .then((response) => response.json())
-      .then((data) => {
-        if (!cancelled) setSetupRequired(Boolean(data.setupRequired));
-      })
-      .catch(() => {
-        // 兼容尚未升级 setup API 的服务端，不阻断正常页面。
-        if (!cancelled) setSetupRequired(false);
+      .then((data) => Boolean(data.setupRequired))
+      .catch(() => false);
+    Promise.all([
+      setupFetch,
+      initialRouteBundleReady ? Promise.resolve() : initialRoutePreloadPromise,
+    ])
+      .then(([required]) => {
+        if (!cancelled) setSetupRequired(required);
       })
       .finally(() => window.clearTimeout(timer));
     return () => {

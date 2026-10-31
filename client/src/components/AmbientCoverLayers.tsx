@@ -80,7 +80,7 @@ export default function AmbientCoverLayers({ coverUrl, className = 'absolute ins
             const img = event.currentTarget;
             setLoadedFor(resourceUrl);
             setTuning(tuneCoverBackdrop(measureCoverLuminance(img)));
-            if (coverUrl) {
+            if (coverUrl && (stage === 'proxy' || !/^https?:\/\//i.test(coverUrl))) {
               cacheCoverImage(coverUrl, img);
               cacheCoverImage(toProxiedMediaUrl(coverUrl), img);
             }

@@ -383,6 +383,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const resolveFailCountRef = useRef<{ queueId: string; count: number } | null>(null);
   /** 当前曲目本地汽水解密任务；切歌时立即终止，避免旧曲继续占用浏览器 CPU/带宽。 */
   const qishuiLocalAbortRef = useRef<AbortController | null>(null);
+  const currentLoudnessRef = useRef<{ loudness?: { gain?: number; peak?: number; lra?: number }; source?: string }>({});
 
   const shouldSkipForEndedTrackKey = useCallback((song: QueueItem, audio: HTMLAudioElement): boolean => {
     if (isEndedWhileServerPlaying(audio, song)) return false;
@@ -1348,7 +1349,13 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           if (!liveNow || liveNow.queueId !== current.queueId) return;
           // 换源前保持 suppress：禁止对旧 src seek 0，否则后台竞态 play 会闪播旧曲开头
           suppressAutoResumeRef.current = true;
-          applyTrackLoudness(loudness);
+          const activeSource = crossSource ? crossSourceFrom : (current.source || 'netease');
+          currentLoudnessRef.current = { loudness, source: activeSource };
+          applyTrackLoudness(
+            loudness,
+            activeSource,
+            useRoomStore.getState().room?.qishuiProxyPercent ?? -30,
+          );
           audio.pause();
           clearAudioQueueBinding(audio);
           // 先用已知进度占位，避免换源瞬间进度条跳回 0；真正对齐在 load 完成后 forceTime
@@ -1966,6 +1973,17 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (!canSyncAudioForQueue(controller.audio, roomState.current.queueId)) return;
     prefetchUpcomingFromRoom(roomState);
   }, [room?.queue, room?.nextRandom?.queueId, room?.nextRandom?.id, room?.current?.queueId, room?.current?.id, room?.current?.source]);
+
+  useEffect(() => {
+    const current = room?.current;
+    if (!current || current.source !== 'qishui') return;
+    if (!canSyncAudioForQueue(controller.audio, current.queueId)) return;
+    applyTrackLoudness(
+      currentLoudnessRef.current.loudness,
+      currentLoudnessRef.current.source || 'qishui',
+      room?.qishuiProxyPercent ?? -30,
+    );
+  }, [controller.audio, room?.current?.id, room?.current?.queueId, room?.current?.source, room?.qishuiProxyPercent]);
 
   useEffect(() => {
     return () => {

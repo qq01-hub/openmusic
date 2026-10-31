@@ -228,6 +228,7 @@ function NumberStepper({
   commitOnBlur?: boolean;
 }) {
   const [inputValue, setInputValue] = useState<string | null>(null);
+  const allowNegative = min < 0;
 
   useEffect(() => {
     if (!disabled) setInputValue(null);
@@ -239,7 +240,10 @@ function NumberStepper({
     if (clamped !== value) onChange(clamped);
   };
 
-  const currentValue = inputValue === null ? value : clampInt(Number(inputValue || min), min, max);
+  const parsedInput = inputValue === null || inputValue === '' || inputValue === '-'
+    ? value
+    : clampInt(Number(inputValue), min, max);
+  const currentValue = Number.isFinite(parsedInput) ? parsedInput : value;
 
   return (
     <div className="mt-2 flex items-center gap-2">
@@ -257,24 +261,33 @@ function NumberStepper({
         <input
           id={id}
           type="text"
-          inputMode="numeric"
-          pattern="[0-9]*"
+          inputMode={allowNegative ? 'text' : 'numeric'}
+          pattern={allowNegative ? '-?[0-9]*' : '[0-9]*'}
           value={commitOnBlur ? inputValue ?? value : value}
           disabled={disabled}
           onChange={(e) => {
-            const digits = e.target.value.replace(/\D/g, '');
+            const raw = e.target.value;
+            const cleaned = allowNegative
+              ? `${raw.trim().startsWith('-') ? '-' : ''}${raw.replace(/\D/g, '')}`
+              : raw.replace(/\D/g, '');
             if (commitOnBlur) {
-              setInputValue(digits);
+              setInputValue(cleaned);
               return;
             }
-            if (!digits) {
+            if (!cleaned || cleaned === '-') {
               setValue(min);
               return;
             }
-            setValue(Number(digits));
+            setValue(Number(cleaned));
           }}
           onBlur={commitOnBlur ? () => {
-            if (inputValue !== null) setValue(Number(inputValue || min));
+            if (inputValue !== null) {
+              if (!inputValue || inputValue === '-') {
+                setInputValue(null);
+              } else {
+                setValue(Number(inputValue));
+              }
+            }
           } : undefined}
           onKeyDown={commitOnBlur ? (event) => {
             if (event.key === 'Enter') event.currentTarget.blur();
@@ -307,7 +320,7 @@ export default function RoomSettingsModal({
   enabledMusicAccountPlatforms,
   fmModeBeforeOff,
   qishuiProxyEnabled = false,
-  qishuiProxyPercent = 100,
+  qishuiProxyPercent = -30,
   qishuiProxySaving = false,
   initialTab,
   playlistRoaming = null,
@@ -1033,18 +1046,18 @@ export default function RoomSettingsModal({
                     disabled={qishuiProxySaving}
                     onChange={(enabled) => { void onSaveQishuiProxy(enabled, qishuiProxyPercent); }}
                     label="汽水同源代理"
-                    description="按比例让汽水密文先经本站转发，再由浏览器本地解密，降低部分线路直连失败；0% 为直连，100% 为全部歌曲"
+                    description="开启后通过本站同源代理转发加密音频并由浏览器本地解密，关闭则直连；下方百分比用于调整汽水内部音量基准（默认 -30%，滑块显示不变）"
                   />
-                  {qishuiProxyEnabled && <NumberStepper
+                  <NumberStepper
                     id="qishui-proxy-percent"
                     value={qishuiProxyPercent}
-                    min={0}
-                    max={100}
+                    min={-90}
+                    max={50}
                     disabled={qishuiProxySaving}
-                    suffix="% 歌曲走代理"
-                    onChange={(percent) => { void onSaveQishuiProxy(true, percent); }}
+                    suffix="% 音量基准"
+                    onChange={(percent) => { void onSaveQishuiProxy(qishuiProxyEnabled, percent); }}
                     commitOnBlur
-                  />}
+                  />
                 </section>
               )}
 

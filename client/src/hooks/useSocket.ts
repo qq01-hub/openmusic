@@ -1605,7 +1605,7 @@ export function useSocket() {
     });
   }, []);
 
-  const setRoomQishuiProxy = useCallback((enabled: boolean, percent = 100): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+  const setRoomQishuiProxy = useCallback((enabled: boolean, percent = -30): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
       'set_room_qishui_proxy',
       { enabled, percent },

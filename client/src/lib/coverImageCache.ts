@@ -9,7 +9,19 @@ const CACHE_LIMIT = 12;
 const cache = new Map<string, HTMLImageElement>();
 
 function isUsable(img: HTMLImageElement | undefined): img is HTMLImageElement {
-  return Boolean(img && img.complete && img.naturalWidth > 0);
+  if (!img || !img.complete || img.naturalWidth <= 0) return false;
+  const src = img.currentSrc || img.src || '';
+  if (!src) return false;
+  if (src.startsWith('blob:') || src.startsWith('data:') || src.startsWith('/')) return true;
+  if (typeof window !== 'undefined') {
+    try {
+      const parsed = new URL(src, window.location.origin);
+      if (parsed.origin === window.location.origin) return true;
+    } catch {
+      return false;
+    }
+  }
+  return img.crossOrigin === 'anonymous';
 }
 
 export function getCachedCoverImage(key: string | null | undefined): HTMLImageElement | null {

@@ -8,7 +8,6 @@ import {
   type PrepareImmersiveEnterOptions,
 } from './immersiveEntry';
 import { getCoverUrl } from '../api/music';
-import { resolveSignedApiUrl } from './signedApiUrl';
 import { ensureGalaxyAudioOutput } from '../components/galaxy/lib/galaxyAudio';
 import { resetSharedAudioElement } from './audioElement';
 import { useAudioStore } from '../stores/audioStore';
@@ -162,7 +161,7 @@ export async function runImmersiveEnterPrep(options: RunImmersiveEnterPrepOption
     if (needsCover && song) {
       current = advanceImmersiveStep(current, 'cover');
       onStepsChange(current);
-      await preloadImage((await resolveSignedApiUrl(getCoverUrl(song, 'medium'))) || '');
+      await preloadImage(getCoverUrl(song, 'medium'));
       current = patchImmersiveStep(current, 'cover', 'done');
       onStepsChange(current);
     }
