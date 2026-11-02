@@ -64,20 +64,23 @@ export function resolveDeskPetAction(character: DeskPetCharacterId, animation: s
     const allowed = getDeskPetActions(character).some(([pose]) => pose === explicit);
     const pose = allowed ? explicit : options.baseIdle && animation === 'idle' && source.idle?.length
       ? pick(source.idle, random) : source.map?.[name] ?? pick(source.fallback ?? source.idle ?? [], random);
-    return { name, kind: config.kind, pose, src: `${config.directory}/${pose}.webp`, sprite: 'idle', noMirror: true };
+    return { name, kind: config.kind, pose, src: `${config.directory}/${pose}.webp`, sprite: 'idle', mirror: false };
   }
   if (config.kind === 'sprite') {
     const explicit = name.startsWith('__sprite:') ? name.slice(9) : '';
     const allowed = getDeskPetActions(character).some(([key]) => key === explicit);
     const mapped = (UPSTREAM_SPRITE_MAP as Readonly<Record<string, string>>)[name] ?? 'waiting';
     const sprite = allowed ? explicit : mapped === 'run' ? options.facingLeft ? 'runLeft' : 'runRight' : mapped;
-    return { name, kind: config.kind, pose: '', src: `${config.directory}/spritesheet.webp`, sprite, noMirror: true };
+    return { name, kind: config.kind, pose: '', src: `${config.directory}/spritesheet.webp`, sprite, mirror: false };
   }
   const safeName = (UPSTREAM_VIDEO_NAMES as readonly string[]).includes(name) ? name : UPSTREAM_ANIM.idle[0];
   // 发布路径仅用 ASCII，避免服务器解压工具误读中文文件名
   const fileName = Array.from(safeName, char => char.codePointAt(0)!.toString(16)).join('-');
+  // 左转奔跑素材原本朝左，镜像时需与默认朝右的其他视频反向判断
+  const nativeFacingLeft = safeName === '原地左转奔跑';
   return { name: safeName, kind: config.kind, pose: '', src: `/desk-pet/anims/anim-${fileName}.webm`, sprite: 'idle',
-    noMirror: (UPSTREAM_NO_MIRROR as readonly string[]).includes(safeName) };
+    mirror: !(UPSTREAM_NO_MIRROR as readonly string[]).includes(safeName)
+      && Boolean(options.facingLeft) !== nativeFacingLeft };
 }
 
 export function getDeskPetPose(character: DeskPetCharacterId, animation: DeskPetAnimation): string {

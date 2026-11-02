@@ -2,6 +2,8 @@
 import QRCode from 'qrcode';
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { AI_BOT_USER_ID } from './chatAiAuth.js';
+import { QQ_FACE_CATALOG, describeQqFaces } from './qqFaces.js';
+export { resolveQqFaceToken } from './qqFaces.js';
 
 export { AI_BOT_USER_ID };
 
@@ -899,11 +901,15 @@ ${roomPersona}
   parts.push(`# 聊天表情能力（主动判断，不等用户下指令）
 - 聊天室支持两类表情：**QQ 表情**和**表情包图片**。每次准备回复时，先根据用户内容、当前情绪和你要表达的语气主动判断是否适合加表情。表情不是用户可指定的操作；用户要求你“发表情”“发一个表情包”“用表情回复”时，只正常回复文字，不调用表情工具，也不要在文字中内嵌 QQ 表情。
 - 轻松聊天、开心回应、安慰、晚安、庆祝、开玩笑等场景，可以主动加 1 个合适的 QQ 表情，或调用 \`send_sticker\` 搜索发送 1 张表情包。普通事实说明、搜歌结果、权限拒绝、报错和严肃话题通常不发，避免喧宾夺主。是否发送由你根据当前准备发送的回复语气主动判断，不需要用户先提出要求。
-- QQ 表情可以直接插入文字回复。格式必须是 \`[qqface:id]\`，例如：\`好的呀 [qqface:14]\`。需要嵌入文字时，直接把标记写进 \`reply_message.text\`；不要写 Markdown 图片、HTML、图片 URL、Unicode emoji，也不要把标记放进代码块。
+- QQ 表情可以直接插入文字回复，格式必须是 \`[qqface:id]\`，id 从下方完整目录按语义选择，直接写进 \`reply_message.text\`，不要直接输出 /表情名、Markdown 图片、HTML、图片 URL、Unicode emoji 或代码块
 - 表情包不是文字标记，不能伪造 URL 或 \`[sticker:...]\`。需要表情包图片时调用 \`send_sticker\`，传入简短中文关键词；服务端会搜索并发送一张图片。
 - 可以先用 \`reply_message\` 发送带 QQ 表情的文字，再视情绪调用 \`send_sticker\` 发送表情包，但不要无理由同时发送两种，也不要连续刷屏。每次回复最多 1 个 QQ 表情和 1 张表情包。
-  - 选择 QQ 表情时必须参考项目实际 id 对照，不得凭数字随机选择：开心/友好用 4=得意、13=呲牙、14=微笑、20=偷笑、21=可爱、28=憨笑、42=爱情、63=玫瑰、66=爱心、76=赞；安慰/亲近用 5=流泪、6=害羞、15=难过、49=拥抱、67=心碎、78=握手、85=飞吻、106=委屈、107=快哭了、111=可怜；困倦/晚安用 8=睡、25=困、75=月亮、104=哈欠；尴尬/无语用 3=发呆、10=尴尬、12=调皮、22=白眼、32=疑问、34=晕、36=衰、101=坏笑、105=鄙视、174=无奈、268=问号脸；激动/加油用 11=发怒、18=抓狂、30=奋斗、38=敲打、79=胜利、120=拳头、311=打call、320=庆祝；其他常用有 0=惊讶、9=大哭、26=惊恐、27=流汗、31=咒骂、37=骷髅、39=再见、53=蛋糕、60=咖啡、74=太阳、77=踩、89=西瓜、123=NO、124=OK。
-  - 发送前做语义校验：晚安优先用 8/25/75/104，安慰优先用 5/15/49/106/111，开心优先用 4/13/14/20/21/28，祝贺优先用 42/63/76/79/99/320；不确定时宁可不发。`);
+  - 不要把人设可爱理解为固定使用「可爱」，不要总从微笑、可爱、偷笑等几个普通表情里挑选，也不要给每句话机械加尾巴
+  - 从完整目录里按当前语境挑选，例如接梗、吃瓜、暗中观察、捂脸、摸鱼、期待、打call、略略略等不同情绪都可以表达，名称和编号必须与目录对应，不能只为换花样而用不合语义的表情
+  - 参考最近已发送的表情，换一个语义合适的选择；没有合适的新表情时直接用文字，不重复贴同一个，也不凭数字随机抽取
+  - 完整 QQ 表情目录（编号=名称）：${describeQqFaces(QQ_FACE_CATALOG.map((face) => face.id))}
+  - 最近已发送的 QQ 表情（本轮避免重复）：${describeQqFaces(options.recentQqFaceIds || []) || '无'}
+  - 发送前做语义校验：晚安表达困倦，安慰表达关心，庆祝表达开心，严肃话题保持克制，不确定时宁可不发`);
 
   if (mode === 'room') {
     parts.push(`# 工作方式（房间模式 · 用户唤醒）
@@ -1615,13 +1621,13 @@ export function buildRoomAiTools() {
       type: 'function',
       function: {
         name: 'send_emoji',
-        description: '单独发送一枚 QQ 表情到聊天室。可用常见表情 id 或中文名；若要把表情插入文字，请改用 reply_message，并在 text 中写 [qqface:id]',
+        description: '单独发送一枚 QQ 表情到聊天室，按系统完整目录选择符合语境且近期未发过的编号或名称；若要把表情插入文字，请改用 reply_message，并在 text 中写 [qqface:id]',
         parameters: {
           type: 'object',
           properties: {
             face: {
               type: 'string',
-              description: '表情：如 微笑、撇嘴、色、发呆、得意、流泪、害羞、闭嘴、睡、大哭、尴尬、发怒、调皮、呲牙、惊讶、难过、酷、冷汗、抓狂、吐、偷笑，或数字 id',
+              description: '完整目录中的表情名称或编号，例如捂脸、吃瓜、暗中观察、摸鱼、期待、打call、略略略，不限于这些例子',
             },
           },
           required: ['face'],
@@ -1646,11 +1652,11 @@ export function buildRoomAiTools() {
       type: 'function',
       function: {
         name: 'reply_message',
-        description: '向聊天室发送一条文字回复（可多轮调用；最终也可直接自然语言回复）。text 支持内嵌 QQ 表情标记 [qqface:id]，例如「好呀 [qqface:14]」；不要使用图片 URL 或 [sticker:...]',
+        description: '向聊天室发送一条文字回复（可多轮调用；最终也可直接自然语言回复），text 可内嵌一个 QQ 表情标记 [qqface:id]，从完整目录按语境选择近期未发过的表情，不要使用图片 URL 或 [sticker:...]',
         parameters: {
           type: 'object',
           properties: {
-            text: { type: 'string', description: '要发送的中文内容，简短友好；可在普通文字中插入 [qqface:id]，例如「收到啦 [qqface:14]」' },
+            text: { type: 'string', description: '要发送的中文内容，简短友好，可按语境插入一个 [qqface:id]，id 从系统完整目录选择，不要固定使用某几个表情' },
           },
           required: ['text'],
         },
@@ -1685,113 +1691,6 @@ export function buildRoomAiTools() {
     },
   ];
   return tools.filter((tool) => !AI_FORBIDDEN_ROOM_TOOL_NAMES.has(tool?.function?.name));
-}
-
-/** 常见 QQ 表情名 → id（与前端 qface 常用项对齐） */
-const QQ_FACE_NAME_TO_ID = {
-  惊讶: '0',
-  撇嘴: '1',
-  色: '2',
-  发呆: '3',
-  得意: '4',
-  流泪: '5',
-  害羞: '6',
-  闭嘴: '7',
-  睡: '8',
-  大哭: '9',
-  尴尬: '10',
-  发怒: '11',
-  调皮: '12',
-  呲牙: '13',
-  微笑: '14',
-  难过: '15',
-  酷: '16',
-  抓狂: '18',
-  吐: '19',
-  偷笑: '20',
-  可爱: '21',
-  白眼: '22',
-  傲慢: '23',
-  饥饿: '24',
-  困: '25',
-  惊恐: '26',
-  流汗: '27',
-  憨笑: '28',
-  悠闲: '29',
-  奋斗: '30',
-  咒骂: '31',
-  疑问: '32',
-  嘘: '33',
-  晕: '34',
-  折磨: '35',
-  衰: '36',
-  骷髅: '37',
-  敲打: '38',
-  再见: '39',
-  发抖: '41',
-  爱情: '42',
-  跳跳: '43',
-  猪头: '46',
-  拥抱: '49',
-  蛋糕: '53',
-  刀: '56',
-  便便: '59',
-  咖啡: '60',
-  玫瑰: '63',
-  凋谢: '64',
-  爱心: '66',
-  心碎: '67',
-  太阳: '74',
-  月亮: '75',
-  赞: '76',
-  踩: '77',
-  握手: '78',
-  胜利: '79',
-  飞吻: '85',
-  怄火: '86',
-  西瓜: '89',
-  冷汗: '96',
-  擦汗: '97',
-  抠鼻: '98',
-  鼓掌: '99',
-  糗大了: '100',
-  坏笑: '101',
-  左哼哼: '102',
-  右哼哼: '103',
-  哈欠: '104',
-  鄙视: '105',
-  委屈: '106',
-  快哭了: '107',
-  阴险: '108',
-  左亲亲: '109',
-  吓: '110',
-  可怜: '111',
-  菜刀: '112',
-  篮球: '114',
-  示爱: '116',
-  抱拳: '118',
-  勾引: '119',
-  拳头: '120',
-  差劲: '121',
-  no: '123',
-  ok: '124',
-  无奈: '174',
-  问号脸: '268',
-  打call: '311',
-  庆祝: '320',
-  拜托: '353',
-  耶: '355',
-  666: '356',
-};
-
-export function resolveQqFaceToken(face) {
-  const raw = String(face || '').trim();
-  if (!raw) return null;
-  if (/^\[qqface:[^\]]+\]$/i.test(raw)) return raw;
-  if (/^\d{1,4}$/.test(raw)) return `[qqface:${raw}]`;
-  const id = QQ_FACE_NAME_TO_ID[raw.toLowerCase()] || QQ_FACE_NAME_TO_ID[raw];
-  if (id) return `[qqface:${id}]`;
-  return null;
 }
 
 export function buildAiCommandHints(botName) {

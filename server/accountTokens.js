@@ -8,6 +8,7 @@ import { encryptSensitiveValue, decryptSensitiveValue } from './roomCredentialCr
 export const ACCOUNT_ACCESS_TTL_SEC = 3 * 86_400;
 export const ACCOUNT_REFRESH_TTL_SEC = 30 * 86_400;
 export const ACCOUNT_REFRESH_COOKIE = 'openmusic_account_refresh';
+export const ACCOUNT_TOKEN_KEY_PREFIX = 'openmusic:account:auth:v2:';
 const REFRESH_GRACE_SEC = 10;
 const ACCOUNT_PATTERN = /^acct_[A-Za-z0-9_-]{16,64}$/u;
 const SESSION_PATTERN = /^[A-Za-z0-9_-]{24}$/u;
@@ -76,7 +77,7 @@ redis.call('SET', KEYS[2], ARGV[5], 'EX', ARGV[7])
 return {'ok', ARGV[5]}
 `;
 
-export function createAccountTokenService({ getStore, getAccount, now = () => Date.now(), prefix = 'openmusic:account:auth:v2:', encrypt = encryptSensitiveValue, decrypt = decryptSensitiveValue, authorizeRefresh = async () => {} }) {
+export function createAccountTokenService({ getStore, getAccount, now = () => Date.now(), prefix = ACCOUNT_TOKEN_KEY_PREFIX, encrypt = encryptSensitiveValue, decrypt = decryptSensitiveValue, authorizeRefresh = async () => {} }) {
   let keyPromise;
   const scope = `${prefix}signing-key`;
   const familyKey = (sid) => `${prefix}family:${sid}`;

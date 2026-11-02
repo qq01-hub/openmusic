@@ -5,6 +5,10 @@ import { useChatStore } from '../stores/chatStore';
 import { useRoomStore } from '../stores/roomStore';
 import { useDeskPetStore } from '../stores/deskPetStore';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useTrackLyrics } from '../hooks/useTrackLyrics';
+import { readLocalPlaybackTime } from '../hooks/useSmoothPlaybackTime';
+import { getActiveLyricLine } from '../lib/lyricLookup';
+import { sampleLyricReaction, type LyricReactionMemory } from '../lib/deskPetLyrics';
 import { AI_BOT_USER_ID } from '../lib/chatAi';
 import Tooltip from './Tooltip';
 import OriginalPetActionPicker from './OriginalPetActionPicker';
@@ -122,6 +126,11 @@ export default function RoomAiDesktopPet({
   const uiInteractEnabled = useDeskPetStore((s) => s.uiInteractEnabled);
   const sizeScale = useDeskPetStore((s) => s.sizeScale);
   const updatePref = useDeskPetStore((s) => s.updatePref);
+  const lyricInteractionEnabled = !isMobileViewport && deskPetEnabled && petEnabled && dialogEnabled;
+  const lyrics = useTrackLyrics(lyricInteractionEnabled ? currentSong : null);
+  const lyricReactionRef = useRef<LyricReactionMemory>({
+    songKey: '', seen: new Set(), nextAt: Date.now() + 15000,
+  });
 
   const [petState, setPetState] = useState<PetState>('idle');
   const [originalAction, setOriginalAction] = useState('');
@@ -147,7 +156,6 @@ export default function RoomAiDesktopPet({
   });
   const [facingLeft, setFacingLeft] = useState(false);
   const [tiltDeg, setTiltDeg] = useState(0);
-  const [leanOffset, setLeanOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [squash, setSquash] = useState<{ sx: number; sy: number }>({ sx: 1, sy: 1 });
   const [peekSide, setPeekSide] = useState<'left' | 'right' | 'top' | null>(null);
 
@@ -214,6 +222,12 @@ export default function RoomAiDesktopPet({
     setShowActSubmenu(false);
   }, []);
   useEffect(() => { remainingAutoActionsRef.current.clear(); }, [character]);
+  useEffect(() => {
+    if (roamEnabled || stateRef.current !== 'roam') return;
+    roamTargetRef.current = null;
+    setTiltDeg(0);
+    setPetState(baseStateRef.current);
+  }, [roamEnabled]);
   const activeThinkingStep = useMemo(() => {
     const active = aiProcessing.find((item) => item.status === 'queued' || item.status === 'processing');
     if (!active) return '';
@@ -827,6 +841,30 @@ export default function RoomAiDesktopPet({
     }
   }, [currentSong, dialogEnabled, say]);
 
+  // 低频读取现有歌词时间轴，不让播放进度持续重绘整个桌宠
+  useEffect(() => {
+    if (!lyricInteractionEnabled || !isPlaying || !currentSong || !lyrics.length) return;
+    const timer = window.setInterval(() => {
+      if (document.hidden || isAiThinking || pomodoroEndAt || menuPos
+        || bubbleTimerRef.current || Date.now() - lastInteractRef.current < 8000
+        || !['idle', 'roam'].includes(stateRef.current)) return;
+      const time = readLocalPlaybackTime(currentSong);
+      const line = getActiveLyricLine(lyrics, time);
+      // 长间奏或歌词结束后不拿上一句继续互动
+      if (!line || time - line.time > 12) return;
+      const reaction = sampleLyricReaction(
+        lyricReactionRef.current,
+        `${currentSong.source}:${currentSong.id}:${currentSong.queueId ?? ''}`,
+        line.text, Date.now(),
+      );
+      if (!reaction) return;
+      if (playEnabled) playOriginalAction(reaction.action);
+      say(reaction.text, 6500);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [currentSong, isAiThinking, isPlaying, lyricInteractionEnabled, lyrics, menuPos,
+    playEnabled, playOriginalAction, pomodoroEndAt, say]);
+
   // 监听 AI 思考/工作状态联动
   useEffect(() => {
     const working = (isAiThinking && workEnabled) || Boolean(pomodoroEndAt);
@@ -1052,7 +1090,7 @@ export default function RoomAiDesktopPet({
     workEnabled,
   ]);
 
-  // 原版逐帧动画不单独移动瞳孔，靠近鼠标时整体轻轻倾身
+  // 鼠标靠近只负责唤醒桌宠，不改变桌宠位置，避免触碰时产生轻微移位
   useEffect(() => {
     if (!deskPetEnabled || !petEnabled || isMobileViewport || !idleEnabled) return;
     let rafId = 0;
@@ -1071,15 +1109,6 @@ export default function RoomAiDesktopPet({
             autoDozeRef.current = false;
             setPetState(baseStateRef.current);
           }
-        }
-        if (dist < 220 && stateRef.current === 'idle') {
-          const k = ((220 - dist) / 220) * 5;
-          setLeanOffset({
-            x: Number(((dx / dist) * k).toFixed(1)),
-            y: Number(((dy / dist) * k * 0.6).toFixed(1)),
-          });
-        } else {
-          setLeanOffset({ x: 0, y: 0 });
         }
       });
     };
@@ -1502,9 +1531,6 @@ export default function RoomAiDesktopPet({
             setMenuPos({ x: Math.max(12, e.clientX), y: Math.max(12, e.clientY) });
             setShowActSubmenu(false);
           }}
-          style={{
-            transform: `translate(${leanOffset.x}px, ${leanOffset.y}px)`,
-          }}
           className="relative flex h-full w-full cursor-grab items-center justify-center transition-transform duration-150 active:cursor-grabbing"
         >
           <div
@@ -1541,11 +1567,11 @@ export default function RoomAiDesktopPet({
           style={{
             left: menuPos.x,
             top: menuPos.y,
-            background: 'rgba(255, 255, 255, 0.97)',
+            background: '#fff',
             color: '#1e2a52',
             boxShadow: '0 10px 28px rgba(18, 32, 86, 0.32), 0 0 0 1px rgba(120, 150, 255, 0.26)',
           }}
-          className="pointer-events-auto fixed z-[55] flex max-h-[calc(100dvh-24px)] min-w-[216px] max-w-[min(360px,90vw)] flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-[12px] p-1.5 text-[14px] [&>button]:shrink-0 [&>div]:shrink-0"
+          className="pointer-events-auto fixed z-[55] flex max-h-[calc(100dvh-24px)] w-[320px] min-w-[216px] max-w-[min(360px,90vw)] flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-[12px] p-1.5 text-[14px] [&>button]:shrink-0 [&>div]:shrink-0"
         >
           <button
             type="button"
@@ -1591,14 +1617,14 @@ export default function RoomAiDesktopPet({
               <span>🎬</span>
               <span>点播动作与互动</span>
             </span>
-            <span className="text-[10px] opacity-60">{showActSubmenu ? '▾' : '▸'}</span>
+            <span className="text-xs">{showActSubmenu ? '▾' : '▸'}</span>
           </button>
 
           {showActSubmenu && (
-            <div className="my-0.5 grid grid-cols-2 gap-1 rounded-[9px] bg-[#4d6bfe]/[0.06] p-1.5 text-[11px] whitespace-nowrap">
+            <div className="my-0.5 grid grid-cols-2 gap-1 rounded-[9px] bg-[#4d6bfe]/[0.06] p-1.5 text-[13px] whitespace-nowrap">
               <div className="col-span-2">
                 <OriginalPetActionPicker character={character} onPlay={playOriginalAction} />
-                <div className="mt-2 border-t border-[#1e2a52]/10 pt-2 text-[11px] text-[#5a6690]">音乐房间互动</div>
+                <div className="mt-2 border-t border-[#1e2a52]/10 pt-2 text-[13px] text-[#475280]">音乐房间互动</div>
               </div>
               <button
                 type="button"
@@ -1793,6 +1819,21 @@ export default function RoomAiDesktopPet({
 
           <button
             type="button"
+            role="switch"
+            aria-checked={roamEnabled}
+            aria-label="走动漫游"
+            onClick={() => {
+              updatePref('roamEnabled', !roamEnabled);
+              setMenuPos(null);
+            }}
+            className="flex items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+          >
+            <span className="flex items-center gap-2"><span>👣</span><span>走动漫游</span></span>
+            <span className="text-xs">{roamEnabled ? '已开启' : '已关闭'}</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => {
               setMenuPos(null);
               if (onOpenPetSettings) {
@@ -1813,7 +1854,7 @@ export default function RoomAiDesktopPet({
               setMenuPos(null);
               updatePref('enabled', false);
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[#6b78a6] transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#1e2a52]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[#475280] transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#1e2a52]"
           >
             <span>🙈</span>
             <span>收起我的桌宠</span>

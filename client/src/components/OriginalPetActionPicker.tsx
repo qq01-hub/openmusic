@@ -40,9 +40,9 @@ export default function OriginalPetActionPicker({ character, onPlay }: {
 
   return (
     <div>
-      <div className="mb-1.5 text-[11px] text-[#5a6690]">{config.label} · {allActions.length} 个原版动作</div>
+      <div className="mb-1.5 text-[13px] text-[#475280]">{config.label} · {allActions.length} 个原版动作</div>
       <input aria-label="搜索原版动作" value={query} onChange={(event) => setQuery(event.target.value)}
-        placeholder="搜索动作名称" className="mb-1.5 w-full rounded-md border border-[#4d6bfe]/20 bg-white px-2 py-1.5 text-xs outline-none focus:border-[#4d6bfe]" />
+        placeholder="搜索动作名称" className="mb-1.5 w-full rounded-md border border-[#4d6bfe]/20 bg-white px-2 py-1.5 text-[13px] text-[#1e2a52] placeholder:text-[#526080] outline-none focus:border-[#4d6bfe]" />
       {groupNames.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1">
           {groupNames.map((groupName) => (
@@ -50,7 +50,7 @@ export default function OriginalPetActionPicker({ character, onPlay }: {
               key={groupName}
               type="button"
               onClick={() => setActiveGroup(groupName)}
-              className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              className={`rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
                 activeGroup === groupName
                   ? 'bg-[#4d6bfe] text-white'
                   : 'bg-[#4d6bfe]/10 text-[#475280] hover:bg-[#4d6bfe]/18'
@@ -64,7 +64,7 @@ export default function OriginalPetActionPicker({ character, onPlay }: {
       <div className="grid max-h-[min(220px,32vh)] grid-cols-2 gap-1 overflow-y-auto overscroll-contain">
         {visibleActions.map((action) => (
           <button key={action.id} type="button" onClick={() => onPlay(action.id)}
-            className="whitespace-normal rounded-md px-2 py-1.5 text-left text-[11px] hover:bg-[#4d6bfe]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#4d6bfe]">
+            className="whitespace-normal rounded-md px-2 py-1.5 text-left text-[13px] hover:bg-[#4d6bfe]/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#4d6bfe]">
             {action.label}
           </button>
         ))}

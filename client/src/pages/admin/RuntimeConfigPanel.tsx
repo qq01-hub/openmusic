@@ -108,8 +108,8 @@ const RUNTIME_FIELD_GROUPS: RuntimeFieldGroup[] = [
   },
   {
     id: 'smtp',
-    title: '注册邮箱（SMTP）',
-    purpose: '用于发送注册验证码。密码会加密保存且不会回显；端口 465 自动使用 TLS。',
+    title: '账户邮件（SMTP）',
+    purpose: '用于发送注册与找回密码验证码，密码会加密保存且不会回显，端口 465 自动使用 TLS',
     includeSmtpOptions: true,
     fields: [
       { key: 'smtpHost', label: 'SMTP 服务器', placeholder: 'smtp.example.com' },

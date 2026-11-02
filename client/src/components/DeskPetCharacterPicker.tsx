@@ -10,9 +10,6 @@ export default function DeskPetCharacterPicker() {
     <div className="space-y-2.5">
       <div>
         <p className="text-sm font-medium text-white">桌宠原版形象</p>
-        <p className="mt-1 text-xs leading-relaxed text-netease-muted">
-          来自 dafeiyu-pet / dsh-pet 的内置素材，选择立即生效并保存在本机，只影响你自己的桌宠
-        </p>
       </div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="group" aria-label="选择我的桌宠形象">
         {DESK_PET_CHARACTERS.map((option) => (

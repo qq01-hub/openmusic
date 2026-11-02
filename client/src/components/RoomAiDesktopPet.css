@@ -8,6 +8,13 @@
   font-family: "OpenMusicPet", "Microsoft YaHei UI", "PingFang SC", sans-serif;
 }
 
+/* 操作菜单使用系统界面字体，避免手写字体在小字号下难以辨认 */
+.room-desk-pet [data-desk-pet-menu="true"] {
+  font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
 /* 原素材为 640×360 透明画布，命中框只覆盖居中的角色 */
 .room-pet-animation {
   position: relative;

@@ -9,6 +9,7 @@ import { isChatMutedForUser } from '../lib/chatMute';
 import { getClientId } from '../lib/clientId';
 import Tooltip from './Tooltip';
 import { usePureModeStore } from '../stores/pureModeStore';
+import { useImmersiveModeStore } from '../stores/immersiveModeStore';
 import { ChatReactionPicker } from './ChatMessageReactions';
 import ChatImageLightbox from './ChatImageLightbox';
 import ChatMessageList, { type ChatMessageListHandle } from './ChatMessageList';
@@ -79,6 +80,7 @@ export default function ChatPanel({ className = '' }: { className?: string }) {
   const inputBarRef = useRef<ChatInputBarHandle>(null);
   const isMobileLayout = useMediaQuery('(max-width: 1023px)');
   const pureMode = usePureModeStore((s) => s.enabled);
+  const immersiveMode = useImmersiveModeStore((s) => s.enabled);
 
   const myUserId = mySocketId || getClientId();
   const chatMuted = chatRoomSlice ? isChatMutedForUser(chatRoomSlice, myUserId) : false;
@@ -365,12 +367,14 @@ export default function ChatPanel({ className = '' }: { className?: string }) {
 
       <div ref={chatOverlayHostRef} className="pointer-events-none absolute inset-0 z-30" />
 
-      <RoomAiDesktopPet
-        botName={roomAi?.botName || '小肥鱼'}
-        deskPetEnabled={roomAi ? roomAi.deskPetEnabled === true : roomAiDeskPetEnabledFlag === true}
-        aiEnabled={Boolean(roomAi?.enabled)}
-        onQuickWake={(botName) => inputBarRef.current?.applyReplyMention(botName)}
-      />
+      {!immersiveMode && (
+        <RoomAiDesktopPet
+          botName={roomAi?.botName || '小肥鱼'}
+          deskPetEnabled={roomAi ? roomAi.deskPetEnabled === true : roomAiDeskPetEnabledFlag === true}
+          aiEnabled={Boolean(roomAi?.enabled)}
+          onQuickWake={(botName) => inputBarRef.current?.applyReplyMention(botName)}
+        />
+      )}
 
       <ChatReactionPicker
         open={reactionPickerMessageId !== null}

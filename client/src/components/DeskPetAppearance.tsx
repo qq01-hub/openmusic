@@ -64,7 +64,7 @@ export default function DeskPetAppearance({ character, animation = 'idle', facin
 
   return (
     <div className={`room-pet-animation${config.kind !== 'video' && animate ? ' room-pet-animation--pose' : ''}`}
-      style={{ transform: facingLeft && !action.noMirror ? 'scaleX(-1)' : undefined }}
+      style={{ transform: action.mirror ? 'scaleX(-1)' : undefined }}
       data-pet-character={config.id} data-pet-animation={animation} data-upstream-action={action.name}>
       {failedAsset === action.src ? (
         <img className="room-pet-animation__video" src="/desk-pet/idle.png" alt={`${config.label}素材加载失败，显示原版大肥鱼`} draggable={false} />
@@ -77,12 +77,30 @@ export default function DeskPetAppearance({ character, animation = 'idle', facin
       ) : !animate ? (
         <img className="room-pet-animation__video" src="/desk-pet/idle.png" alt={`${config.label}原版形象`} draggable={false} />
       ) : (
-        <video ref={videoRef} key={action.src} className="room-pet-animation__video" src={action.src}
-          poster="/desk-pet/idle.png" autoPlay muted loop={loop} playsInline preload="auto"
-          disablePictureInPicture draggable={false} onError={() => setFailedAsset(action.src)} aria-label={`${config.label}原版动画`} />
+        <VideoCharacter src={action.src} videoRef={videoRef} loop={loop}
+          onError={() => setFailedAsset(action.src)} label={`${config.label}原版动画`} />
       )}
     </div>
   );
+}
+
+function VideoCharacter({ src, videoRef, loop, onError, label }: {
+  src: string; videoRef: React.MutableRefObject<HTMLVideoElement | null>;
+  loop: boolean; onError: () => void; label: string;
+}) {
+  const [displayedSrc, setDisplayedSrc] = useState(src);
+  // 新视频开始播放前保留旧画面，避免切换素材时出现透明的解码空档
+  const sources = displayedSrc === src ? [src] : [displayedSrc, src];
+  return <>{sources.map(source => (
+    <video key={source} ref={node => { if (source === src) videoRef.current = node; }}
+      className="room-pet-animation__video" src={source}
+      style={{ visibility: source === displayedSrc ? 'visible' : 'hidden' }}
+      poster="/desk-pet/idle.png" autoPlay muted loop={source === src && loop} playsInline preload="auto"
+      disablePictureInPicture draggable={false}
+      onPlaying={event => { if (source === src && event.currentTarget.readyState >= 2) setDisplayedSrc(source); }}
+      onError={source === src ? onError : undefined}
+      aria-hidden={source !== displayedSrc} aria-label={label} />
+  ))}</>;
 }
 
 interface SpriteSequence { row: number; count: number; times: readonly number[]; frame?: number }

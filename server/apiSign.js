@@ -62,6 +62,8 @@ const ACCOUNT_PUBLIC_POST_PATHS = new Set([
   '/api/auth/email/code',
   '/api/auth/email/register',
   '/api/auth/email/login',
+  '/api/auth/email/password-reset/code',
+  '/api/auth/email/password-reset',
   '/api/auth/logout',
   '/api/auth/wechat/account',
 ]);

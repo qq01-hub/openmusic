@@ -285,7 +285,11 @@ import {
 import {
   ACCOUNT_SESSION_COOKIE,
   ACCOUNT_SESSION_TTL_SEC,
+  EMAIL_CODE_TTL_SEC,
+  EMAIL_CODE_RESEND_INTERVAL_SEC,
   requestEmailRegistrationCode,
+  requestPasswordResetCode,
+  resetPasswordWithEmail,
   registerWithEmail,
   loginWithEmail,
   loginOrRegisterExternalIdentity,
@@ -2837,6 +2841,73 @@ app.post('/api/auth/email/register', async (req, res) => {
     }, getRequestIp(req));
     recordAccountAuthMetric('email_register', outcome);
     return sendPublicRegistrationError(res, error);
+  }
+});
+
+app.post('/api/auth/email/password-reset/code', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  if (!limitAccountEmailCodeIp(`account-email-code:${ip}`)
+    || (email && !limitAccountEmailCodeEmail(`account-email-code:${email}`))) {
+    recordAccountAuthMetric('password_reset_code', 'rate_limited');
+    return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+  }
+  try {
+    if (!await verifyAccountChallenge(req, res)) return;
+    const result = await requestPasswordResetCode({ email: req.body?.email });
+    appendAdminAudit('account_password_reset_code_request', {
+      outcome: 'accepted',
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    recordAccountAuthMetric('password_reset_code', 'success');
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    const outcome = error instanceof AccountAuthError ? error.code : 'error';
+    recordAccountAuthMetric('password_reset_code', outcome);
+    appendAdminAudit('account_password_reset_code_request', {
+      outcome,
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    // 投递失败保留审计与失败计数，对外仍使用统一受理结果，避免暴露邮箱是否已注册
+    if (error.code === 'EMAIL_SEND_FAILED') {
+      return res.json({ ok: true, expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC });
+    }
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/password-reset', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  const emailKey = accountLoginEmailKey(email);
+  if (!limitAccountLogin(`account-password-reset:${ip}`)
+    || (emailKey && !limitAccountLoginEmail(`account-password-reset-email:${emailKey}`))
+    || (emailKey && !limitAccountLoginEmailIp(`account-password-reset-email-ip:${emailKey}:${ip}`))) {
+    recordAccountAuthMetric('password_reset', 'rate_limited');
+    return res.status(429).json({ error: '重置尝试过于频繁，请稍后重试', code: 'LOGIN_RATE_LIMITED' });
+  }
+  try {
+    if (!await verifyAccountChallenge(req, res)) return;
+    await resetPasswordWithEmail({ email: req.body?.email, code: req.body?.code, password: req.body?.password });
+    clearAccountLoginFailures(email);
+    recordAccountAuthMetric('password_reset', 'success');
+    appendAdminAudit('account_password_reset', {
+      outcome: 'success', emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    return res.json({ ok: true });
+  } catch (error) {
+    const outcome = error instanceof AccountAuthError ? error.code : 'error';
+    recordAccountAuthMetric('password_reset', outcome);
+    appendAdminAudit('account_password_reset', {
+      outcome, emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    if (error.code === 'INVALID_EMAIL_CODE') {
+      void riskControl.recordAuthFailure({ ip, email, code: error.code })
+        .catch(() => incrementMetric('risk_storage_error_total', { operation: 'auth_failure' }));
+    }
+    return sendAccountAuthError(res, error);
   }
 });
 

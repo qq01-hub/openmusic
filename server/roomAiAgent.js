@@ -3,6 +3,7 @@
  */
 import { fetchMetingApi, runWithMetingRequestContext } from './metingUpstream.js';
 import { searchApihzStickers, isApihzStickerConfigured } from './apihzSticker.js';
+import { collectRecentBotQqFaceIds, normalizeAiQqFaceText } from './qqFaces.js';
 import {
   addToQueue,
   skipSongOnBehalfOfUser,
@@ -366,10 +367,6 @@ function isUserRequestingExpression(text) {
   return /(?:发|来|给我|帮我|用|发送|搜|找)(?:个|一个|一张)?(?:QQ\s*)?表情包?|发图回复|用表情回复|加个表情|带个表情/i.test(String(text || ''));
 }
 
-function stripEmbeddedQqFaces(text) {
-  return String(text || '').replace(/\s*\[qqface:[^\]]+\]/gi, '').trim();
-}
-
 export function sanitizeAiUserFacingText(value) {
   return String(value || '')
     .replace(/(?:用\s*)?`?request_song`?\s*点上/gi, '让我帮你点上')
@@ -396,6 +393,14 @@ export function sanitizeAiUserFacingText(value) {
     })[String(name).replace(/`/g, '').toLowerCase()] || '')
     .replace(/用\s*点歌\s*点上/g, '让我帮你点上')
     .replace(/你可以把喜欢的歌让我帮你点上/g, '喜欢哪首直接告诉我，我来帮你点上');
+}
+
+function prepareAiReplyText(value, ctx) {
+  return normalizeAiQqFaceText(sanitizeAiUserFacingText(value), {
+    allow: Boolean(getAiActorPermissions(ctx.roomId, ctx.userId).canUseEmoji)
+      && !isUserRequestingExpression(ctx.requestText),
+    excludedIds: collectRecentBotQqFaceIds(getRoomInternal(ctx.roomId)?.messages || [], AI_BOT_USER_ID),
+  });
 }
 
 function normalizeSongMatchText(value) {
@@ -575,7 +580,7 @@ function flushPendingSongCards(ctx, finalText = '') {
   const cards = buffer.cards.splice(0, buffer.cards.length);
   buffer.seen.clear();
   const caption = String(buffer.text || '').trim().slice(0, 200);
-  const text = (String(finalText || '').trim() || caption).slice(0, 500);
+  const text = prepareAiReplyText(String(finalText || '').trim() || caption, ctx).slice(0, 500);
   buffer.text = '';
 
   const posted = postBotChatMessage(ctx.roomId, {
@@ -926,7 +931,11 @@ async function executeTool(name, args, ctx) {
         return { success: false, error: perms.error || '无权发表情' };
       }
       const token = resolveQqFaceToken(args.face);
-      if (!token) return { success: false, error: '无法识别该表情，请换一个常见名或数字 id' };
+      if (!token) return { success: false, error: '无法识别该表情，请从完整 QQ 表情目录选择名称或编号' };
+      if (collectRecentBotQqFaceIds(getRoomInternal(roomId)?.messages || [], AI_BOT_USER_ID)
+        .has(token.slice(8, -1))) {
+        return { success: false, error: '最近已发过这个表情，请换一个符合语境的表情，或只回复文字' };
+      }
       const posted = postBotChatMessage(roomId, { text: token });
       if (posted.error) return { success: false, error: posted.error };
       if (posted.message && emitChat) emitChat(posted.message);
@@ -963,9 +972,7 @@ async function executeTool(name, args, ctx) {
     }
 
     case 'reply_message': {
-      const text = (isUserRequestingExpression(ctx.requestText)
-        ? stripEmbeddedQqFaces(sanitizeAiUserFacingText(args.text))
-        : sanitizeAiUserFacingText(args.text)).trim().slice(0, 500);
+      const text = prepareAiReplyText(args.text, ctx).slice(0, 500);
       if (!text) return { success: false, error: '回复内容为空' };
       const posted = postBotChatMessage(roomId, {
         text,
@@ -1069,7 +1076,7 @@ async function executeTool(name, args, ctx) {
   }
 }
 
-function buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext) {
+function buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext, recentQqFaceIds) {
   return buildOpenMusicAiSystemPrompt({
     botName,
     roomPersona,
@@ -1079,6 +1086,7 @@ function buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport,
     actorRapport: rapport,
     userProfile,
     timeContext,
+    recentQqFaceIds,
   });
 }
 
@@ -1268,7 +1276,8 @@ export async function handleRoomAiChat(params = {}) {
     }
 
     const messages = [
-      { role: 'system', content: buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext) },
+      { role: 'system', content: buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext,
+        [...collectRecentBotQqFaceIds(room.messages || [], AI_BOT_USER_ID)]) },
       {
         role: 'system',
         content: [
@@ -1320,9 +1329,7 @@ export async function handleRoomAiChat(params = {}) {
       });
 
       if (!toolCalls.length) {
-        const reply = isUserRequestingExpression(requestText)
-          ? stripEmbeddedQqFaces(sanitizeAiUserFacingText(extractAssistantText(completion)))
-          : sanitizeAiUserFacingText(extractAssistantText(completion));
+        const reply = prepareAiReplyText(extractAssistantText(completion), ctx);
         if (reply) finalAssistantText = reply;
         // 模型不再调工具时，把本轮攒下的卡片作为一条消息发出；
         // 模型本轮没另发过文字（reply_message）时，把最终回复一并带上，

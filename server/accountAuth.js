@@ -4,7 +4,8 @@ import { promisify } from 'node:util';
 import nodemailer from 'nodemailer';
 import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
-import { ACCOUNT_ACCESS_TTL_SEC, createAccountTokenService } from './accountTokens.js';
+import { ACCOUNT_ACCESS_TTL_SEC, ACCOUNT_TOKEN_KEY_PREFIX, createAccountTokenService } from './accountTokens.js';
+import { riskChallengeChannel } from './riskChallengeBus.js';
 import { riskControl } from './riskControl.js';
 import { isReservedBotNickname } from './chatAiAuth.js';
 
@@ -130,16 +131,16 @@ function identityIndexKey(provider, subject) {
   return `${IDENTITY_INDEX_PREFIX}${normalizedProvider}:${digest}`;
 }
 
-function emailCodeKey(email) {
-  return `${EMAIL_CODE_PREFIX}${emailHash(email)}`;
+function emailCodeKey(email, purpose = 'register') {
+  return `${EMAIL_CODE_PREFIX}${purpose === 'register' ? '' : `${purpose}:`}${emailHash(email)}`;
 }
 
-function emailCodeAttemptsKey(email) {
-  return `${EMAIL_CODE_ATTEMPTS_PREFIX}${emailHash(email)}`;
+function emailCodeAttemptsKey(email, purpose = 'register') {
+  return `${EMAIL_CODE_ATTEMPTS_PREFIX}${purpose === 'register' ? '' : `${purpose}:`}${emailHash(email)}`;
 }
 
-function emailCodeCooldownKey(email) {
-  return `${EMAIL_CODE_COOLDOWN_PREFIX}${emailHash(email)}`;
+function emailCodeCooldownKey(email, purpose = 'register') {
+  return `${EMAIL_CODE_COOLDOWN_PREFIX}${purpose === 'register' ? '' : `${purpose}:`}${emailHash(email)}`;
 }
 
 function createAccountId(randomId = () => randomBytes(24).toString('base64url')) {
@@ -150,9 +151,9 @@ function createVerificationCode(randomInt = () => randomBytes(4).readUInt32BE(0)
   return String(randomInt() % 1_000_000).padStart(6, '0');
 }
 
-function hashVerificationCode(email, code) {
+function hashVerificationCode(email, code, purpose = 'register') {
   return createHmac('sha256', CODE_HASH_SECRET)
-    .update(`${email}:${code}`)
+    .update(`${purpose === 'register' ? '' : `${purpose}:`}${email}:${code}`)
     .digest('hex');
 }
 
@@ -220,10 +221,8 @@ function createSmtpTransporter(config = getRuntimeConfig()) {
   });
 }
 
-async function sendRegistrationCodeBySmtp({ email, code }) {
-  const config = getRuntimeConfig();
-  const transporter = createSmtpTransporter(config);
-  if (!transporter) {
+function assertSmtpConfigured(config = getRuntimeConfig()) {
+  if (!String(config.smtpHost || '').trim()) {
     throw new AccountAuthError('EMAIL_NOT_CONFIGURED', '邮箱服务未配置，请联系管理员在后台完成 SMTP 设置', 503);
   }
 
@@ -232,12 +231,21 @@ async function sendRegistrationCodeBySmtp({ email, code }) {
     throw new AccountAuthError('EMAIL_NOT_CONFIGURED', '邮箱发件人未配置，请联系管理员在后台完成 SMTP 设置', 503);
   }
 
+  return from;
+}
+
+async function sendRegistrationCodeBySmtp({ email, code, purpose = 'register' }) {
+  const config = getRuntimeConfig();
+  const from = assertSmtpConfigured(config);
+  const transporter = createSmtpTransporter(config);
   try {
     await transporter.sendMail({
       from,
       to: email,
-      subject: 'OpenMusic 注册验证码',
-      text: `你的 OpenMusic 注册验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人。`,
+      subject: purpose === 'password-reset' ? 'OpenMusic 找回密码验证码' : 'OpenMusic 注册验证码',
+      text: purpose === 'password-reset'
+        ? `你的 OpenMusic 找回密码验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人\n如果不是你本人操作，请忽略本邮件`
+        : `你的 OpenMusic 注册验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人`,
     });
   } catch (error) {
     throw new AccountAuthError('EMAIL_SEND_FAILED', '验证码发送失败，请稍后重试', 502, { cause: error });
@@ -418,11 +426,13 @@ export function createAccountAuthService({
     return { expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC };
   }
 
-  async function verifyEmailCode(store, email, code) {
-    const key = emailCodeKey(email);
-    const attemptsKey = emailCodeAttemptsKey(email);
-    const record = parseStoredJson(await store.get(key));
-    if (!record || !Number.isFinite(Number(record.createdAt))) {
+  async function verifyEmailCode(store, email, code, purpose = 'register') {
+    const key = emailCodeKey(email, purpose);
+    const attemptsKey = emailCodeAttemptsKey(email, purpose);
+    const recordRaw = await store.get(key);
+    const record = parseStoredJson(recordRaw);
+    if (!record || !Number.isFinite(Number(record.createdAt))
+      || now() - Number(record.createdAt) >= EMAIL_CODE_TTL_SEC * 1000) {
       throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
     }
 
@@ -431,12 +441,91 @@ export function createAccountAuthService({
       throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
     }
 
-    const expected = hashVerificationCode(email, code);
+    const expected = hashVerificationCode(email, code, purpose);
     if (!safeEqualText(expected, record.digest)) {
       throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
     }
 
-    return { codeKey: key, attemptsKey };
+    return { codeKey: key, attemptsKey, record, recordRaw };
+  }
+
+  async function requestPasswordResetCode({ email: rawEmail } = {}) {
+    const email = normalizeEmail(rawEmail);
+    if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
+    const store = ensureStore(getStore, isStoreReady);
+    if (sendCode === sendRegistrationCodeBySmtp) assertSmtpConfigured();
+    const purpose = 'password-reset';
+    const cooldownKey = emailCodeCooldownKey(email, purpose);
+    const cooldown = await store.set(cooldownKey, '1', { NX: true, EX: EMAIL_CODE_RESEND_INTERVAL_SEC });
+    if (cooldown !== 'OK') {
+      throw new AccountAuthError('EMAIL_CODE_RATE_LIMITED', '验证码发送过于频繁，请稍后重试', 429);
+    }
+    const result = { expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC };
+    const id = await store.get(emailIndexKey(email));
+    const account = id ? await getAccountById(id) : null;
+    // 未注册邮箱同样返回受理结果，避免通过找回入口查询账户是否存在
+    if (!account || account.email !== email || !account.password || !account.emailVerifiedAt) return result;
+    const codeKey = emailCodeKey(email, purpose);
+    const attemptsKey = emailCodeAttemptsKey(email, purpose);
+    const code = createCode();
+    try {
+      await store.set(codeKey, JSON.stringify({
+        digest: hashVerificationCode(email, code, purpose), createdAt: now(), accountId: account.id,
+      }), { EX: EMAIL_CODE_TTL_SEC });
+      await store.set(attemptsKey, '0', { EX: EMAIL_CODE_TTL_SEC });
+      await sendCode({ email, code, purpose });
+    } catch (error) {
+      // 投递失败仍保留冷却，避免通过重试行为判断邮箱是否已注册
+      await store.del([codeKey, attemptsKey]);
+      throw error;
+    }
+    return result;
+  }
+
+  async function resetPasswordWithEmail({ email: rawEmail, password, code } = {}) {
+    const email = normalizeEmail(rawEmail);
+    if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
+    if (typeof password !== 'string' || !validatePassword(password)) throw new AccountAuthError('INVALID_PASSWORD', '密码长度需为 8–128 位', 400);
+    const verificationCode = String(code ?? '').trim();
+    const invalidCode = () => new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
+    if (!/^\d{6}$/u.test(verificationCode)) throw invalidCode();
+    const store = ensureStore(getStore, isStoreReady);
+    const verified = await verifyEmailCode(store, email, verificationCode, 'password-reset');
+    const id = await store.get(emailIndexKey(email));
+    if (!normalizeAccountId(id) || id !== verified.record.accountId) throw invalidCode();
+    const passwordRecord = await hashPassword(password);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account || account.email !== email || !account.password || !account.emailVerifiedAt) throw invalidCode();
+      const next = { ...account, password: passwordRecord, updatedAt: now() };
+      // 密码写入、验证码消费与已有会话撤销一次完成，并发重放只能成功一次
+      const saved = Number(await evalRedisScript(store, `
+        if redis.call('GET', KEYS[1]) ~= ARGV[1] then return -1 end
+        if redis.call('GET', KEYS[3]) ~= ARGV[3] then return -1 end
+        if tonumber(redis.call('GET', KEYS[4]) or '0') > 5 then return -1 end
+        if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+        local sessions = redis.call('ZRANGE', KEYS[5], 0, -1)
+        redis.call('SET', KEYS[2], ARGV[4])
+        redis.call('DEL', KEYS[3], KEYS[4])
+        for _, sid in ipairs(sessions) do
+          redis.call('DEL', ARGV[5] .. 'family:' .. sid, ARGV[5] .. 'grace:' .. sid,
+            ARGV[5] .. 'spent:' .. sid, ARGV[5] .. 'proof:' .. sid,
+            ARGV[5] .. 'activity:' .. sid, ARGV[5] .. 'network:' .. sid)
+          redis.call('PUBLISH', ARGV[6], 'session:' .. sid)
+        end
+        redis.call('DEL', KEYS[5])
+        return 1
+      `, {
+        keys: [emailIndexKey(email), accountKey(id), verified.codeKey, verified.attemptsKey,
+          `${ACCOUNT_TOKEN_KEY_PREFIX}sessions:${id}`],
+        arguments: [id, currentRaw, verified.recordRaw, JSON.stringify(next), ACCOUNT_TOKEN_KEY_PREFIX,
+          riskChallengeChannel(store)],
+      }));
+      if (saved === -1) throw invalidCode();
+      if (saved === 1) return { ok: true };
+    }
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
   }
 
   async function registerWithEmail({ email: rawEmail, password, code } = {}) {
@@ -731,6 +820,8 @@ export function createAccountAuthService({
     updateNickname,
     getRoomIdentityOwnerAccountId,
     requestEmailRegistrationCode,
+    requestPasswordResetCode,
+    resetPasswordWithEmail,
     registerWithEmail,
     loginWithEmail,
     loginOrRegisterExternalIdentity,
@@ -753,6 +844,8 @@ export function createAccountAuthService({
 const defaultService = createAccountAuthService();
 
 export const requestEmailRegistrationCode = defaultService.requestEmailRegistrationCode;
+export const requestPasswordResetCode = defaultService.requestPasswordResetCode;
+export const resetPasswordWithEmail = defaultService.resetPasswordWithEmail;
 export const registerWithEmail = defaultService.registerWithEmail;
 export const loginWithEmail = defaultService.loginWithEmail;
 export const loginOrRegisterExternalIdentity = defaultService.loginOrRegisterExternalIdentity;

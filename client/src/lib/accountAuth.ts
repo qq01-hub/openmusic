@@ -209,8 +209,8 @@ export async function fetchAccountProviders(): Promise<AccountProviderStatus> {
   };
 }
 
-export async function requestAccountEmailCode(email: string, turnstileToken = ''): Promise<{ resendAfterSec: number }> {
-  const response = await fetchWithTimeout('/api/auth/email/code', {
+export async function requestAccountEmailCode(email: string, turnstileToken = '', purpose: 'register' | 'password-reset' = 'register'): Promise<{ resendAfterSec: number }> {
+  const response = await fetchWithTimeout(purpose === 'password-reset' ? '/api/auth/email/password-reset/code' : '/api/auth/email/code', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, turnstileToken }),
@@ -218,6 +218,16 @@ export async function requestAccountEmailCode(email: string, turnstileToken = ''
   const data = await response.json().catch(() => ({})) as { error?: string; resendAfterSec?: number };
   if (!response.ok) throw new Error(data.error || '验证码发送失败');
   return { resendAfterSec: Number(data.resendAfterSec) || 60 };
+}
+
+export async function resetAccountPasswordWithEmail(email: string, password: string, code: string, turnstileToken = ''): Promise<void> {
+  const response = await fetchWithTimeout('/api/auth/email/password-reset', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, code, turnstileToken }),
+  }, 15000);
+  const data = await response.json().catch(() => ({})) as { ok?: boolean; error?: string };
+  if (!response.ok || data.ok !== true) throw new Error(data.error || '密码重置失败，请稍后重试');
 }
 
 export async function loginAccountWithEmail(email: string, password: string, turnstileToken = ''): Promise<AccountProfile> {
