@@ -491,6 +491,19 @@ export default function Room() {
   const [lockPassword, setLockPassword] = useState('');
   const [lockSaving, setLockSaving] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'fm' | 'chat' | 'identity' | undefined>(undefined);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<'desk-pet' | undefined>();
+
+  useEffect(() => {
+    const onOpenSettingsEvent = (event: Event) => {
+      const detail = (event as CustomEvent<{ tab?: 'fm' | 'chat' | 'identity'; section?: 'desk-pet' }>).detail;
+      setSettingsInitialTab(detail?.tab ?? 'chat');
+      setSettingsInitialSection(detail?.section);
+      setSettingsOpen(true);
+    };
+    window.addEventListener('openmusic:open-room-settings', onOpenSettingsEvent);
+    return () => window.removeEventListener('openmusic:open-room-settings', onOpenSettingsEvent);
+  }, []);
   const [fmSaving, setFmSaving] = useState(false);
   const [qishuiProxySaving, setQishuiProxySaving] = useState(false);
   const [transferSaving, setTransferSaving] = useState(false);
@@ -508,6 +521,7 @@ export default function Room() {
   const [hideIpLocationSaving, setHideIpLocationSaving] = useState(false);
   const [joinNoticeSaving, setJoinNoticeSaving] = useState(false);
   const [roomAiSaving, setRoomAiSaving] = useState(false);
+  const roomAiSavingRef = useRef(false);
   const [maxAdminsSaving, setMaxAdminsSaving] = useState(false);
   const [adminSelfManageMemberTierSaving, setAdminSelfManageMemberTierSaving] = useState(false);
   const [playbackRateSaving, setPlaybackRateSaving] = useState(false);
@@ -662,7 +676,7 @@ export default function Room() {
   const canModerate = isOwner || isAdmin;
   // 普通成员在点歌冷却开启时隐藏批量点歌，房主/管理员不受此限制
   const showBulkAddSong = canModerate || (room?.songRequestCooldownSec ?? 0) <= 0;
-  const canOpenRoomSettings = canModerate;
+  const canOpenRoomSettings = true;
   const songRequestSettings: SongRequestSettings = useMemo(() => ({
     enabled: room?.songRequestEnabled !== false,
     queueLikeSortEnabled: room?.queueLikeSortEnabled !== false,
@@ -2032,22 +2046,28 @@ export default function Room() {
   }, [joinNoticeSaving, setRoomJoinNotice, showToast]);
 
   const handleSaveRoomAi = useCallback(async (settings: {
-    enabled: boolean;
-    botName: string;
+    enabled?: boolean;
+    deskPetEnabled?: boolean;
+    botName?: string;
+    persona?: string;
   }) => {
-    if (roomAiSaving) return;
+    if (roomAiSavingRef.current) return;
+    roomAiSavingRef.current = true;
     setRoomAiSaving(true);
-    const res = await setRoomAiSettings({
-      enabled: settings.enabled,
-      botName: settings.botName,
-    });
-    setRoomAiSaving(false);
-    if (res.success) {
-      showToast('AI 设置已更新', 'success');
-    } else {
-      showToast(res.error || 'AI 设置失败', 'error');
+    try {
+      const res = await setRoomAiSettings(settings);
+      if (res.success) {
+        showToast('AI 与桌宠设置已更新', 'success');
+      } else {
+        showToast(res.error || 'AI 与桌宠设置失败', 'error');
+      }
+    } catch {
+      showToast('AI 与桌宠设置失败，请重试', 'error');
+    } finally {
+      roomAiSavingRef.current = false;
+      setRoomAiSaving(false);
     }
-  }, [roomAiSaving, setRoomAiSettings, showToast]);
+  }, [setRoomAiSettings, showToast]);
 
   const handleSaveAdminSelfManageMemberTier = useCallback(async (enabled: boolean) => {
     if (adminSelfManageMemberTierSaving) return;
@@ -3260,7 +3280,8 @@ export default function Room() {
         enabledFmSources={enabledFmSources}
         enabledMusicAccountPlatforms={enabledFmSources}
         fmModeBeforeOff={room?.fmModeBeforeOff}
-        initialTab="fm"
+        initialTab={settingsInitialTab ?? (isOwner ? 'fm' : 'chat')}
+        initialSection={settingsInitialSection}
         playlistRoaming={room?.playlistRoaming}
         fmSaving={fmSaving}
         announcementEnabled={Boolean(room?.announcementEnabled)}
@@ -3276,9 +3297,11 @@ export default function Room() {
         joinNoticeCooldownMinutes={Math.floor((room?.joinNoticeCooldownSec ?? 180) / 60)}
         joinNoticeSaving={joinNoticeSaving}
         roomAiEnabled={room?.roomAiEnabled !== false}
+        roomAiDeskPetEnabled={room?.roomAiDeskPetEnabled === true && room?.roomAi?.deskPetEnabled !== false}
         roomAiBotName={room?.roomAiBotName || ''}
+        roomAiPersona={room?.roomAiPersona || room?.roomAi?.roomAiPersona || ''}
         globalAiEnabled={Boolean(room?.roomAi?.globalEnabled)}
-        defaultAiBotName={room?.roomAi?.defaultBotName || '小音'}
+        defaultAiBotName={room?.roomAi?.defaultBotName || '小肥鱼'}
         roomAiSaving={roomAiSaving}
         songRequest={songRequestSettings}
         songRequestSaving={songRequestSaving}
@@ -3313,7 +3336,10 @@ export default function Room() {
         onMusicAccountRefresh={listMusicAccounts}
         onMusicAccountSetShared={setMusicAccountShared}
         onMusicAccountUnbind={unbindMusicAccount}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false);
+          setSettingsInitialSection(undefined);
+        }}
         onSaveFmMode={handleSaveFmMode}
         onSaveQishuiProxy={handleSaveQishuiProxy}
         onSavePlaylistRoaming={handleSavePlaylistRoaming}
@@ -3514,11 +3540,12 @@ export default function Room() {
                 />
 
                 {canOpenRoomSettings && (
-                  <Tooltip side="bottom" content="房间设置">
+                  <Tooltip side="bottom" content={canModerate ? '房间设置' : '桌宠与个人设置'}>
                     <button
                       type="button"
                       onClick={() => {
                         markGuideFeatureUsed('room-header');
+                        setSettingsInitialTab(isOwner ? 'fm' : 'chat');
                         setSettingsOpen(true);
                       }}
                       className="flex-shrink-0 rounded-lg p-1 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
@@ -3529,11 +3556,14 @@ export default function Room() {
                   </Tooltip>
                 )}
 
-                {!canOpenRoomSettings && identityRecoveryAvailable && (
+                {!canModerate && identityRecoveryAvailable && (
                   <Tooltip side="bottom" content="找回房间身份">
                     <button
                       type="button"
-                      onClick={() => setSettingsOpen(true)}
+                      onClick={() => {
+                        setSettingsInitialTab('identity');
+                        setSettingsOpen(true);
+                      }}
                       className="flex-shrink-0 rounded-lg p-1 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
                       aria-label="找回房间身份"
                     >
@@ -4145,7 +4175,7 @@ export default function Room() {
             aria-label="关闭收藏"
           />
           <div
-            className={`relative z-10 flex max-h-[min(80vh,680px)] sm:max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
+            className={`room-modal-panel relative z-10 flex max-h-[min(80vh,680px)] sm:max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
               immersiveMode ? immersiveGlassModal : 'rounded-2xl border border-white/10 glass'
             }`}
           >
@@ -4249,7 +4279,7 @@ export default function Room() {
                 </button>
               </div>
             </div>
-            <div ref={favoritesScrollRef} className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
+            <div ref={favoritesScrollRef} className="room-modal-scroll min-h-0 min-w-0 flex-1 overflow-y-auto p-3">
               {favoritesLoading ? (
                 <MusicLoading label="正在加载收藏歌曲" compact />
               ) : filteredFavorites.length === 0 ? (

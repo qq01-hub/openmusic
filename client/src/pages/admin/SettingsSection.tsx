@@ -6,17 +6,19 @@ export default function SettingsSection({
   title,
   description,
   badge,
+  stacked = false,
   children,
 }: {
   title: string;
   description?: ReactNode;
   badge?: ReactNode;
+  stacked?: boolean;
   children: ReactNode;
 }) {
   return (
-    <section className="settings-section">
-      <Row gutter={[40, 20]}>
-        <Col xs={24} md={8} lg={6} className="settings-section__heading">
+    <section className={`settings-section${stacked ? ' settings-section--stacked' : ''}`}>
+      <Row gutter={[stacked ? 0 : 40, 20]}>
+        <Col xs={24} md={stacked ? 24 : 8} lg={stacked ? 24 : 6} className="settings-section__heading">
           <Typography.Text strong style={{ fontSize: 14 }}>
             {title}
             {badge ? <> {badge}</> : null}
@@ -27,7 +29,7 @@ export default function SettingsSection({
             </Typography.Paragraph>
           )}
         </Col>
-        <Col xs={24} md={16} lg={18} className="settings-section__content">
+        <Col xs={24} md={stacked ? 24 : 16} lg={stacked ? 24 : 18} className="settings-section__content">
           {children}
         </Col>
       </Row>

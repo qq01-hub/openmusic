@@ -1,7 +1,7 @@
 import { memo, useCallback, type ReactNode } from 'react';
 import { Plus, Minus, Loader2, Play, Pause, Share2, UserRound, Zap } from 'lucide-react';
 import type { SearchResult } from '../types';
-import { songKey } from '../api/music';
+import { formatDuration, songKey } from '../api/music';
 import SongCover from './SongCover';
 import SongRowBadges from './SongRowBadges';
 import FavoriteButton from './FavoriteButton';
@@ -9,7 +9,7 @@ import Tooltip from './Tooltip';
 import TruncateTip from './TruncateTip';
 import { immersiveGlassListRow } from '../lib/immersiveGlass';
 import { useSongPreviewState } from '../hooks/useSongPreviewState';
-import { stopSongPreview, toggleSongPreview } from '../lib/songPreviewPlayer';
+import { seekSongPreview, stopSongPreview, toggleSongPreview } from '../lib/songPreviewPlayer';
 
 interface Props {
   song: SearchResult;
@@ -53,6 +53,7 @@ function SongResultRow({
   const isThisPreview = preview.key === key;
   const previewLoading = isThisPreview && preview.status === 'loading';
   const previewPlaying = isThisPreview && preview.status === 'playing';
+  const previewActive = isThisPreview && (preview.status === 'playing' || preview.status === 'paused');
 
   const handlePreview = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -79,7 +80,7 @@ function SongResultRow({
 
   return (
     <div
-      className={`group flex cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
+      className={`group flex ${previewActive ? 'flex-wrap sm:flex-nowrap' : ''} cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
         glassRow ? immersiveGlassListRow : 'hover:bg-netease-card/80 active:bg-netease-card/80'
       }`}
       onDoubleClick={() => { if (!inQueue && addingId !== key) handleAdd(); }}
@@ -130,27 +131,55 @@ function SongResultRow({
           <Share2 className="h-3.5 w-3.5" />
         </button>
       </Tooltip>
-      <Tooltip content={previewPlaying ? '暂停试听' : '试听'}>
-        <button
-          type="button"
-          onClick={handlePreview}
-          disabled={previewLoading}
-          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-all disabled:opacity-50 ${
-            previewPlaying || previewLoading
-              ? 'bg-sky-500/20 text-sky-300'
-              : 'bg-white/5 text-netease-muted hover:bg-white/10 hover:text-white'
-          } ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
-          aria-label={previewPlaying ? '暂停试听' : '试听'}
-        >
-          {previewLoading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : previewPlaying ? (
-            <Pause className="h-3.5 w-3.5" />
-          ) : (
-            <Play className="h-3.5 w-3.5" />
-          )}
-        </button>
-      </Tooltip>
+      <div
+        className={previewActive ? 'order-last flex w-full flex-shrink-0 items-center gap-2 sm:order-none sm:w-36' : 'flex-shrink-0'}
+        onClick={(event) => event.stopPropagation()}
+        onDoubleClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <Tooltip content={previewPlaying ? '暂停试听' : previewActive ? '继续试听' : '试听'}>
+          <button
+            type="button"
+            onClick={handlePreview}
+            disabled={previewLoading}
+            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-all disabled:opacity-50 ${
+              previewPlaying || previewLoading
+                ? 'bg-white/10 text-white'
+                : 'bg-white/5 text-netease-muted hover:bg-white/10 hover:text-white'
+            } ${alwaysShowActions || previewActive || previewLoading ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+            aria-label={previewPlaying ? '暂停试听' : previewActive ? '继续试听' : '试听'}
+          >
+            {previewLoading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : previewPlaying ? (
+              <Pause className="h-3.5 w-3.5" />
+            ) : (
+              <Play className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </Tooltip>
+        {previewActive && (
+          <div className="min-w-0 flex-1">
+            <div className="flex justify-between text-[10px] tabular-nums text-netease-muted">
+              <span>{formatDuration(preview.currentTime)}</span>
+              <span>{preview.duration > 0 ? formatDuration(preview.duration) : '--:--'}</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={preview.duration || 1}
+              step={0.1}
+              value={preview.currentTime}
+              disabled={preview.duration <= 0}
+              onChange={(event) => seekSongPreview(Number(event.currentTarget.value), key)}
+              aria-label={`调整 ${song.name} 的试听进度`}
+              aria-valuetext={`${formatDuration(preview.currentTime)} / ${formatDuration(preview.duration)}`}
+              style={{ ['--volume-pct' as string]: `${preview.duration > 0 ? (preview.currentTime / preview.duration) * 100 : 0}%` }}
+              className="volume-range block h-4 w-full cursor-pointer rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white/60 disabled:cursor-default disabled:opacity-50"
+            />
+          </div>
+        )}
+      </div>
       {onAddNext && (
         <Tooltip content="点歌并插队到下一首">
           <button

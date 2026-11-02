@@ -1,0 +1,24 @@
+{
+  "repositories": {
+    "shenliuyu18/dafeiyu-pet": "4d9aadf05af87d94ecadc05bd206fc94cb6eb639",
+    "PC2005-cloud/dsh-pet": "09aa6c3beae269e3ab0738a1d4c84066e5c03a23"
+  },
+  "sha256": {
+    "renderer-pet.js": "b06d071db95befdc64e0c862eaaf41d4011481fc8feb027cf66d721947aefff0",
+    "anims-index.js": "11702b7631cd356ea28d0f87d5113365122f4d637df4ed616c697bf918a4e518",
+    "web/index.html": "1658bbdb3d96c57a12775d11a7230482e25e9274e43ac993bcdfa152b2e17079",
+    "web/assets/chars/v2.webp": "4b043823f1cee94b86fa625e311be1c5c2849f6e780ce2f38d7a3720fc22f5fe",
+    "web/assets/chars/v3.webp": "867e599cb8d44fe2e3ca6a8b207d8202ada504490385b1b68999bc9b1f3d1064",
+    "web/assets/chars/v4.webp": "d0ccecae08a8e0e9f6a7cf337c636895205d2f4c79ed27cd0634d9f39166001c",
+    "web/assets/chars/v5.webp": "47045e1c6783623ad03b4d1c8f385cbf5bf4188a1c100c2e5e29b5a29cfbc73e",
+    "web/assets/chars/v6.webp": "cf058d3ddbdd0bf47a6cd2aa291877b053b246447c9166bffe99027b3e8629e3",
+    "web/assets/chars/gpt.webp": "14d774fafd785b1108fc8f888dcc7892f09a1fe0255df2a03260a72b84188d80",
+    "dsh-types.ts": "1120d26f06f1a27033af63e2c4e36126646346bf54c461bf9a6beb16da5d0f97",
+    "dsh-pet-src-shared-physics-constants.ts": "cc89852e74ca0f1aa9caf96ff5e08a68b56aa864e18a7843ed09b9e26a94f41d",
+    "dsh-pet-src-shared-physics-contact.ts": "7b6bfa44c6cff704b410c232d380ffc40f22ae53102ef57e24c8e786b1a6b0b6",
+    "dsh-pet-src-shared-physics-spring.ts": "82fc11b002e918c0be5fea31b785d83e85a71df602a9177f3f7b94d5cade879e",
+    "dsh-pet-src-shared-physics-release.ts": "0e2af96a0f00010f4bde9adafe71243f5b4b7258c852285a544fd9a98ed1a3cd",
+    "dsh-pet-src-shared-physics-squash.ts": "5fc9684e8042ca1c12c331e9b272f5558444cece46592b6c6b2a3e2af65ce4cf",
+    "dsh-pet-src-shared-physics-throw.ts": "b90ef084b84a5d8b076bd051f995e57f7950fbda99d2484a9cb995aba709c9c4"
+  }
+}

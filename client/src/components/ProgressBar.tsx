@@ -111,17 +111,21 @@ function ProgressBar({
   return (
     <div
       ref={barRef}
-      className={`relative rounded-full touch-none select-none overflow-hidden ${disabled ? 'cursor-default' : 'cursor-pointer'} ${trackClassName} ${className}`}
+      className={`relative rounded-full touch-none select-none before:absolute before:-inset-y-2 before:inset-x-0 before:content-[''] ${showThumb ? 'overflow-visible' : 'overflow-hidden'} ${disabled ? 'cursor-default' : 'cursor-pointer'} ${trackClassName} ${className}`}
       onPointerDown={handlePointerDown}
     >
-      <div
-        className={`h-full w-full origin-left rounded-full relative ${fillClassName}`}
-        style={{ transform: `scaleX(${scale})` }}
-      >
-        {showThumb && (
-          <div className={`absolute right-0 top-1/2 -translate-y-1/2 bg-white rounded-full shadow opacity-100 ${thumbClassName}`} />
-        )}
+      <div className="h-full w-full overflow-hidden rounded-full">
+        <div
+          className={`h-full w-full origin-left rounded-full relative ${fillClassName}`}
+          style={{ transform: `scaleX(${scale})` }}
+        />
       </div>
+      {showThumb && (
+        <div
+          className={`pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full shadow opacity-100 ${thumbClassName}`}
+          style={{ left: `${displayProgress}%` }}
+        />
+      )}
     </div>
   );
 }

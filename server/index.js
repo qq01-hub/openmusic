@@ -5872,7 +5872,7 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
-  socket.on('set_room_ai_settings', ({ enabled, botName } = {}, callback) => {
+  socket.on('set_room_ai_settings', ({ enabled, deskPetEnabled, botName, persona } = {}, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_ai_settings', callback)) return;
 
@@ -5885,7 +5885,7 @@ io.on('connection', (socket) => {
     const result = setRoomAiSettings(
       roomId,
       getSocketUserId(socket),
-      { enabled, botName },
+      { enabled, deskPetEnabled, botName, persona },
       socket.id,
     );
     if (result.error) {
@@ -6817,15 +6817,15 @@ io.on('connection', (socket) => {
       io.to(roomId).emit('chat_message', result.message);
     }
 
-    // 聊天室 AI：触发词 /小音、@小音 等；有图时先视觉识图再文本工具调用
+    // 聊天室 AI：触发词 /小肥鱼、@小肥鱼 等；有图时先视觉识图再文本工具调用
     const userId = getSocketUserId(socket);
     const nickname = String(result.message?.nickname || '').trim() || '用户';
     const triggerText = String(result.message?.text || '').trim();
     const hasImage = Boolean(result.message?.imageUrl) && !result.message?.asSticker;
-    const chatRoom = getRoomInternal(roomId);
-    const botName = resolveRoomAiBotName(chatRoom);
     setImmediate(async () => {
-      // 明确的普通“切歌/下一首”控制词直接执行，不要求 AI 开启或昵称触发。
+      const chatRoom = getRoomInternal(roomId);
+      if (!isRoomAiEnabledForRoom(chatRoom)) return;
+      const botName = resolveRoomAiBotName(chatRoom);
       if (!hasImage) {
         const commandText = stripAiTriggerPrefix(triggerText, botName)
           .replace(/[，,。.!！?？：:;；、\s]+$/g, '')
@@ -6848,7 +6848,6 @@ io.on('connection', (socket) => {
           return;
         }
       }
-      if (!isRoomAiEnabledForRoom(chatRoom)) return;
       if (!shouldTriggerRoomAi(triggerText, botName, [], { hasImage })) return;
       const aiRate = await consumeDistributedSocketRate(socket, 'room-ai', {
         windowMs: 60_000,
@@ -6875,7 +6874,7 @@ io.on('connection', (socket) => {
         },
         emitSystem: (message) => emitSystemChat(roomId, message),
         broadcastRoom: () => emitRoomAndPlayback(roomId, getRoomInternal(roomId)),
-      }, ({ status, queuePosition, pendingCount, attempt, maxAttempts, error }) => io.to(roomId).emit('room_ai_processing', {
+      }, ({ status, queuePosition, pendingCount, attempt, maxAttempts, error, stepText, thoughtSteps }) => io.to(roomId).emit('room_ai_processing', {
         status,
         requestId,
         sourceMessageId: result.message.id,
@@ -6886,6 +6885,8 @@ io.on('connection', (socket) => {
         attempt,
         maxAttempts,
         error,
+        stepText,
+        thoughtSteps,
         startedAt: Date.now(),
       }));
     });

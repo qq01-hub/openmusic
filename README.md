@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>多人实时在线点歌</strong><br/>
-  多音源搜索 · 同步听歌 · 聊天互动 · 3D 视觉 / 沉浸模式
+  多音源搜索 · 同步听歌 · 聊天互动 · AI 助手 · 3D 视觉 / 沉浸模式
 </p>
 
 <p align="center">
@@ -13,10 +13,10 @@
 
 <p align="center">
   <a href="#-快速开始">🚀 快速开始</a> ·
-  <a href="#-功能概览">✨ 功能</a> ·
-  <a href="#-ai-功能">🤖 AI</a> ·
+  <a href="#-核心功能">✨ 核心功能</a> ·
   <a href="#-站点管理后台">🛡️ 管理后台</a> ·
-  <a href="#-文档">📖 文档</a> ·
+  <a href="#-客户端构建">📱 客户端</a> ·
+  <a href="#-文档与命令">📖 文档</a> ·
   <a href="#-交流群">👥 交流群</a> ·
   <a href="#-请作者喝一杯咖啡">☕ 请喝咖啡</a> ·
   <a href="docs/DEPLOY.md">📖 部署文档</a> ·
@@ -29,24 +29,27 @@
 
 <p align="center">
   <a href="docs/screenshots/home.png">
-    <img src="docs/screenshots/home.png" alt="首页大厅" width="78%" />
+    <img src="docs/screenshots/home.png" alt="首页大厅" width="88%" />
   </a>
   <br/>
   <sub><b>首页大厅</b></sub>
 </p>
 
-<table>
-  <tr>
-    <td align="center" width="50%">
-      <a href="docs/screenshots/room.png"><img src="docs/screenshots/room.png" alt="房间点歌" width="100%" /></a>
-      <br/><sub><b>房间点歌</b></sub>
-    </td>
-    <td align="center" width="50%">
-      <a href="docs/screenshots/admin.png"><img src="docs/screenshots/admin.png" alt="管理后台" width="100%" /></a>
-      <br/><sub><b>管理后台</b></sub>
-    </td>
-  </tr>
-</table>
+<p align="center">
+  <a href="docs/screenshots/room.png">
+    <img src="docs/screenshots/room.png" alt="房间点歌" width="88%" />
+  </a>
+  <br/>
+  <sub><b>房间点歌</b></sub>
+</p>
+
+<p align="center">
+  <a href="docs/screenshots/admin.png">
+    <img src="docs/screenshots/admin.png" alt="管理后台" width="88%" />
+  </a>
+  <br/>
+  <sub><b>管理后台</b></sub>
+</p>
 
 ---
 
@@ -57,12 +60,11 @@
 | 依赖 | 必填 | 说明 |
 |------|:----:|------|
 | Node.js | 源码部署 | `>=20 <25`（见 `.nvmrc`） |
-| Redis | 是 | 房间、收藏、凭据、公告、封禁 |
-| [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 搜索 / 播放 / 歌词 / 封面 / 歌单；提供 Docker 镜像 |
-| 七牛 OSS | 否 | 聊天发图；可在管理后台配置 |
+| Redis | 是 | 房间、收藏、凭据、公告、封禁持久化 |
+| [Meting-API](https://github.com/qq01-hub/Meting-API) | 是 | 搜索 / 播放 / 歌词 / 封面 / 歌单，提供 Docker 镜像 |
+| 七牛 OSS | 否 | 聊天发图，可在管理后台配置 |
 
-> Docker 全量版已内置 Redis 与 Meting，打开站点后填域名即可。
-> 如需统一网易、QQ、汽水等平台的音量基准，可在一键部署时选择“Docker 全量部署 + 响度辅助服务”。不部署该辅助服务不影响播放，但不同平台的音量可能不一致。
+> Docker 全量版已内置 Redis 与 Meting，打开站点完成初始化向导即可使用
 
 ### Docker 一键部署（推荐）
 
@@ -70,46 +72,25 @@
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | bash
 ```
 
-> 首次部署可直接通过 `http://<服务器IP>:4000` 完成初始化并登录后台，无需先配置 HTTPS，Docker 默认设置 `ALLOW_INSECURE_COOKIES=1`，允许浏览器通过 HTTP 保存登录 Cookie
-> 后续启用 HTTPS 时，将部署目录 `.env` 中的 `ALLOW_INSECURE_COOKIES` 改为 `0` 并重建 OpenMusic 容器，强制登录 Cookie 使用安全连接，仅重启容器不会更新环境变量
+- **默认目录**：`/opt/openmusic`（数据位于 `/opt/openmusic/data`，可通过 `OPENMUSIC_DEPLOY_DIR=/srv/openmusic` 自定义；已有部署在原目录执行会沿用原路径与数据）
+- **可选响度均衡**：统一多平台音量基准可追加 `OPENMUSIC_ENABLE_LOUDNESS=y`
+- **访问地址**：
+  - OpenMusic：`http://<服务器IP>:4000`（首次进入部署向导）
+  - Meting 后台：`http://127.0.0.1:3000/<管理路径>`（仅限本机，凭据保存在部署目录 `.env`，远程可通过 `ssh -L 3000:127.0.0.1:3000 user@server` 转发访问，切勿直接暴露公网）
+- **启用 HTTPS**：首次部署默认 `ALLOW_INSECURE_COOKIES=1` 支持 HTTP 登录；后续配置 HTTPS 后，请将 `.env` 中 `ALLOW_INSECURE_COOKIES` 改为 `0` 并重新 `up -d` 重建容器
 
-新部署会创建宿主机目录 `/opt/openmusic`，配置和 Meting 数据保存在 `/opt/openmusic/data`，不会因从 `/root` 执行命令而写入 `/root/data`。执行账号需有该目录的写入权限；可通过 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | OPENMUSIC_DEPLOY_DIR=/srv/openmusic bash` 指定其他目录。
-
-已有部署请先进入原部署目录再运行脚本，脚本会沿用原路径，不会自动搬移或清空数据。Redis 仍使用原有命名卷，停止服务不要使用 `down -v`。完整迁移和备份说明见 [部署文档](docs/DEPLOY.md#持久化备份与旧部署迁移)。
-
-OpenMusic、Meting 和可选响度服务（含 Redis）统一加入 `<项目名>_openmusic` 桥接网络，显式子网默认 `172.30.80.0/24`，无需手工固定 IP。与现有网络冲突时，在部署目录 `.env` 设置未占用的 `OPENMUSIC_NETWORK_SUBNET`。自动部署响度服务可用 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | OPENMUSIC_ENABLE_LOUDNESS=y bash`；详细排障见 [容器互访与网络迁移](docs/DEPLOY.md#容器互访与网络迁移)。
-
-**访问地址：**
-- OpenMusic：`http://<服务器IP>:4000`（首次进入部署向导）
-- Meting 管理后台：`http://127.0.0.1:3000/<管理路径>`（仅本机，凭据保存在部署目录的 `.env`）
-
-**常用命令：**
 ```bash
-# 新部署默认目录；已有部署改为原路径
 cd /opt/openmusic
-
-# 查看日志
-docker compose --env-file .env -f docker-compose.full.yml logs -f
-
-# 停止服务
-docker compose --env-file .env -f docker-compose.full.yml down
-
-# 重启服务
-docker compose --env-file .env -f docker-compose.full.yml restart
-
-# 更新到最新版
-docker compose --env-file .env -f docker-compose.full.yml pull && docker compose --env-file .env -f docker-compose.full.yml up -d
+docker compose --env-file .env -f docker-compose.full.yml logs -f    # 查看日志
+docker compose --env-file .env -f docker-compose.full.yml restart    # 重启服务
+docker compose --env-file .env -f docker-compose.full.yml down       # 停止服务（切勿加 -v）
+docker compose --env-file .env -f docker-compose.full.yml pull && docker compose --env-file .env -f docker-compose.full.yml up -d # 更新
 ```
 
-**远程管理 Meting：**
-```bash
-ssh -L 3000:127.0.0.1:3000 user@server
-# 然后在本机浏览器访问 http://127.0.0.1:3000/<管理路径>
-```
+> 更多网络子网配置、旧部署迁移与备份说明见 [部署文档](docs/DEPLOY.md) 与 [宝塔部署指南](deploy/DEPLOY-BAOTA.md)
 
-> 💡 **提示：** 不要把 Meting 管理端口直接暴露到公网。已有部署升级时，脚本会保留原有的 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 和 Meting 数据。
-
-**手动部署或自定义配置：** 见 [详细部署文档](docs/DEPLOY.md) 或 [宝塔部署指南](deploy/DEPLOY-BAOTA.md)。
+已接入升级服务的部署可在 **管理后台 → 系统设置 → 系统升级** 检查并确认升级
+Docker 拉取官方版本镜像，源码 / 发布包部署下载正式 ZIP，旧部署接入、停机影响与回滚说明见 [管理端系统升级](docs/SYSTEM_UPGRADE.md)
 
 ### 源码部署
 
@@ -118,146 +99,77 @@ git clone https://github.com/qq01-hub/openmusic.git && cd openmusic
 npm run install:all && npm run build && npm start
 ```
 
-打开 `http://<IP>:4000` 进入部署向导。生产环境请配置 Nginx 反代，详见 [部署文档](docs/DEPLOY.md)。
-
-```bash
-# 开发：前端 :5173，后端 :4000
-npm run dev
-```
+打开 `http://<IP>:4000` 进入部署向导，生产环境建议配置 Nginx 反代（见 [部署文档](docs/DEPLOY.md)）
 
 ---
 
-## ✨ 功能概览
+## ✨ 核心功能
 
-### 🎧 听歌
+### 🎧 听歌与音源
 
-- 多音源搜索：网易云音乐、QQ 音乐、汽水音乐、酷狗音乐
-- **账号与漫游**：网易、QQ、汽水、酷狗支持账号状态与个性化漫游；房间账号优先，否则走共享会员池；无可用汽水账号时自动锁定汽水漫游
-- **本机音质**：自选偏好（含无损 / 臻音等档位，受平台与 SVIP 开关约束）；弱设备可自动降档；切换后当前曲继续播放，下一首起生效
-- 多人实时同步播放；顺序 / 随机 / 按用户轮流 / 收藏随机 / 单曲循环 / 列表循环 / 列表内随机等播放模式；可授权成员暂停与拖进度
-- 网易云热歌榜（服务端缓存每 3 小时刷新）、推荐歌单、音乐电台
-- 歌单导入（网易 / QQ / 汽水 / 酷狗链接或 ID）；支持多歌单漫游、按歌名去重（网易云 > QQ > 汽水 > 酷狗），每个指定歌单最多保留 5000 首歌曲；个人收藏与点歌历史支持 JSON 导入 / 导出
-- 队列拖拽排序、插队、清空；系统媒体键（可分别开关，防误触）
-- 移动端后台播放（Android Flutter WebView 容器，见 [`mobile/`](mobile/)）
+- **多音源聚合**：支持网易云音乐、QQ 音乐、汽水音乐、酷狗音乐搜索与播放
+- **账号与漫游**：支持房间独立账号或共享会员池，提供网易 / QQ / 汽水 / 酷狗个性化漫游
+- **本机音质偏好**：支持无损 / 臻音 / 母带等档位（受平台与 SVIP 开关约束），弱设备自动降档，下一首起生效
+- **同步与播放模式**：多人实时同步；支持顺序、随机、按用户轮流、收藏随机、单曲循环、列表循环等模式；可授权成员暂停与拖进度
+- **发现与歌单导入**：内置热歌榜、推荐歌单、音乐电台；支持四大平台歌单链接 / ID 导入、多歌单漫游与按歌名去重（单歌单上限 5000 首）；个人收藏与历史支持 JSON 导入导出
+- **队列控制**：拖拽排序、插队、清空，以及防误触系统媒体键开关
 
-### 🏠 房间
+### 🏠 房间与权限
 
-- 大厅、随机匹配、密码房、最近访问、分享链接
-- **自定义封面**：房主可上传房间封面，大厅卡片同步；取消后恢复跟随当前歌曲
-- 站点公告 / 房间公告（进房弹窗）、网易 / QQ / 汽水 / 酷狗漫游、主题色
-- 房主转让、正式管理员、房主离线时临时控播；房间分享支持复制链接与二维码
-- 可自定义贵宾等级：角标、颜色、边框、欢迎语、礼花与迎宾冷却；成员归属地
-- 点歌规则、禁播、踩歌切歌
-- **新房间沿用常用规则**：同一浏览器内，房主再次创建房间时会自动应用最近一次创建房间的点歌、队列与聊天设置
-- **纯净模式**：隐藏动效与热榜；聊天图/贴纸可遮罩；浏览器标签页标题与图标可伪装
-- **常驻房**：房主申请 → 站点管理员审核，避免空闲被自动销毁
-- **身份找回（可选）**：绑定 Linux.do / GitHub，换设备或清 Cookie 后找回房主身份
-- **账户与房间**：首页可直接浏览，登录后加入房间、点歌与播放，支持邮箱和已开放的第三方登录方式
+- **房间大厅**：公开大厅、随机匹配、密码房、常驻房申请、最近访问、链接与二维码分享
+- **个性化装扮**：自定义房间封面、进房公告弹窗、主题色、自定义贵宾等级（角标 / 颜色 / 边框 / 欢迎语 / 礼花）与成员归属地展示
+- **权限与托管**：房主转让、正式管理员、房主离线临时控播；新建房间自动沿用本机上次的点歌与聊天规则
+- **纯净模式**：一键隐藏动效与热榜、遮罩聊天图片与贴纸、伪装浏览器标签页标题与图标
+- **账户体系**：首页可直接浏览，登录后加入房间点歌与跨设备同步收藏；支持邮箱注册及 **Linux.do、GitHub、微信扫码** 登录
 
-### 💬 互动
-
-- 实时聊天：贴纸、发图、回复 / @ / @全体、撤回（本人限时；房主 / 管理可撤他人）
-- **聊天音乐卡片**：播放队列或搜索结果里点「分享」弹出确认框，可随卡片附带一句话；点封面即在本机播放并覆盖房间音乐（房间播放器不受影响），卡片内显示滚动歌词，进度条支持拖动定位，再点封面暂停立刻回到房间播放，播完也会自动切回；卡片可就地收藏，未在队列的歌曲可点「+」点歌；多条卡片只允许单例播放，不同步给其它成员
-- 全员禁言 / 单人禁言；踢人、任命管理、贵宾管理
-- 房间违禁词（可自定义，含默认可删词表）
-- 微信表情包采集 / 表情包搜索
-
-### 🤖 AI 功能
-
-- **房间 AI 助手**：在聊天中 `@` 机器人或使用触发词提问，支持连续对话和按用户隔离的上下文
-- **音乐操作**：可根据自然语言搜索歌曲、查看当前播放状态、管理队列，并执行房间允许的点歌与播放操作
-- **音乐卡片确认**：和用户核对歌名、版本或候选时，AI 会把候选用音乐卡片（带封面）展示，多条候选合并成同一条消息，用户点卡片即可在本机试听确认，避免点错歌
-- **图片理解**：发送歌单截图、专辑封面等图片后，AI 可先识别图片内容，再结合音乐工具继续处理
-- **房间级开关**：房主或管理员可在房间设置中启用 / 停用 AI，并自定义机器人名称
-- **多模型池**：管理员可配置 OpenAI 兼容接口，分别设置文本模型和视觉模型；支持模型池切换、限流与故障降级
-- **可选启用**：AI 默认关闭，不配置模型 API Key 不会影响点歌、播放、聊天等基础功能
-
-### 🌌 视觉与客户端
-
-- 星河 / 声波地形 3D 背景、封面模糊背景、桌面沉浸模式（舞台歌词）
-- Android（Flutter WebView 容器）：网页负责房间、登录与播放，原生提供通知栏 / 锁屏控件、悬浮歌词和受限工具调用
-- 静默 / 强制更新提示
-
-### ⚙️ 点歌规则（房主 / 管理员）
-
-| 规则 | 说明 |
+| 点歌规则 | 说明 |
 |------|------|
-| 允许成员点歌 | 关闭后仅房主与管理员可点 |
-| 允许成员插队 | 成员可对自己的点歌插队 |
-| 允许拖进度 / 暂停 | 可授权成员控制播放 |
-| 进房等待时间 | 新成员停留满时长后才能点歌 |
-| 每人最多点歌 | 队列中每人上限，`0` = 不限 |
-| 点歌冷却 | 不限制 / 10s / 30s / 60s / 120s |
-| 队列长度上限 | 50 / 100 / 200 |
-| 禁播歌曲 | 按歌名，跨平台均不可点 |
-| 踩歌切歌 | 按人数或在线比例 |
-| 退出后清除已点 | 离房超时后清除其待播 |
+| 成员权限 | 可分别开关成员点歌、插队、拖动进度 / 暂停 |
+| 频率与配额 | 支持进房等待时长、每人点歌上限、点歌冷却（10s~120s）、队列上限（50/100/200） |
+| 秩序维护 | 支持跨平台歌名禁播、按人数或比例踩歌切歌、成员离房超时自动清除待播 |
+
+### 💬 聊天与互动
+
+- **实时聊天**：支持贴纸、发图、微信表情包采集与搜索、回复 / `@` / `@全体`、限时撤回
+- **聊天音乐卡片**：队列或搜索结果一键分享到聊天；点击卡片封面可在本机独立试听（带滚动歌词与进度拖动，不影响房间当前播放，暂停或播完自动切回房间音频），并支持就地收藏或加歌
+- **房间风控**：全员禁言、单人禁言、踢人、任命管理、自定义违禁词过滤
+
+### 🤖 房间 AI 助手
+
+- **对话与控播**：在聊天中 `@` 机器人或用触发词提问，支持按用户隔离上下文、自然语言搜歌、查看状态、管理队列与点歌
+- **卡片候选确认**：核对同名或翻唱曲目时，AI 会合并发送音乐卡片供本机试听确认，避免点错歌
+- **识图点歌**：发送歌单截图或专辑封面，AI 可识别图片内容并联动音乐工具处理
+- **多模型池**：后台支持配置 OpenAI 兼容接口（文本模型 + 视觉模型）、模型池切换、限流与故障降级；默认关闭，不配置不影响基础功能
+
+### 🌌 视觉与多端
+
+- **沉浸视觉**：星河 / 声波地形 3D 背景、封面高斯模糊、桌面舞台歌词沉浸模式
+- **多端覆盖**：Web 响应式界面、Electron 桌面端、Android 客户端（支持锁屏 / 通知栏播放控制与桌面可拖动悬浮歌词）
 
 ---
 
 ## 🛡️ 站点管理后台
 
-部署向导会生成**随机管理员账号**和**随机管理入口**（不是固定 `/admin`），仅在完成页展示一次，请立即保存。
+部署向导会生成**随机管理员账号**和**随机管理入口**（非固定 `/admin`），仅在初始化完成页展示一次，请妥善保存
 
-| 场景 | 处理 |
+| 场景 | 处理方式 |
 |------|------|
-| 忘记密码 | `redis-cli DEL openmusic:admin:credentials` → 重启 → 恢复默认 `admin` / `123456` |
-| 忘记入口 | 查看 `server/adminConfig.json`（Docker：`data/adminConfig.json`）的 `entryPath` |
+| 忘记密码 | 执行 `redis-cli DEL openmusic:admin:credentials` 后重启服务，恢复默认 `admin` / `123456` |
+| 忘记入口 | 查看 `server/adminConfig.json`（Docker 为 `data/adminConfig.json`）中的 `entryPath` |
+| 快捷进入 | 本机浏览器访问过真实入口后会在 `localStorage` 记录路径，首页顶栏将显示仅本机可见的盾牌图标 |
 
-主要能力：
+**后台核心能力：**
+- **运行时配置**：音源、Meting、SVIP 音质、共享会员、第三方登录（Linux.do / GitHub / 微信）、七牛 OSS、SEO 等在线保存即生效
+- **AI 管理**：全局开关、机器人名称、文本 / 视觉模型池、限流参数与连通性测试（API Key 服务端加密存储）
+- **房间与账户治理**：房间搜索、密码查看、解散、常驻审核、违规昵称重置、全站 IP / 设备封禁、账户风控、全局广播与操作审计
 
-- 运行配置在线生效：音源 / Meting / SVIP 音质 / 共享会员 / OAuth / 七牛 / SEO 等
-- AI 配置：启用房间 AI、设置机器人名称、配置文本 / 视觉模型池、API 协议、限流参数，并提供连通性测试
-- 房间管理：搜索、查看密码、解散、常驻申请审核、违规重置昵称、成员拉黑
-- 全站封禁（IP / 设备）、站点公告与全局广播、错误上报、操作审计
-- 管理员可额外绑定 Linux.do / GitHub 作备用登录
-
-安全要点：扫码会话服务端托管，房间 Cookie 加密存储，Meting 强制校验 HTTPS 证书。
-
-### AI 配置说明
-
-1. 进入管理后台 → 运行时配置 → **AI**。
-2. 开启 AI，填写 OpenAI 兼容接口地址、API Key 和模型 ID；需要图片理解时，同时配置视觉模型。
-3. 使用后台的文本 / 视觉连通性测试确认配置有效。
-4. 进入房间设置，开启房间 AI 并设置机器人名称；之后可在聊天中 `@机器人名称` 或使用命令菜单。
-
-API Key 仅用于服务端请求，运行配置会进行加密存储；AI 未启用或模型不可用时，房间基础功能仍可正常使用。
-
-### 🛠️ 首页管理入口快捷方式
-
-首页默认不展示管理入口。本机浏览器成功访问过真实入口后，会在 `localStorage` 记住路径，顶栏出现盾牌图标便于快速进入；其他访客不可见，也不会泄露路径。
+> **OAuth 回调提示**：在管理后台「运行时配置 → 身份登录」启用 Linux.do（回调 `https://你的域名/api/auth/linuxdo/callback`）或 GitHub（回调 `https://你的域名/api/auth/github/callback`）时，请确保应用后台与本站配置的 `redirect_uri` 协议、域名、路径完全一致
 
 ---
 
-## 🔗 账户登录与第三方身份
+## 📱 客户端构建
 
-首页可直接浏览，加入房间、点歌与播放需要登录
-
-- 支持常见公共邮箱注册，以及已开放的 **Linux Do、GitHub、微信扫码** 登录
-- 在首页账户入口管理登录方式，换设备后继续使用自己的收藏与房间
-- 已有游客升级时请保留本站 Cookie 和浏览器数据，登录后按原有归属迁移
-- 管理员可在后台查看账户状态并处理异常访问
-
-### 配置步骤
-
-1. **申请 OAuth 应用**
-   - Linux.do：[connect.linux.do](https://connect.linux.do) → 回调 `https://你的域名/api/auth/linuxdo/callback`（授权 / 令牌 / 用户信息地址须按官方文档填写，项目无默认值）
-   - GitHub：[OAuth Apps](https://github.com/settings/developers) → Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（接口地址固定，无需额外配置）
-2. **填写配置**：管理后台 → 运行时配置 →「身份登录」→ 保存即时生效
-3. **绑定**
-   - 普通账户：首页 → 登录 → 登录后再次点击首页账户入口 →「账户与安全」
-   - 房主：房间设置 →「身份」
-   - 管理员：先用密码登录 → 系统设置 →「安全与账号」（接入参数在「身份登录」，绑定按钮在「安全与账号」）
-
-> **排查**：OAuth 应用后台与本站配置中的 `redirect_uri` 须逐字符一致（协议、域名、路径、尾斜杠）。路径错误会导致回调失败或 404。
-
----
-
-## 📱 Android 应用
-
-Android 端是 **Flutter WebView 容器**，加载 OpenMusic 网页；房间、登录、播放和权限统一由网页及服务端处理
-
-### 构建 APK
+### Android 应用（Flutter WebView）
 
 ```powershell
 cd mobile
@@ -265,15 +177,14 @@ flutter pub get
 node scripts/build-flutter-apk.mjs --release --server-url=https://your-host
 ```
 
-脚本会在打包前仅递增本机的 `mobile/.android-version.local`（已被 Git 忽略）中的可见版本号和 Android 构建号；仓库内的 `mobile/pubspec.yaml` 始终保持基线 `1.0.0+1`，新拉取项目会从该版本开始。APK 输出位置：`mobile/build/app/outputs/flutter-apk/app-release.apk`，并复制到 `server/downloads/openmusic.apk`。
+产物输出至 `mobile/build/app/outputs/flutter-apk/app-release.apk` 并自动复制到 `server/downloads/openmusic.apk`，详情见 [`mobile/README.md`](mobile/README.md) 与 [`docs/MOBILE.md`](docs/MOBILE.md)
 
-### 通知栏播放
+### Windows 桌面端（Electron）
 
-- Android 13+ 需允许通知权限，通知栏和锁屏播放控件才会显示。
-- 支持播放 / 暂停、下一首和拖动进度；有控播权限时还可切换播放模式。收藏操作会同步到网页收藏。
-- 通知栏会显示当前歌词。点「词」后允许悬浮窗权限，可显示可拖动的悬浮歌词；轻点歌词即可关闭。
-- 所有原生操作都会回传网页，并由网页与服务端按房间权限最终裁决。
-- 详情见 [`mobile/README.md`](mobile/README.md)。
+```powershell
+npm run desktop:build
+# 无交互构建：$env:OPENMUSIC_DESKTOP_URL='https://music.example.com'; npm run desktop:build
+```
 
 ---
 
@@ -281,36 +192,27 @@ node scripts/build-flutter-apk.mjs --release --server-url=https://your-host
 
 | 层级 | 技术 |
 |------|------|
-| 前端 | React · Vite · Tailwind CSS · Socket.IO Client · Three.js / R3F |
+| 前端 | React · Vite · TypeScript · Tailwind CSS · Socket.IO Client · Three.js / R3F |
 | 移动端 | Flutter · WebView · just_audio · audio_service |
 | 后端 | Node.js · Express · Socket.IO · Redis（必需） |
 
 ---
 
-## 📖 文档
+## 📖 文档与命令
 
 | 文档 | 说明 |
 |------|------|
-| [AI 协作指南](AGENTS.md) | **开发或交给 AI 修改前必读**：项目边界、高风险区域、验证流程与禁止事项 |
-| [部署文档](docs/DEPLOY.md) | 环境变量、Nginx、Docker 细节、API 速查 |
-| [Meting-API](https://github.com/qq01-hub/Meting-API) | 音源 API（网易 / QQ / 汽水等），含 Docker 镜像 |
-| [宝塔部署](deploy/DEPLOY-BAOTA.md) | 面板 Docker / 源码部署步骤 |
-| [移动端](docs/MOBILE.md) | Flutter 工程结构与本地运行 |
-| [Nginx 示例](deploy/nginx.conf.example) | 通用反代配置 |
-| [宝塔 Nginx 示例](deploy/nginx.baota-optimized.conf.example) | 宝塔优化版 |
-
-常用命令：
+| [AI 协作指南](AGENTS.md) | 项目边界、不可破坏契约、验证流程与禁止事项 |
+| [部署文档](docs/DEPLOY.md) | 环境变量、Nginx、Docker 细节、迁移备份与 API 速查 |
+| [宝塔部署](deploy/DEPLOY-BAOTA.md) | 宝塔面板 Docker / 源码部署步骤 |
+| [移动端文档](docs/MOBILE.md) | Flutter 工程结构与本地调试 |
+| [Nginx 配置示例](deploy/nginx.conf.example) | 通用反代配置（宝塔优化版见 `deploy/nginx.baota-optimized.conf.example`） |
 
 ```bash
-npm run install:all   # 安装根 / server / client 依赖
-npm run build         # 构建前端 → client/dist
-npm start             # 启动后端（生产）
-npm run dev           # 前后端同时开发
-npm run dev:electron  # 启动 Electron 客户端（需先启动前端）
-npm run desktop:build # 首次输入站点地址后，单独构建 Windows 安装包 → server/downloads/
-# 本机地址保存在 desktop-build.local.json（已忽略，不会上传 GitHub）
-# 如需无交互构建：$env:OPENMUSIC_DESKTOP_URL='https://music.example.com'; npm run desktop:build
-npm run electron:dist # desktop:build 的兼容别名
+npm run install:all   # 安装全部依赖
+npm run dev           # 启动前后端开发环境（前端 :5173，后端 :4000）
+npm run build         # 构建前端产物至 client/dist
+npm start             # 启动生产环境后端
 npm run package:build # 组装发版包
 ```
 
@@ -330,7 +232,7 @@ npm run package:build # 组装发版包
 
 ## ☕ 请作者喝一杯咖啡
 
-如果 OpenMusic 对你有帮助，欢迎请作者喝杯咖啡，支持持续维护。
+如果 OpenMusic 对你有帮助，欢迎请作者喝杯咖啡，支持持续维护
 
 <table>
   <tr>
@@ -364,8 +266,8 @@ npm run package:build # 组装发版包
 
 ## ⚠️ 免责声明
 
-本项目仅供学习与技术交流。不存储音频文件，音乐版权归相关权利人所有。请遵守法律法规及平台协议，不得用于商业用途。
+本项目仅供学习与技术交流，不存储音频文件，音乐版权归相关权利人所有，请遵守法律法规及平台协议，不得用于商业用途
 
 ## 📄 License
 
-[MIT（附注明出处条款）](LICENSE)：可自由使用、修改、分发；公开分发或部署时须注明出处（项目名「OpenMusic」及原始仓库链接）。
+[MIT（附注明出处条款）](LICENSE)：可自由使用、修改、分发；公开分发或部署时须注明出处（项目名「OpenMusic」及原始仓库链接）

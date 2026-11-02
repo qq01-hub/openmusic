@@ -58,6 +58,7 @@ services:
       ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
       DOCKER_REDIS_URL: redis://redis:6379/0
       DOCKER_METING_URL: http://meting-api:3000
+      OPENMUSIC_UPDATE_SOCKET: /run/openmusic-update/control.sock
       ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:-}
     volumes:
       - type: bind
@@ -81,14 +82,29 @@ services:
         bind:
           create_host_path: false
       - ./data/downloads:/app/server/downloads
+      - openmusic-update:/run/openmusic-update
     depends_on:
       redis:
         condition: service_healthy
       meting:
         condition: service_healthy
 
+  updater:
+    image: w3126197382/openmusic:latest
+    restart: unless-stopped
+    command: ["node", "/app/deploy/updater/index.mjs", "docker"]
+    networks:
+      - openmusic
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - openmusic-update:/run/openmusic-update
+    depends_on:
+      openmusic:
+        condition: service_started
+
 volumes:
   redis-data:
+  openmusic-update:
 
 networks:
   openmusic:
@@ -139,6 +155,9 @@ fi
 3. 如果要配 Nginx 反代 + HTTPS，见下方「Nginx 配置」
 
 ### 更新
+
+已接入独立升级服务后，优先在管理后台的「系统设置 → 系统升级」检查并确认升级
+Docker 拉取版本镜像，PM2 源码 / 发布包部署下载 ZIP，旧部署需先按 [系统升级接入说明](../docs/SYSTEM_UPGRADE.md) 安装一次升级服务
 
 ```bash
 cd /www/openmusic

@@ -54,8 +54,9 @@ import {
 } from './errorReports.js';
 import { sanitizeDeviceId } from './deviceIdentity.js';
 import { getRuntimeConfigForAdmin, setRuntimeConfig, getRuntimeConfig } from './runtimeConfig.js';
-import { testAiModelChat, testAiModelVision, getAiModelConfig, isAiModelConfigured } from './aiModelService.js';
+import { testAiModelChat, testAiModelVision, fetchAiProviderModels, getAiModelConfig, isAiModelConfigured } from './aiModelService.js';
 import { patchClientIndexHtml } from './seoIndexHtml.js';
+import { mountSystemUpgradeApi } from './systemUpgrade.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -266,6 +267,8 @@ const AUDIT_ACTION_GROUPS = {
   risk: ['risk_session_revoke', 'risk_account_update', 'risk_policy_update', 'risk_history_clear', 'risk_history_clear_failed', 'risk_human_challenge_bypass'],
   config: [
     'set_runtime_config',
+    'system_upgrade_start',
+    'system_upgrade_rejected',
     'reset_music_api_circuit',
     'meting_reset_cooldown',
     'meting_set_disabled',
@@ -852,6 +855,10 @@ export function mountAdminApi(app, {
     });
   }
 
+  mountSystemUpgradeApi(app, {
+    requireAdmin, requireAdminOrigin, requireAdminSetupComplete, audit, getClientIp,
+  });
+
   app.get('/api/admin/overview', requireAdmin, async (_req, res) => {
     const rooms = listRoomsForAdmin();
     const mem = process.memoryUsage();
@@ -1062,18 +1069,23 @@ export function mountAdminApi(app, {
     const draftEnableThinking = req.body?.enableThinking;
     const draftContextWindowTokens = Number(req.body?.contextWindowTokens);
     const poolId = String(req.body?.poolId || '').trim();
-    const savedPool = getRuntimeConfig().aiModelPools.find((pool) => pool.id === poolId);
+    const providerId = String(req.body?.providerId || '').trim();
+    const runtimeCfg = getRuntimeConfig();
+    const savedPool = runtimeCfg.aiModelPools.find((pool) => pool.id === poolId || (providerId && pool.providerId === providerId));
+    const savedProvider = Array.isArray(runtimeCfg.aiProviders)
+      ? runtimeCfg.aiProviders.find((p) => p.id === providerId)
+      : null;
     const overrides = {
-      apiKey: draftKey || savedPool?.apiKey || undefined,
+      apiKey: draftKey || savedProvider?.apiKey || savedPool?.apiKey || undefined,
       model: draftModel,
-      apiBaseUrl: draftBaseUrl || savedPool?.apiBaseUrl || undefined,
-      apiProtocol: draftProtocol || savedPool?.apiProtocol || undefined,
-      maxRequestsPerMinute: Number.isFinite(draftMaxRequestsPerMinute) ? draftMaxRequestsPerMinute : savedPool?.maxRequestsPerMinute,
-      maxTokensPerMinute: Number.isFinite(draftMaxTokensPerMinute) ? draftMaxTokensPerMinute : savedPool?.maxTokensPerMinute,
+      apiBaseUrl: draftBaseUrl || savedProvider?.apiBaseUrl || savedPool?.apiBaseUrl || undefined,
+      apiProtocol: draftProtocol || savedProvider?.apiProtocol || savedPool?.apiProtocol || undefined,
+      maxRequestsPerMinute: Number.isFinite(draftMaxRequestsPerMinute) ? draftMaxRequestsPerMinute : (savedProvider?.maxRequestsPerMinute ?? savedPool?.maxRequestsPerMinute),
+      maxTokensPerMinute: Number.isFinite(draftMaxTokensPerMinute) ? draftMaxTokensPerMinute : (savedProvider?.maxTokensPerMinute ?? savedPool?.maxTokensPerMinute),
       enableThinking: typeof draftEnableThinking === 'boolean' ? draftEnableThinking : savedPool?.enableThinking === true,
       contextWindowTokens: Number.isFinite(draftContextWindowTokens) ? draftContextWindowTokens : savedPool?.contextWindowTokens,
     };
-    const isVisionPool = req.body?.type === 'vision' || savedPool?.type === 'vision';
+    const isVisionPool = req.body?.type === 'vision' || req.body?.supportsVision === true || savedPool?.type === 'vision';
     const result = isVisionPool
       ? await testAiModelVision(overrides)
       : await testAiModelChat(message, overrides);
@@ -1081,6 +1093,23 @@ export function mountAdminApi(app, {
       success: result.success,
       model: result.model,
       latencyMs: result.latencyMs,
+      error: result.success ? undefined : result.error,
+    }, ip);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  });
+
+  app.post('/api/admin/ai/provider-models', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, async (req, res) => {
+    const ip = getClientIp?.(req) || req.ip || '';
+    const providerId = String(req.body?.providerId || '').trim();
+    const apiBaseUrl = String(req.body?.apiBaseUrl || '').trim();
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const result = await fetchAiProviderModels({ providerId, apiBaseUrl, apiKey });
+    audit('ai_fetch_models', {
+      success: result.success,
+      count: Array.isArray(result.models) ? result.models.length : 0,
       error: result.success ? undefined : result.error,
     }, ip);
     if (!result.success) {

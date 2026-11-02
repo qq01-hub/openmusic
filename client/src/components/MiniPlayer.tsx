@@ -286,19 +286,19 @@ export default memo(function MiniPlayer({
   if (fmLoading || fmError) {
     return (
       <div className={playerBarClass} data-guide="room-player">
-        <div className="py-1.5 -my-1.5">
+        <div className="py-1 -my-1">
           <ProgressBar
             progress={0}
             duration={0}
             onSeek={() => {}}
             disabled
-            className="h-0.5"
+            className="h-[3px]"
             trackClassName="bg-netease-border"
             fillClassName="bg-netease-red"
           />
         </div>
 
-        <div className="max-w-5xl mx-auto flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5">
+        <div className="room-player-content max-w-5xl mx-auto flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-2.5">
           <div className="flex items-center gap-2 sm:gap-2.5 flex-shrink-0 max-w-[38%] sm:max-w-[32%] min-w-0">
             <div className="flex h-10 w-10 sm:h-11 sm:w-11 flex-shrink-0 items-center justify-center rounded-lg bg-netease-card">
               {fmLoading ? <Loader2 className="h-4 w-4 animate-spin text-netease-red" /> : <Play className="h-4 w-4 text-netease-muted" />}
@@ -344,14 +344,16 @@ export default memo(function MiniPlayer({
 
       )}
 
-      <div className="py-1.5 -my-1.5">
+      <div className="group py-2.5 -my-2.5">
         <PlaybackProgressBar
           song={current}
           onSeek={handleSeek}
           disabled={!canSeek}
-          className="h-0.5"
+          className="h-[3px] transition-[height] duration-150 group-hover:h-1"
           trackClassName="bg-netease-border"
           fillClassName="bg-netease-red"
+          showThumb
+          thumbClassName="h-2 w-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         />
       </div>
 
@@ -359,7 +361,7 @@ export default memo(function MiniPlayer({
 
       <div className="relative w-full">
 
-        <div className="mx-auto flex w-full max-w-5xl items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-2.5">
+        <div className="room-player-content mx-auto flex w-full max-w-5xl items-center gap-2 px-3 py-2 sm:gap-3 sm:px-4 sm:py-2.5">
 
         <button onClick={onExpand} className="flex min-w-0 flex-1 items-center gap-2 text-left sm:max-w-[32%] sm:flex-shrink-0 sm:gap-2.5">
 

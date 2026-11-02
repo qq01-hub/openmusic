@@ -73,6 +73,8 @@ export interface AiProcessingTask {
   attempt: number;
   maxAttempts: number;
   error?: string;
+  stepText?: string;
+  thoughtSteps?: string[];
 }
 
 interface ChatStore {

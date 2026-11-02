@@ -22,6 +22,8 @@ export type SongPreviewState = {
   key: string | null;
   status: SongPreviewStatus;
   error: string | null;
+  currentTime: number;
+  duration: number;
 };
 
 let previewAudio: HTMLAudioElement | null = null;
@@ -53,6 +55,12 @@ function getOrCreatePreviewAudio(): HTMLAudioElement {
     if (isIOS()) previewAudio.crossOrigin = 'anonymous';
     previewAudio.preload = 'metadata';
     syncPreviewVolume();
+    const notifyProgress = () => {
+      if (activeKey && (status === 'playing' || status === 'paused')) notify();
+    };
+    for (const event of ['timeupdate', 'loadedmetadata', 'durationchange', 'seeked']) {
+      previewAudio.addEventListener(event, notifyProgress);
+    }
     previewAudio.addEventListener('ended', () => {
       finishPreview({ resumeRoom: true });
     });
@@ -137,7 +145,21 @@ function finishPreview(options: { resumeRoom: boolean }) {
 }
 
 export function getSongPreviewState(): SongPreviewState {
-  return { key: activeKey, status, error: lastError };
+  const audio = activeKey && (status === 'playing' || status === 'paused') ? previewAudio : null;
+  const duration = audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
+  const currentTime = audio && Number.isFinite(audio.currentTime)
+    ? Math.max(0, Math.min(audio.currentTime, duration))
+    : 0;
+  return { key: activeKey, status, error: lastError, currentTime, duration };
+}
+
+export function seekSongPreview(time: number, key: string): void {
+  if (!previewAudio || activeKey !== key || !Number.isFinite(time)) return;
+  if (status !== 'playing' && status !== 'paused') return;
+  const { duration } = getSongPreviewState();
+  if (duration <= 0) return;
+  previewAudio.currentTime = Math.max(0, Math.min(time, duration));
+  notify();
 }
 
 export function subscribeSongPreview(listener: () => void): () => void {
@@ -191,6 +213,7 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
   }
 
   const token = ++loadToken;
+  audio.pause();
   previewAbortController?.abort();
   const previewAbort = new AbortController();
   previewAbortController = previewAbort;

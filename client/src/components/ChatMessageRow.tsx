@@ -1,5 +1,5 @@
-import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Loader2, Plus, Reply, Smile } from 'lucide-react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Check, ChevronDown, ChevronRight, Loader2, Plus, Reply, Smile, Sparkles } from 'lucide-react';
 import { isVerifiedAiBotMessage } from '../lib/chatAi';
 import type { ChatMessage, ChatReplyRef, RoomMemberTier, RoomUser } from '../types';
 import QFaceImage from './QFaceImage';
@@ -172,14 +172,101 @@ function renderAiInlineText(
   });
 }
 
-function renderAiMessageText(
-  messageText: string,
-  chatScrollRoot: HTMLDivElement | null,
-  nicknames: string[],
-) {
-  const lines = normalizeAiRichText(messageText).split('\n');
+const animatedAiMessageIds = new Set<string>();
+
+function sliceTextPreserveFaceTokens(raw: string, targetChars: number): string {
+  if (targetChars >= raw.length) return raw;
+  const sliced = raw.slice(0, targetChars);
+  const lastOpen = sliced.lastIndexOf('[qqface:');
+  if (lastOpen >= 0 && !sliced.slice(lastOpen).includes(']')) {
+    const closeIdx = raw.indexOf(']', lastOpen);
+    if (closeIdx >= 0) return raw.slice(0, closeIdx + 1);
+  }
+  return sliced;
+}
+
+function AiMessageContent({
+  msgId,
+  timestamp,
+  messageText,
+  aiThoughts,
+  chatScrollRoot,
+  nicknames,
+  onContentResize,
+}: {
+  msgId: string;
+  timestamp: number;
+  messageText: string;
+  aiThoughts?: string[];
+  chatScrollRoot: HTMLDivElement | null;
+  nicknames: string[];
+  onContentResize?: () => void;
+}) {
+  const shouldAnimate = useRef<boolean>(
+    !animatedAiMessageIds.has(msgId) && timestamp > 0 && Date.now() - timestamp < 12_000,
+  );
+  const [visibleChars, setVisibleChars] = useState<number>(() =>
+    shouldAnimate.current ? 0 : messageText.length,
+  );
+  const [showThoughts, setShowThoughts] = useState(false);
+
+  useEffect(() => {
+    if (!shouldAnimate.current) {
+      setVisibleChars(messageText.length);
+      return;
+    }
+    animatedAiMessageIds.add(msgId);
+    const total = messageText.length;
+    if (total <= 0) return;
+    const step = Math.max(1, Math.ceil(total / 42));
+    let current = 0;
+    const timer = window.setInterval(() => {
+      current = Math.min(total, current + step);
+      setVisibleChars(current);
+      onContentResize?.();
+      if (current >= total) {
+        window.clearInterval(timer);
+      }
+    }, 22);
+    return () => window.clearInterval(timer);
+  }, [msgId, messageText, onContentResize]);
+
+  const displayedText = visibleChars >= messageText.length
+    ? messageText
+    : sliceTextPreserveFaceTokens(messageText, visibleChars);
+  const isTyping = visibleChars < messageText.length;
+  const lines = normalizeAiRichText(displayedText).split('\n');
+
   return (
     <div className="space-y-1.5 text-sm font-normal leading-7 tracking-normal text-white/95">
+      {Array.isArray(aiThoughts) && aiThoughts.length > 0 && (
+        <div className="mb-1.5 rounded-xl border border-sky-300/15 bg-sky-950/35 px-2.5 py-1.5 text-[11px] leading-relaxed text-sky-200/85">
+          <button
+            type="button"
+            onClick={() => {
+              setShowThoughts((v) => !v);
+              requestAnimationFrame(() => onContentResize?.());
+            }}
+            className="flex w-full items-center justify-between gap-1.5 text-left font-medium text-sky-200/90 hover:text-sky-100"
+          >
+            <span className="inline-flex items-center gap-1">
+              <Sparkles className="h-3 w-3 text-sky-300" />
+              <span>已思考 {aiThoughts.length} 个步骤</span>
+            </span>
+            {showThoughts ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          </button>
+          {showThoughts && (
+            <ul className="mt-1.5 space-y-1 border-t border-sky-300/10 pt-1.5 text-[11px] text-sky-100/75">
+              {aiThoughts.map((step, idx) => (
+                <li key={`thought-${idx}`} className="flex items-start gap-1.5">
+                  <span className="mt-0.5 text-[10px] text-sky-300/70">{idx + 1}.</span>
+                  <span className="min-w-0 break-words">{step}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {lines.map((rawLine, index) => {
         const line = rawLine.trim();
         if (!line) return <div key={`ai-gap-${index}`} className="h-1" aria-hidden />;
@@ -204,6 +291,9 @@ function renderAiMessageText(
         return (
           <p key={`ai-paragraph-${index}`} className="m-0">
             {renderAiInlineText(line, `ai-paragraph-${index}`, chatScrollRoot, nicknames)}
+            {isTyping && index === lines.length - 1 && (
+              <span className="ml-0.5 inline-block h-3.5 w-1.5 animate-pulse rounded-sm bg-sky-300 align-middle" aria-hidden />
+            )}
           </p>
         );
       })}
@@ -244,7 +334,7 @@ export interface ChatMessageRowProps {
   myUserId: string;
   pureMode: boolean;
   pureImageRevealed: boolean;
-  aiProcessing?: { status: 'queued' | 'processing' | 'error'; queuePosition: number; pendingCount: number; attempt: number; maxAttempts: number; error?: string } | null;
+  aiProcessing?: { status: 'queued' | 'processing' | 'error'; queuePosition: number; pendingCount: number; attempt: number; maxAttempts: number; error?: string; stepText?: string; thoughtSteps?: string[] } | null;
   reactionPickerOpen: boolean;
   chatMuted: boolean;
   canModerate?: boolean;
@@ -285,6 +375,7 @@ function ChatMessageRow({
   onContentResize,
 }: ChatMessageRowProps) {
   const [menuPos, setMenuPos] = useState<ChatMessageMenuPos | null>(null);
+  const [expandProcessingSteps, setExpandProcessingSteps] = useState(false);
   const myAvatarUrl = useRoomStore((s) => s.avatar_url);
   const { userMap, nicknames } = getRoomUserIndex(room.users);
   const canRecall = canRecallChatMessage(msg, myUserId, {
@@ -346,7 +437,7 @@ function ChatMessageRow({
   const isPhotoOnly = Boolean(
     msg.imageUrl && !msg.text && !isStickerImage && (!pureMode || pureImageRevealed),
   );
-  const bubbleClass = `min-w-0 max-w-full rounded-2xl text-sm leading-7 break-words [overflow-wrap:anywhere] ${isPhotoOnly ? 'p-1' : 'px-3 py-1.5'} ${isMe ? 'rounded-tr-none bg-netease-red/20 text-white' : isAiBot ? 'rounded-tl-none border border-white/[0.09] bg-gradient-to-br from-slate-800/95 via-slate-800/90 to-rose-950/25 text-white/95 shadow-[0_8px_22px_-16px_rgba(0,0,0,0.9)]' : 'rounded-tl-none bg-netease-dark/80 text-white/90'}`;
+  const bubbleClass = `min-w-0 max-w-full rounded-2xl text-sm leading-7 break-words [overflow-wrap:anywhere] ${isPhotoOnly ? 'p-1' : 'px-3.5 py-2'} ${isMe ? 'rounded-tr-none bg-netease-red/20 text-white' : isAiBot ? 'rounded-tl-none border border-sky-300/20 bg-gradient-to-br from-slate-900/95 via-sky-950/55 to-indigo-950/45 text-white/95 shadow-[0_10px_28px_-14px_rgba(14,165,233,0.28)] ring-1 ring-inset ring-white/[0.06]' : 'rounded-tl-none bg-netease-dark/80 text-white/90'}`;
   const replyBubbleClass = `min-w-0 max-w-full rounded-2xl px-3 py-1.5 text-sm ${isMe ? 'rounded-tr-none bg-netease-red/20 text-white' : 'rounded-tl-none bg-netease-dark/80 text-white/90'}`;
 
   const renderReplyPreview = () => {
@@ -482,10 +573,10 @@ function ChatMessageRow({
             <button
               type="button"
               onClick={handleMention}
-              className="rounded border border-sky-300/15 bg-sky-400/[0.08] px-1 py-px text-[9px] font-medium text-sky-200/90 transition-colors hover:bg-sky-400/[0.16]"
+              className="inline-flex items-center gap-1 rounded-full border border-sky-300/25 bg-gradient-to-r from-sky-500/20 to-indigo-500/20 px-1.5 py-px text-[9px] font-medium text-sky-200 shadow-sm transition-colors hover:from-sky-500/30 hover:to-indigo-500/30"
               aria-label={`@${msg.nickname}`}
             >
-              AI
+              <span>AI</span>
             </button>
           )}
           <UserRoleMarks
@@ -539,19 +630,66 @@ function ChatMessageRow({
                 ) : null}
                 {msg.text
                   ? isAiBot
-                    ? renderAiMessageText(msg.text, chatScrollRoot, nicknames)
+                    ? (
+                      <AiMessageContent
+                        msgId={msg.id}
+                        timestamp={msg.timestamp}
+                        messageText={msg.text}
+                        aiThoughts={msg.aiThoughts}
+                        chatScrollRoot={chatScrollRoot}
+                        nicknames={nicknames}
+                        onContentResize={onContentResize}
+                      />
+                    )
                     : renderMessageText(msg.text, 'message', chatScrollRoot, nicknames)
                   : null}
               </div>
             )}
             {aiProcessing && (
-              <div className={`mt-1 inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium shadow-sm backdrop-blur-sm ${aiProcessing.status === 'error' ? 'border-amber-400/25 bg-amber-500/[0.09] text-amber-100' : 'border-sky-300/15 bg-slate-800/85 text-white/85'} ${isMe ? 'self-end' : 'self-start'}`}>
-                {aiProcessing.status !== 'error' && <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-300" aria-hidden="true" />}
-                <span>{aiProcessing.status === 'error'
-                  ? `AI 连续重试失败：${aiProcessing.error || '请稍后再试'}`
-                  : aiProcessing.status === 'queued'
-                    ? `${aiProcessing.attempt > 0 ? `AI 重试中（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : 'AI 排队中'}${aiProcessing.queuePosition > 0 ? `（第 ${aiProcessing.queuePosition} 位）` : ''}${aiProcessing.pendingCount > 0 ? ` · 待处理 ${aiProcessing.pendingCount}` : ''}`
-                    : `AI 正在处理中${aiProcessing.attempt > 0 ? `（第 ${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts} 次）` : ''}${aiProcessing.pendingCount > 1 ? ` · 待处理 ${aiProcessing.pendingCount}` : ''}`}</span>
+              <div
+                className={`mt-1.5 flex max-w-full flex-col gap-1 rounded-xl border px-3 py-2 text-[11px] shadow-md backdrop-blur-md transition-all ${
+                  aiProcessing.status === 'error'
+                    ? 'border-amber-400/30 bg-amber-950/40 text-amber-100'
+                    : 'border-sky-300/25 bg-gradient-to-r from-slate-900/90 via-sky-950/60 to-indigo-950/50 text-sky-100'
+                } ${isMe ? 'self-end' : 'self-start'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1.5 font-medium">
+                    {aiProcessing.status !== 'error' && (
+                      <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-sky-300" aria-hidden="true" />
+                    )}
+                    <span className="truncate">
+                      {aiProcessing.status === 'error'
+                        ? `AI 连续重试失败：${aiProcessing.error || '请稍后再试'}`
+                        : aiProcessing.status === 'queued'
+                          ? `${aiProcessing.attempt > 0 ? `AI 重试中（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : 'AI 排队等待中'}${aiProcessing.queuePosition > 0 ? ` · 第 ${aiProcessing.queuePosition} 位` : ''}`
+                          : aiProcessing.stepText || `AI 正在思考并处理中${aiProcessing.attempt > 0 ? `（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : ''}…`}
+                    </span>
+                  </div>
+                  {Array.isArray(aiProcessing.thoughtSteps) && aiProcessing.thoughtSteps.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setExpandProcessingSteps((v) => !v);
+                        requestAnimationFrame(() => onContentResize?.());
+                      }}
+                      className="flex flex-shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-sky-300/80 hover:bg-white/10 hover:text-sky-200"
+                    >
+                      <span>过程({aiProcessing.thoughtSteps.length})</span>
+                      {expandProcessingSteps ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                    </button>
+                  )}
+                </div>
+                {expandProcessingSteps && Array.isArray(aiProcessing.thoughtSteps) && aiProcessing.thoughtSteps.length > 0 && (
+                  <ul className="mt-1 space-y-1 border-t border-sky-300/15 pt-1.5 text-[10px] text-sky-200/75">
+                    {aiProcessing.thoughtSteps.map((step, idx) => (
+                      <li key={`proc-step-${idx}`} className="flex items-start gap-1.5">
+                        <span className="text-sky-400/70">{idx + 1}.</span>
+                        <span className="min-w-0 break-words">{step}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
             <ChatMessageReactions

@@ -7,6 +7,14 @@ const SIGN_QUERY_KEYS = ['om_ts', 'om_nonce', 'om_sign'] as const;
 
 export function stripApiSignParams(url: string): string {
   if (!url) return url;
+  if (
+    !url.includes('/api/')
+    && !url.includes('om_ts=')
+    && !url.includes('om_nonce=')
+    && !url.includes('om_sign=')
+  ) {
+    return url;
+  }
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
     const parsed = new URL(url, origin);
@@ -44,14 +52,30 @@ export function useSignedApiUrl(url: string | null | undefined): string | null {
   }));
   useEffect(() => {
     if (!canonical || !needsApiSign(canonical)) {
-      setState({ url: canonical, signed: canonical });
+      setState((prev) => (
+        prev.url === canonical && prev.signed === canonical
+          ? prev
+          : { url: canonical, signed: canonical }
+      ));
       return;
     }
     let cancelled = false;
     void signApiUrl(canonical).then((next) => {
-      if (!cancelled) setState({ url: canonical, signed: next });
+      if (!cancelled) {
+        setState((prev) => (
+          prev.url === canonical && prev.signed === next
+            ? prev
+            : { url: canonical, signed: next }
+        ));
+      }
     }).catch(() => {
-      if (!cancelled) setState({ url: canonical, signed: null });
+      if (!cancelled) {
+        setState((prev) => (
+          prev.url === canonical && prev.signed === null
+            ? prev
+            : { url: canonical, signed: null }
+        ));
+      }
     });
     return () => { cancelled = true; };
   }, [canonical]);

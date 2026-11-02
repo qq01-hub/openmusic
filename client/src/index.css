@@ -1471,7 +1471,7 @@ body {
   z-index: 1;
   align-self: center;
   width: calc(100% - clamp(86px, 10vw, 156px));
-  height: 4px;
+  height: 6px;
   margin: 4px auto 1px;
   background: rgba(255, 255, 255, 0.095);
   border-radius: 999px;
@@ -1481,6 +1481,12 @@ body {
   box-shadow:
     inset 0 1px 1px rgba(255, 255, 255, 0.12),
     inset 0 -1px 1px rgba(0, 0, 0, 0.2);
+}
+
+.mineradio-progress-bar::before {
+  content: "";
+  position: absolute;
+  inset: -8px 0;
 }
 
 .mineradio-progress-row .mineradio-progress-bar {
@@ -1493,7 +1499,7 @@ body {
 
 .mineradio-progress-bar:hover,
 .mineradio-progress-bar.is-dragging {
-  height: 5px;
+  height: 8px;
   background: rgba(255, 255, 255, 0.14);
   box-shadow:
     0 0 18px rgba(var(--mr-fc-accent-rgb), 0.1),
@@ -1501,13 +1507,13 @@ body {
 }
 
 .room-immersive-mode .mineradio-progress-bar {
-  height: 4px;
+  height: 6px;
   background: rgba(255, 255, 255, 0.1);
 }
 
 .room-immersive-mode .mineradio-progress-bar:hover,
 .room-immersive-mode .mineradio-progress-bar.is-dragging {
-  height: 5px;
+  height: 8px;
   background: rgba(255, 255, 255, 0.14);
 }
 
@@ -1938,6 +1944,24 @@ html.control-glass-svg-ok .mineradio-glass-chip {
 .mineradio-glass-card:hover {
   background: rgba(255, 255, 255, 0.07);
   border-color: rgba(0, 245, 212, 0.14);
+}
+
+/* 弹框只在外层采样背景，避免滚动内容逐行重复执行模糊和 SVG 位移滤镜 */
+html .room-modal-panel :is(
+  .mineradio-glass-list-row,
+  .mineradio-glass-chip,
+  .mineradio-glass-inset,
+  .mineradio-glass-input,
+  .mineradio-glass-list-footer,
+  .mineradio-glass-card
+) {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.room-modal-scroll {
+  contain: layout paint;
+  overscroll-behavior: contain;
 }
 
 .mineradio-glass-search-box {
@@ -4007,6 +4031,16 @@ body.immersive-mode #hand-canvas {
   isolation: isolate;
   contain: paint;
   transform: translateZ(0);
+}
+
+/* 队列虚拟列表快速滚动时，避免贵宾边框逐行提升独立 GPU 层及贵宾角标逐帧触发 backdrop-filter 重采样 */
+.room-main-panel--queue .member-queue-shell {
+  will-change: auto;
+}
+
+.room-main-panel--queue .member-badge-shine::before {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .room-panel-divider {

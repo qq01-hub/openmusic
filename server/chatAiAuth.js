@@ -69,7 +69,7 @@ export function sanitizeStoredAiBotMessage(roomId, message) {
 
 export function isReservedBotNickname(nickname) {
   const cfg = getRuntimeConfig();
-  const bot = String(cfg.aiBotName || '小音').trim();
+  const bot = String(cfg.aiBotName || '小肥鱼').trim();
   const name = String(nickname || '').trim();
   if (!name) return false;
   const lower = name.toLowerCase();

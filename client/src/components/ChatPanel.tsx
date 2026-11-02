@@ -14,6 +14,7 @@ import ChatImageLightbox from './ChatImageLightbox';
 import ChatMessageList, { type ChatMessageListHandle } from './ChatMessageList';
 import ChatInputBar, { type ChatInputBarHandle, type PendingChatImage } from './ChatInputBar';
 import ChatMutePicker from './ChatMutePicker';
+import RoomAiDesktopPet from './RoomAiDesktopPet';
 import { compactReplyText, compactSongCardsText } from '../lib/chatPanelUtils';
 import { useChatRoomMeta, useChatRoomSlice } from '../lib/chatRoomSlice';
 import { fetchChatUploadEnabled } from '../api/chatImage';
@@ -26,7 +27,30 @@ import { songKey } from '../api/music';
 export default function ChatPanel({ className = '' }: { className?: string }) {
   const chatRoomSlice = useChatRoomSlice();
   const roomMeta = useChatRoomMeta();
-  const roomAi = useRoomStore((s) => s.room?.roomAi);
+  const rawRoomAi = useRoomStore((s) => s.room?.roomAi);
+  const roomAiEnabledFlag = useRoomStore((s) => s.room?.roomAiEnabled);
+  const roomAiDeskPetEnabledFlag = useRoomStore((s) => s.room?.roomAiDeskPetEnabled);
+  const roomAi = useMemo(() => {
+    if (!rawRoomAi) return undefined;
+    const deskPetEnabled = (roomAiDeskPetEnabledFlag ?? rawRoomAi.roomAiDeskPetEnabled ?? rawRoomAi.deskPetEnabled) === true
+      && rawRoomAi.roomAiDeskPetEnabled !== false && rawRoomAi.deskPetEnabled !== false;
+    if (roomAiEnabledFlag === false || rawRoomAi.roomAiEnabled === false || !rawRoomAi.enabled) {
+      return {
+        ...rawRoomAi,
+        enabled: false,
+        roomAiEnabled: false,
+        deskPetEnabled,
+        roomAiDeskPetEnabled: deskPetEnabled,
+        wakePrefixes: [],
+        commands: [],
+      };
+    }
+    return {
+      ...rawRoomAi,
+      deskPetEnabled,
+      roomAiDeskPetEnabled: deskPetEnabled,
+    };
+  }, [rawRoomAi, roomAiEnabledFlag, roomAiDeskPetEnabledFlag]);
   const nickname = useRoomStore((s) => s.nickname);
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const isOwner = useRoomStore((s) => s.isOwner);
@@ -340,6 +364,13 @@ export default function ChatPanel({ className = '' }: { className?: string }) {
       </div>
 
       <div ref={chatOverlayHostRef} className="pointer-events-none absolute inset-0 z-30" />
+
+      <RoomAiDesktopPet
+        botName={roomAi?.botName || '小肥鱼'}
+        deskPetEnabled={roomAi ? roomAi.deskPetEnabled === true : roomAiDeskPetEnabledFlag === true}
+        aiEnabled={Boolean(roomAi?.enabled)}
+        onQuickWake={(botName) => inputBarRef.current?.applyReplyMention(botName)}
+      />
 
       <ChatReactionPicker
         open={reactionPickerMessageId !== null}

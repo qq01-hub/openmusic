@@ -1,0 +1,11 @@
+{
+  "name": "openmusic-updater",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20 <25"
+  },
+  "dependencies": {
+    "yauzl": "^3.4.0"
+  }
+}

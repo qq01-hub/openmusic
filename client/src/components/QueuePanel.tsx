@@ -2,9 +2,11 @@ import { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback, mem
 import { Music } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
+import { useFavorites } from '../hooks/useFavorites';
+import { songKey } from '../api/music';
 import { FixedSizeList, type ListChildComponentProps } from 'react-window';
 import QueueRow, { QUEUE_ITEM_SIZE, QUEUE_ROW_GAP, QUEUE_ROW_HEIGHT } from './queue/QueueRow';
-import type { RoomMemberTier, QueueItem, MusicSource } from '../types';
+import type { RoomMemberTier, QueueItem, MusicSource, FavoriteSong, Song } from '../types';
 import { resolveDislikeSkipThreshold } from '../lib/dislikeSkip';
 import { useSourceErrorRevision } from '../hooks/useSongSourceError';
 import { isTrackSourceError, isTrackCrossSource, getTrackCrossSourceFrom } from '../lib/songPreloadCache';
@@ -13,6 +15,7 @@ import { useChatSystemToastStore } from '../stores/chatSystemToastStore';
 const VISIBLE_ROWS = 3;
 const LIST_HEIGHT = VISIBLE_ROWS * QUEUE_ROW_HEIGHT + (VISIBLE_ROWS - 1) * QUEUE_ROW_GAP;
 const VIRTUAL_THRESHOLD = 5;
+const VIRTUAL_OVERSCAN_COUNT = 8;
 
 type QueueRowSong = QueueItem & { isCurrent: boolean };
 
@@ -30,6 +33,9 @@ type RowData = {
   likeRaisesOrder: boolean;
   dragOverQueueId: string | null;
   sourceStatusMap: Map<string, SourceStatus>;
+  favoriteIds: Set<string>;
+  favoriteSongMap: Map<string, FavoriteSong>;
+  favoriteCategories: string[];
   currentRef: React.RefObject<HTMLDivElement | null>;
   onLike: (queueId: string) => void;
   onDislike: () => void;
@@ -42,6 +48,8 @@ type RowData = {
   onDragOver: (queueId: string) => void;
   onDrop: (queueId: string) => void;
   onDragEnd: () => void;
+  onToggleFavorite: (song: Song) => Promise<{ success: boolean; error?: string }>;
+  onSelectFavoriteCategory: (song: QueueRowSong, category: string) => Promise<void>;
 };
 
 const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: ListChildComponentProps<RowData>) {
@@ -49,6 +57,7 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
   if (!song) return null;
   const memberTier = song.requestedById ? data.memberTiers?.[song.requestedById] : undefined;
   const ss = data.sourceStatusMap.get(song.queueId);
+  const sKey = songKey(song);
   return (
     <div style={style}>
       <div style={{ height: QUEUE_ITEM_SIZE, paddingBottom: QUEUE_ROW_GAP }}>
@@ -83,6 +92,11 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
           hasSourceError={ss?.error}
           hasCrossSource={ss?.cross}
           crossSourceFrom={ss?.crossFrom}
+          isFavorited={data.favoriteIds.has(sKey)}
+          favoriteCategory={data.favoriteSongMap.get(sKey)?.category || ''}
+          favoriteCategories={data.favoriteCategories}
+          onToggleFavorite={data.onToggleFavorite}
+          onSelectFavoriteCategory={data.onSelectFavoriteCategory}
         />
       </div>
     </div>
@@ -109,6 +123,14 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   const queueLikeSortEnabled = useRoomStore((s) => s.room?.queueLikeSortEnabled !== false);
   const likeRaisesOrder = queueLikeSortEnabled && !hasManualOrder;
   const { removeSong, requestJump, reorderQueue, toggleQueueLike, toggleCurrentDislike, banRoomSong } = useSocket();
+  const {
+    favoriteIds,
+    favorites,
+    categories: favoriteCategories,
+    toggleFavorite,
+    setFavorite,
+    setFavoriteCategory,
+  } = useFavorites();
   const [dragFromId, setDragFromId] = useState<string | null>(null);
   const [dragOverQueueId, setDragOverQueueId] = useState<string | null>(null);
   const currentRef = useRef<HTMLDivElement>(null);
@@ -119,6 +141,40 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
 
   // Single subscription for source error/cross-source changes at the panel level
   const sourceErrorRevision = useSourceErrorRevision();
+
+  const favoriteSongMap = useMemo(() => {
+    const map = new Map<string, FavoriteSong>();
+    for (const item of favorites) {
+      map.set(songKey(item), item);
+    }
+    return map;
+  }, [favorites]);
+
+  const favoriteSongMapRef = useRef(favoriteSongMap);
+  favoriteSongMapRef.current = favoriteSongMap;
+
+  const handleSelectFavoriteCategory = useCallback(async (song: QueueRowSong, category: string) => {
+    try {
+      const sKey = songKey(song);
+      let target: FavoriteSong | undefined = favoriteSongMapRef.current.get(sKey);
+      if (!target) {
+        const added = await setFavorite(song, true);
+        if (!added.success) throw new Error(added.error || '收藏失败');
+        target = (added.favorites || []).find((item) => songKey(item) === sKey)
+          || { ...song, category };
+      }
+      const result = await setFavoriteCategory(target, category);
+      if (!result.success) throw new Error(result.error || '分类更新失败');
+      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
+        detail: { message: category ? `已加入收藏 · ${category}` : '已加入收藏 · 未分类', type: 'success' },
+      }));
+    } catch (error) {
+      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
+        detail: { message: error instanceof Error ? error.message : '收藏分类保存失败', type: 'error' },
+      }));
+      throw error;
+    }
+  }, [setFavorite, setFavoriteCategory]);
 
   const queuedSongs = useMemo<QueueRowSong[]>(
     () => (queue || []).map((song) => ({ ...song, isCurrent: false })),
@@ -295,6 +351,9 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     likeRaisesOrder,
     dragOverQueueId,
     sourceStatusMap,
+    favoriteIds,
+    favoriteSongMap,
+    favoriteCategories,
     currentRef,
     onLike: handleLike,
     onDislike: handleDislike,
@@ -307,6 +366,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     onDragOver: handleDragOver,
     onDrop: handleDrop,
     onDragEnd: handleDragEnd,
+    onToggleFavorite: toggleFavorite,
+    onSelectFavoriteCategory: handleSelectFavoriteCategory,
   }), [
     allSongs,
     memberTiers,
@@ -318,6 +379,9 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     likeRaisesOrder,
     dragOverQueueId,
     sourceStatusMap,
+    favoriteIds,
+    favoriteSongMap,
+    favoriteCategories,
     handleLike,
     handleDislike,
     handleJumpRequest,
@@ -329,6 +393,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     handleDragOver,
     handleDrop,
     handleDragEnd,
+    toggleFavorite,
+    handleSelectFavoriteCategory,
   ]);
 
   if (!hasRoom) return null;
@@ -349,6 +415,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
 
   const renderPlainRows = () => allSongs.map((song, i) => {
     const ss = sourceStatusMap.get(song.queueId);
+    const sKey = songKey(song);
     return (
       <QueueRow
         key={song.queueId || `current-${song.id}`}
@@ -378,6 +445,11 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
         hasSourceError={ss?.error}
         hasCrossSource={ss?.cross}
         crossSourceFrom={ss?.crossFrom}
+        isFavorited={favoriteIds.has(sKey)}
+        favoriteCategory={favoriteSongMap.get(sKey)?.category || ''}
+        favoriteCategories={favoriteCategories}
+        onToggleFavorite={toggleFavorite}
+        onSelectFavoriteCategory={handleSelectFavoriteCategory}
       />
     );
   });
@@ -399,7 +471,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
             itemSize={QUEUE_ITEM_SIZE}
             itemData={rowData}
             itemKey={(index, data) => data.songs[index]?.queueId ?? index}
-            overscanCount={3}
+            overscanCount={VIRTUAL_OVERSCAN_COUNT}
           >
             {VirtualQueueRow}
           </FixedSizeList>

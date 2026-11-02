@@ -52,7 +52,7 @@ export default function Modal({
         )
       )}
       <div
-        className={panelClassName}
+        className={`room-modal-panel ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
       >

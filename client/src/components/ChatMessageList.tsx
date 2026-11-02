@@ -82,7 +82,7 @@ type VirtualRowData = {
   chatScrollRoot: HTMLDivElement | null;
   chatPanelRef: React.RefObject<HTMLDivElement | null>;
   reactionPickerMessageId: string | null;
-  processingMessages: Map<string, { status: 'queued' | 'processing' | 'error'; queuePosition: number; pendingCount: number; attempt: number; maxAttempts: number; error?: string }>;
+  processingMessages: Map<string, { status: 'queued' | 'processing' | 'error'; queuePosition: number; pendingCount: number; attempt: number; maxAttempts: number; error?: string; stepText?: string; thoughtSteps?: string[] }>;
   revealedPureImages: Set<string>;
   onReply: (msg: ChatMessage) => void;
   onRecall?: (msg: ChatMessage) => void;
@@ -201,6 +201,8 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
       attempt: task.attempt,
       maxAttempts: task.maxAttempts,
       error: task.error,
+      stepText: task.stepText,
+      thoughtSteps: task.thoughtSteps,
     }])),
     [aiProcessing],
   );

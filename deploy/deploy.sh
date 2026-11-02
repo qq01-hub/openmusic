@@ -179,17 +179,14 @@ update_source() {
 
   info "安装依赖（根 / server / client）..."
   npm run install:all
+  npm ci --prefix deploy/updater --omit=dev
 
   info "构建前端..."
   npm run build
 
   ensure_pm2
   info "重启 PM2 服务..."
-  if pm2 describe openmusic >/dev/null 2>&1; then
-    pm2 restart openmusic
-  else
-    pm2 start deploy/ecosystem.config.cjs
-  fi
+  pm2 startOrReload deploy/ecosystem.config.cjs --update-env
   pm2 save
 
   ok "更新完成（源码部署）"
@@ -440,6 +437,7 @@ deploy_source() {
 
   info "安装依赖（根 / server / client）..."
   npm run install:all
+  npm ci --prefix deploy/updater --omit=dev
 
   info "构建前端..."
   npm run build

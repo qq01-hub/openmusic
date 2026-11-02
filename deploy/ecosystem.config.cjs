@@ -15,7 +15,19 @@ module.exports = {
       listen_timeout: 10000,
       env: {
         NODE_ENV: 'production',
+        OPENMUSIC_UPDATE_SOCKET: path.join(__dirname, '../.openmusic-update/control.sock'),
       },
+    },
+    {
+      name: 'openmusic-updater',
+      cwd: path.join(__dirname, '..'),
+      script: path.join(__dirname, 'updater/index.mjs'),
+      args: 'source',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      kill_timeout: 900000,
+      env: { NODE_ENV: 'production' },
     },
   ],
 };

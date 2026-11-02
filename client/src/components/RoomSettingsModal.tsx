@@ -8,6 +8,8 @@ import type { DislikeSkipMode } from '../lib/dislikeSkip';
 import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
+import { useDeskPetStore } from '../stores/deskPetStore';
+import DeskPetCharacterPicker from './DeskPetCharacterPicker';
 import { searchPlaylists, type PlaylistChannelFilter, type PlaylistSearchItem } from '../api/music/playlist';
 import {
   fetchLinuxdoStatus,
@@ -77,6 +79,7 @@ interface Props {
   qishuiProxyPercent?: number;
   qishuiProxySaving?: boolean;
   initialTab?: SettingsTab;
+  initialSection?: 'desk-pet';
   playlistRoaming?: { enabled: boolean; dedupeByName: boolean; playlists: Array<{ id: string; source: FmSource; name: string; url?: string; songs: { id: string; name: string; artist: string; source: string }[] }> } | null;
   fmSaving?: boolean;
   announcementEnabled: boolean;
@@ -92,7 +95,9 @@ interface Props {
   joinNoticeCooldownMinutes: number;
   joinNoticeSaving?: boolean;
   roomAiEnabled: boolean;
+  roomAiDeskPetEnabled: boolean;
   roomAiBotName: string;
+  roomAiPersona: string;
   globalAiEnabled: boolean;
   defaultAiBotName: string;
   roomAiSaving?: boolean;
@@ -147,7 +152,7 @@ interface Props {
   onSaveChatShowAvatars: (enabled: boolean) => void;
   onSaveHideIpLocation: (hidden: boolean) => void;
   onSaveJoinNotice: (settings: { enabled: boolean; cooldownMinutes: number }) => void;
-  onSaveRoomAi: (settings: { enabled: boolean; botName: string }) => void;
+  onSaveRoomAi: (settings: { enabled?: boolean; deskPetEnabled?: boolean; botName?: string; persona?: string }) => void;
   onSaveSongRequest: (settings: SongRequestSettings) => void;
   onTransferOwner?: (userId: string) => void | Promise<void>;
   onDestroyRoom?: () => void | Promise<void>;
@@ -323,6 +328,7 @@ export default function RoomSettingsModal({
   qishuiProxyPercent = -30,
   qishuiProxySaving = false,
   initialTab,
+  initialSection,
   playlistRoaming = null,
   fmSaving = false,
   announcementEnabled,
@@ -338,7 +344,9 @@ export default function RoomSettingsModal({
   joinNoticeCooldownMinutes,
   joinNoticeSaving = false,
   roomAiEnabled,
+  roomAiDeskPetEnabled,
   roomAiBotName,
+  roomAiPersona,
   globalAiEnabled,
   defaultAiBotName,
   roomAiSaving = false,
@@ -406,8 +414,8 @@ export default function RoomSettingsModal({
   const [draftAnnouncementText, setDraftAnnouncementText] = useState(announcementText);
   const [draftJoinNoticeEnabled, setDraftJoinNoticeEnabled] = useState(joinNoticeEnabled);
   const [draftJoinNoticeCooldownMinutes, setDraftJoinNoticeCooldownMinutes] = useState(joinNoticeCooldownMinutes);
-  const [draftRoomAiEnabled, setDraftRoomAiEnabled] = useState(roomAiEnabled);
   const [draftRoomAiBotName, setDraftRoomAiBotName] = useState(roomAiBotName);
+  const [draftRoomAiPersona, setDraftRoomAiPersona] = useState(roomAiPersona);
   const [draftForbiddenWord, setDraftForbiddenWord] = useState('');
   const [showDefaultForbiddenWords, setShowDefaultForbiddenWords] = useState(false);
   const [transferTargetId, setTransferTargetId] = useState<string | null>(null);
@@ -459,6 +467,18 @@ export default function RoomSettingsModal({
     [forbiddenWords],
   );
 
+  const deskPetEnabled = useDeskPetStore((s) => s.enabled);
+  const deskPetIdleEnabled = useDeskPetStore((s) => s.idleEnabled);
+  const deskPetRoamEnabled = useDeskPetStore((s) => s.roamEnabled);
+  const deskPetPlayEnabled = useDeskPetStore((s) => s.playEnabled);
+  const deskPetWorkEnabled = useDeskPetStore((s) => s.workEnabled);
+  const deskPetDialogEnabled = useDeskPetStore((s) => s.dialogEnabled);
+  const deskPetPhysicsEnabled = useDeskPetStore((s) => s.physicsEnabled);
+  const deskPetUiInteractEnabled = useDeskPetStore((s) => s.uiInteractEnabled);
+  const deskPetSizeScale = useDeskPetStore((s) => s.sizeScale);
+  const updateDeskPetPref = useDeskPetStore((s) => s.updatePref);
+  const resetDeskPetPrefs = useDeskPetStore((s) => s.resetPrefs);
+
   const hasMusicAccountPlatform = (enabledMusicAccountPlatforms?.length ?? 4) > 0;
 
   const tabs = useMemo(() => {
@@ -475,6 +495,8 @@ export default function RoomSettingsModal({
       items.push({ id: 'announcement', label: '公告' });
       items.push({ id: 'chat', label: '聊天' });
       items.push({ id: 'songRequest', label: '点歌' });
+    } else {
+      items.push({ id: 'chat', label: 'AI / 桌宠' });
     }
     // 非房主仅用于找回身份
     if (!isOwner && anonymousLoginEnabled && (wechatUinEnabled || linuxdoEnabled || githubEnabled)) {
@@ -493,8 +515,8 @@ export default function RoomSettingsModal({
     setDraftAnnouncementText(announcementText);
     setDraftJoinNoticeEnabled(joinNoticeEnabled);
     setDraftJoinNoticeCooldownMinutes(joinNoticeCooldownMinutes);
-    setDraftRoomAiEnabled(roomAiEnabled);
     setDraftRoomAiBotName(roomAiBotName);
+    setDraftRoomAiPersona(roomAiPersona);
     setDraftForbiddenWord('');
     setShowDefaultForbiddenWords(false);
     appliedAnnouncementRef.current = { enabled: announcementEnabled, text: announcementText };
@@ -509,11 +531,13 @@ export default function RoomSettingsModal({
     }
     if (canModerate) {
       initialTabs.push('member', 'announcement', 'chat', 'songRequest');
+    } else {
+      initialTabs.push('chat');
     }
     if (!isOwner && anonymousLoginEnabled && (identityWechatUinEnabled || identityLinuxdoEnabled || identityGithubEnabled)) {
       initialTabs.push('identity');
     }
-    setActiveTab(initialTabs[0] ?? 'announcement');
+    setActiveTab(initialTab && initialTabs.includes(initialTab) ? initialTab : (initialTabs[0] ?? 'chat'));
   }, [
     open,
     announcementEnabled,
@@ -521,7 +545,9 @@ export default function RoomSettingsModal({
     joinNoticeEnabled,
     joinNoticeCooldownMinutes,
     roomAiEnabled,
+    roomAiDeskPetEnabled,
     roomAiBotName,
+    roomAiPersona,
     isOwner,
     canModerate,
     identityWechatUinEnabled,
@@ -630,9 +656,26 @@ export default function RoomSettingsModal({
     return () => document.removeEventListener('pointerdown', onPointerDown);
   }, [playlistPlatformOpen]);
 
+  const petSettingsRef = useRef<HTMLDivElement>(null);
+  const initialScrollDoneRef = useRef(false);
+
+  useEffect(() => {
+    initialScrollDoneRef.current = false;
+  }, [open, initialSection]);
+
   useEffect(() => {
     if (open && initialTab) setActiveTab(initialTab);
   }, [open, initialTab]);
+
+  useEffect(() => {
+    if (!open || initialSection !== 'desk-pet' || activeTab !== 'chat' || initialScrollDoneRef.current) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (!petSettingsRef.current) return;
+      petSettingsRef.current.scrollIntoView({ block: 'start', behavior: 'auto' });
+      initialScrollDoneRef.current = true;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, initialSection, activeTab]);
 
   if (!open) return null;
 
@@ -641,8 +684,8 @@ export default function RoomSettingsModal({
     || draftAnnouncementText.trim() !== announcementText.trim();
   const joinNoticeDirty = draftJoinNoticeEnabled !== joinNoticeEnabled
     || draftJoinNoticeCooldownMinutes !== joinNoticeCooldownMinutes;
-  const roomAiDirty = draftRoomAiEnabled !== roomAiEnabled
-    || draftRoomAiBotName.trim() !== roomAiBotName.trim();
+  const roomAiDirty = draftRoomAiBotName.trim() !== roomAiBotName.trim()
+    || draftRoomAiPersona.trim() !== roomAiPersona.trim();
   const saveSongRequest = <Key extends keyof SongRequestSettings>(key: Key, value: SongRequestSettings[Key]) => {
     if (songRequestSaving || songRequest[key] === value) return;
     onSaveSongRequest({ ...songRequest, [key]: value });
@@ -664,7 +707,7 @@ export default function RoomSettingsModal({
         aria-label="关闭"
       />
       <div
-        className="relative flex h-[min(88vh,640px)] w-full max-w-lg animate-fade-in flex-col rounded-2xl border border-white/10 bg-netease-dark shadow-2xl backdrop-blur-xl"
+        className="room-modal-panel relative flex h-[min(88vh,640px)] w-full max-w-lg animate-fade-in flex-col rounded-2xl border border-white/10 bg-netease-dark shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-shrink-0 items-center justify-between border-b border-white/10 px-5 py-4">
@@ -704,7 +747,7 @@ export default function RoomSettingsModal({
           <p className="border-b border-white/8 px-5 py-2 text-xs text-netease-muted">绑定房间归属账号：{ownerAccountId}</p>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+        <div className="room-modal-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4">
           {activeTab === 'fm' && isOwner && (() => {
             const fmTabs = [
               { value: 'netease' as const, label: '网易云' },
@@ -1483,16 +1526,18 @@ export default function RoomSettingsModal({
             </section>
           )}
 
-          {activeTab === 'chat' && canModerate && (
+          {activeTab === 'chat' && (
             <section>
               <div className="space-y-3">
-                <Toggle
-                  checked={chatHistoryVisibleOnJoin}
-                  disabled={chatHistorySaving}
-                  onChange={onSaveChatHistory}
-                  label="进房可查看历史消息"
-                  description="开启后，成员进入房间可浏览此前聊天记录；关闭则仅能看到进房之后的消息"
-                />
+                {canModerate && (
+                  <Toggle
+                    checked={chatHistoryVisibleOnJoin}
+                    disabled={chatHistorySaving}
+                    onChange={onSaveChatHistory}
+                    label="进房可查看历史消息"
+                    description="开启后，成员进入房间可浏览此前聊天记录；关闭则仅能看到进房之后的消息"
+                  />
+                )}
                 {isOwner && (
                   <Toggle
                     checked={chatShowAvatars}
@@ -1549,52 +1594,223 @@ export default function RoomSettingsModal({
                 {isOwner && (
                   <div className="space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-3">
                     <Toggle
-                      checked={draftRoomAiEnabled}
+                      checked={roomAiEnabled}
                       disabled={roomAiSaving || !globalAiEnabled}
-                      onChange={setDraftRoomAiEnabled}
+                      onChange={(enabled) => onSaveRoomAi({ enabled })}
                       label="聊天室 AI 助手"
                       description={
                         globalAiEnabled
-                          ? '关闭后本房无法 @ 助手'
+                          ? '切换即生效，关闭后本房无法 @ 助手或通过 / 命令唤醒，桌宠仍可独立使用，但不再联动 AI 思考与回复'
                           : '站点尚未开启 AI，请联系管理员在后台启用'
                       }
                     />
-                    <div className={draftRoomAiEnabled && globalAiEnabled ? '' : 'opacity-50'}>
-                      <label htmlFor="settings-room-ai-name" className="text-sm font-medium text-white">
-                        助手昵称
-                      </label>
-                      <p className="mt-0.5 text-xs text-netease-muted">
-                        留空则使用站点默认「{defaultAiBotName || '小音'}」；设置后本房优先用此昵称唤醒（@昵称 / /昵称）
-                      </p>
-                      <input
-                        id="settings-room-ai-name"
-                        type="text"
-                        maxLength={20}
-                        value={draftRoomAiBotName}
-                        disabled={roomAiSaving || !globalAiEnabled || !draftRoomAiEnabled}
-                        onChange={(e) => setDraftRoomAiBotName(e.target.value)}
-                        placeholder={defaultAiBotName || '小音'}
-                        className="mt-2 w-full rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
-                      />
+                    <Toggle
+                      checked={roomAiDeskPetEnabled}
+                      disabled={roomAiSaving}
+                      onChange={(deskPetEnabled) => onSaveRoomAi({ deskPetEnabled })}
+                      label="聊天室网页桌宠"
+                      description="切换即生效，独立控制互动桌宠的显示，关闭 AI 后仍可拖拽、投喂和点播才艺，AI 唤醒、思考与回复联动随 AI 关闭"
+                    />
+                    {roomAiSaving && <p role="status" className="text-xs text-netease-muted">正在保存设置…</p>}
+                    <div className={roomAiEnabled && globalAiEnabled ? 'space-y-3' : 'space-y-3 opacity-50'}>
+                      <div>
+                        <label htmlFor="settings-room-ai-name" className="text-sm font-medium text-white">
+                          助手昵称
+                        </label>
+                        <p className="mt-0.5 text-xs text-netease-muted">
+                          留空则使用站点默认「{defaultAiBotName || '小肥鱼'}」；设置后本房优先用此昵称唤醒（@昵称 / /昵称）
+                        </p>
+                        <input
+                          id="settings-room-ai-name"
+                          type="text"
+                          maxLength={20}
+                          value={draftRoomAiBotName}
+                          disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
+                          onChange={(e) => setDraftRoomAiBotName(e.target.value)}
+                          placeholder={defaultAiBotName || '小肥鱼'}
+                          className="mt-2 w-full rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label htmlFor="settings-room-ai-persona" className="text-sm font-medium text-white">
+                            助手性格与设定
+                          </label>
+                          <span className="text-[11px] text-netease-muted">{draftRoomAiPersona.length}/300</span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-netease-muted">
+                          保留「大肥鱼」可爱基底，并将房主设定的性格融合到系统提示词中；留空使用默认呆萌大肥鱼性格
+                        </p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {[
+                            { label: '呆萌大肥鱼', value: '圆滚滚、呆萌治愈又有点小傲娇的大肥鱼，爱吐泡泡摇尾巴，说话软萌俏皮，常用「啵～」「本鱼来啦」，超级宠溺房间里的听友' },
+                            { label: '傲娇猫娘', value: '软萌傲娇的小猫娘属性，句尾喜欢带「喵～」，嘴上说哼真拿你没办法，身体却很诚实地马上帮大家搜歌点歌，被夸会害羞炸毛' },
+                            { label: '粘人小奶狗', value: '超级热情粘人的元气小汪属性，看见任何人说话都开心得疯狂摇尾巴，句尾常带「汪～」「好耶」，无条件捧场夸夸每个人' },
+                            { label: '毒舌雌小鬼', value: '古灵精怪、爱俏皮调侃的机灵鬼属性，喜欢用「杂鱼～不会连这首歌都没听过吧」小嘴欠逗大家开心，但点歌干活超麻利' },
+                            { label: '腹黑小恶魔', value: '带点调皮坏笑的小恶魔系萌物，喜欢捉弄熟人、接梗造梗，表面古灵精怪，遇到有人难过却会偷偷切温柔的歌安慰' },
+                            { label: '软糯兔兔酱', value: '胆小害羞又软乎乎的垂耳兔萌妹属性，说话轻声细语带点软糯叠词，最喜欢安静陪大家听温柔治愈的歌，受惊会竖起长耳朵' },
+                            { label: '迷糊贪吃仓鼠', value: '腮帮子总是塞满瓜子的呆萌小仓鼠属性，说话憨态可掬、偶尔迷迷糊糊，听到好听的歌会开心得原地转圈圈' },
+                            { label: '元气虚拟歌姬', value: '闪亮登场的二次元虚拟偶像属性，活力四射、甜度满分，把每次点歌都当成演唱会现场一样热情应援打 call' },
+                            { label: '困困咸鱼团子', value: '懒洋洋、软绵绵的佛系打瞌睡小团子，语气奶声奶气像刚睡醒，最适合陪大家摸鱼放空、听舒缓抓耳的好歌' },
+                            { label: '机甲赛博肥鱼', value: '搭载未来音乐芯片的酷萌机械大肥鱼，偶尔冒出「哔哔—声波锁定」的可爱机械拟声词，反差萌拉满' },
+                          ].map((preset) => (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
+                              onClick={() => setDraftRoomAiPersona(preset.value)}
+                              className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                        <textarea
+                          id="settings-room-ai-persona"
+                          rows={3}
+                          maxLength={300}
+                          value={draftRoomAiPersona}
+                          disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
+                          onChange={(e) => setDraftRoomAiPersona(e.target.value.slice(0, 300))}
+                          placeholder="例如：软萌傲娇的猫娘风大肥鱼，句尾喜欢带喵～，嘴硬心软，被夸奖会害羞吐泡泡"
+                          className="mt-2 w-full resize-none rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
+                        />
+                      </div>
                     </div>
                     {roomAiDirty && (
                       <div className="flex justify-end">
                         <button
                           type="button"
-                          disabled={roomAiSaving || !globalAiEnabled}
+                          disabled={roomAiSaving}
                           onClick={() => onSaveRoomAi({
-                            enabled: draftRoomAiEnabled,
                             botName: draftRoomAiBotName.trim(),
+                            persona: draftRoomAiPersona.trim(),
                           })}
                           className="rounded-xl bg-netease-red px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-netease-red/90 disabled:opacity-50"
                         >
-                          {roomAiSaving ? '保存中…' : '保存 AI 设置'}
+                          {roomAiSaving ? '保存中…' : '保存昵称与性格'}
                         </button>
                       </div>
                     )}
                   </div>
                 )}
 
+                <div ref={petSettingsRef} data-desk-pet-settings="true" className="scroll-mt-4 space-y-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-medium text-white">我的大肥鱼桌宠设置（仅对自己生效）</h3>
+                      <p className="mt-0.5 text-xs text-netease-muted">
+                        自定义你屏幕上的桌面端桌宠行为，不会影响房间内其他成员；手机端窄屏将自动隐藏桌宠
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={resetDeskPetPrefs}
+                      className="flex-shrink-0 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-white/75 transition-colors hover:bg-white/10 hover:text-white"
+                    >
+                      恢复默认
+                    </button>
+                  </div>
+
+                  {!roomAiDeskPetEnabled && (
+                    <p className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                      房主当前已关闭房间桌宠总开关，需房主开启后桌宠才会显示
+                    </p>
+                  )}
+
+                  <Toggle
+                    checked={deskPetEnabled}
+                    onChange={(next) => updateDeskPetPref('enabled', next)}
+                    label="显示我的桌宠"
+                    description="默认关闭，开启后仅在自己桌面端显示互动桌宠；关闭后收起为底栏右下角的迷你召唤胶囊，不遮挡聊天发送"
+                  />
+
+                  <DeskPetCharacterPicker />
+
+                  <div className={deskPetEnabled ? 'space-y-2' : 'space-y-2 opacity-50'}>
+                    <Toggle
+                      checked={deskPetIdleEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('idleEnabled', next)}
+                      label="待机与音乐律动"
+                      description="使用所选原版形象的待机姿势与音乐动作，支持靠近倾身，GPT 娘支持视线跟随"
+                    />
+                    <Toggle
+                      checked={deskPetRoamEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('roamEnabled', next)}
+                      label="走动漫游模式"
+                      description="允许大肥鱼在房间页面内自由游走巡视；关闭则乖乖待在原地"
+                    />
+                    <Toggle
+                      checked={deskPetPlayEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('playEnabled', next)}
+                      label="玩耍与才艺小节目"
+                      description="按所选形象的原版素材切换挥手、玩魔方、泡泡或日常表情，陪你一起听歌"
+                    />
+                    <Toggle
+                      checked={deskPetWorkEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('workEnabled', next)}
+                      label="工作陪伴与听歌番茄钟"
+                      description="联动 AI 思考搜歌工作状态，记录本场听歌账本并支持 25 分钟专注听歌番茄钟"
+                    />
+                    <Toggle
+                      checked={deskPetDialogEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('dialogEnabled', next)}
+                      label="音乐对话与碎碎念"
+                      description="切歌自动报幕、结合在播歌曲与点歌人弹出音乐气泡、同步展示 AI 回复摘要"
+                    />
+                    <Toggle
+                      checked={deskPetPhysicsEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('physicsEnabled', next)}
+                      label="物理引擎与蓄力弹射"
+                      description="支持鼠标拖拽甩出抛物线、Shift+拖拽弹弓蓄力发射、四壁反弹与落地 Q 弹挤压"
+                    />
+                    <Toggle
+                      checked={deskPetUiInteractEnabled}
+                      disabled={!deskPetEnabled}
+                      onChange={(next) => updateDeskPetPref('uiInteractEnabled', next)}
+                      label="房间组件调皮互动"
+                      description="在进度条、播放队列、专辑封面和聊天框旁互动，支持躲面板探头与偷戳按钮被弹开"
+                    />
+
+                    <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
+                      <div>
+                        <p className="text-sm font-medium text-white">桌宠体型大小</p>
+                        <p className="mt-0.5 text-xs text-netease-muted">调整你屏幕上大肥鱼的显示尺寸</p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {(
+                          [
+                            { label: '小巧 80%', value: 0.8 },
+                            { label: '标准 100%', value: 1 },
+                            { label: '放大 120%', value: 1.2 },
+                          ] as const
+                        ).map((opt) => (
+                          <button
+                            key={opt.label}
+                            type="button"
+                            disabled={!deskPetEnabled}
+                            onClick={() => updateDeskPetPref('sizeScale', opt.value)}
+                            className={`rounded-lg px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-40 ${
+                              Math.abs(deskPetSizeScale - opt.value) < 0.05
+                                ? 'bg-netease-red text-white'
+                                : 'border border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white'
+                            }`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {canModerate && (
                 <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-sm font-medium text-white">违禁词</label>
@@ -1689,6 +1905,7 @@ export default function RoomSettingsModal({
                     <p className="mt-2 text-xs text-netease-muted/80">暂无自定义违禁词</p>
                   )}
                 </div>
+                )}
               </div>
             </section>
           )}

@@ -2,10 +2,7 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Trash2, Zap, ThumbsUp, ThumbsDown, AlertTriangle, Ban, GripVertical, Shuffle, Share2 } from 'lucide-react';
 import { getClientId } from '../../lib/clientId';
 import { formatCrossSourceTip } from '../../lib/sourceLabels';
-import type { RoomMemberTier, QueueItem, MusicSource } from '../../types';
-import type { FavoriteSong } from '../../types';
-import { songKey } from '../../api/music';
-import { useFavorites } from '../../hooks/useFavorites';
+import type { RoomMemberTier, QueueItem, MusicSource, Song } from '../../types';
 import SongCover from '../SongCover';
 import FavoriteButton from '../FavoriteButton';
 import FavoriteCategorySelect from '../FavoriteCategorySelect';
@@ -51,6 +48,26 @@ interface Props {
   hasSourceError?: boolean;
   hasCrossSource?: boolean;
   crossSourceFrom?: MusicSource;
+  /** Pre-computed favorite state passed from QueuePanel to avoid per-row useFavorites/useSocket hooks */
+  isFavorited?: boolean;
+  favoriteCategory?: string;
+  favoriteCategories?: string[];
+  onToggleFavorite?: (song: Song) => Promise<{ success: boolean; error?: string }>;
+  onSelectFavoriteCategory?: (song: QueueRowSong, category: string) => Promise<void>;
+}
+
+const EMPTY_CATEGORIES: string[] = [];
+
+function sameStringArray(a?: string[], b?: string[]): boolean {
+  if (a === b) return true;
+  const lenA = a?.length ?? 0;
+  const lenB = b?.length ?? 0;
+  if (lenA !== lenB) return false;
+  if (lenA === 0) return true;
+  for (let i = 0; i < lenA; i += 1) {
+    if (a![i] !== b![i]) return false;
+  }
+  return true;
 }
 
 function QueueRow({
@@ -80,6 +97,11 @@ function QueueRow({
   hasSourceError = false,
   hasCrossSource = false,
   crossSourceFrom,
+  isFavorited = false,
+  favoriteCategory = '',
+  favoriteCategories = EMPTY_CATEGORIES,
+  onToggleFavorite,
+  onSelectFavoriteCategory,
 }: Props) {
   const myUserId = mySocketId || getClientId();
   const isMine = !song.isCurrent && Boolean(myUserId && (
@@ -99,11 +121,9 @@ function QueueRow({
   const isAdminPriority = Boolean(song.ownerPriority && song.priorityBy);
   const isOwnerPriority = Boolean(song.ownerPriority && !song.priorityBy);
   const allowDrag = canReorder && !song.isCurrent;
-  const { favorites, categories, setFavorite, setFavoriteCategory } = useFavorites();
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const categoryPickerRootRef = useRef<HTMLDivElement>(null);
   const [categorySaving, setCategorySaving] = useState(false);
-  const favoriteSong = favorites.find((item) => songKey(item) === songKey(song));
 
   useEffect(() => {
     if (!categoryPickerOpen) return;
@@ -120,30 +140,15 @@ function QueueRow({
   }, []);
 
   const handleCategoryChange = useCallback(async (category: string) => {
-    if (categorySaving) return;
+    if (categorySaving || !onSelectFavoriteCategory) return;
     setCategorySaving(true);
     try {
-      let target: FavoriteSong | undefined = favoriteSong;
-      if (!target) {
-        const added = await setFavorite(song, true);
-        if (!added.success) throw new Error(added.error || '收藏失败');
-        target = (added.favorites || []).find((item) => songKey(item) === songKey(song))
-          || { ...song, category };
-      }
-      const result = await setFavoriteCategory(target, category);
-      if (!result.success) throw new Error(result.error || '分类更新失败');
+      await onSelectFavoriteCategory(song, category);
       setCategoryPickerOpen(false);
-      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
-        detail: { message: category ? `已加入收藏 · ${category}` : '已加入收藏 · 未分类', type: 'success' },
-      }));
-    } catch (error) {
-      window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
-        detail: { message: error instanceof Error ? error.message : '收藏分类保存失败', type: 'error' },
-      }));
     } finally {
       setCategorySaving(false);
     }
-  }, [categorySaving, favoriteSong, setFavorite, setFavoriteCategory, song]);
+  }, [categorySaving, onSelectFavoriteCategory, song]);
 
   const dragProps = allowDrag
     ? {
@@ -196,6 +201,7 @@ function QueueRow({
       <SongCover
         song={song}
         size="tiny"
+        lazy={false}
         className="w-11 h-11 rounded-lg object-cover bg-netease-card flex-shrink-0"
       />
       <div className="flex-1 min-w-0 self-stretch flex flex-col justify-center gap-1">
@@ -243,6 +249,8 @@ function QueueRow({
           <div ref={categoryPickerRootRef} className="relative flex flex-shrink-0 items-center">
             <FavoriteButton
               song={song}
+              favorited={isFavorited}
+              onToggle={onToggleFavorite}
               className="w-7 h-7 text-netease-muted hover:text-rose-300"
               iconClassName="w-3.5 h-3.5"
               useQueueTip
@@ -251,8 +259,8 @@ function QueueRow({
             {categoryPickerOpen && (
               <div className="absolute right-0 top-full z-40 mt-1 w-32">
                 <FavoriteCategorySelect
-                  value={favoriteSong?.category || ''}
-                  categories={categories}
+                  value={favoriteCategory}
+                  categories={favoriteCategories}
                   songName={song.name}
                   disabled={categorySaving}
                   openOnMount
@@ -462,4 +470,48 @@ function QueueRow({
   );
 }
 
-export default memo(QueueRow);
+export default memo(QueueRow, (prev, next) => (
+  prev.index === next.index
+  && prev.song.queueId === next.song.queueId
+  && prev.song.id === next.song.id
+  && prev.song.source === next.song.source
+  && prev.song.name === next.song.name
+  && prev.song.artist === next.song.artist
+  && prev.song.pic === next.song.pic
+  && prev.song.isCurrent === next.song.isCurrent
+  && prev.song.requestedBy === next.song.requestedBy
+  && prev.song.requestedById === next.song.requestedById
+  && prev.song.ownerPriority === next.song.ownerPriority
+  && prev.song.priorityBy === next.song.priorityBy
+  && sameStringArray(prev.song.likedByIds, next.song.likedByIds)
+  && sameStringArray(prev.song.currentLikedByIds, next.song.currentLikedByIds)
+  && sameStringArray(prev.song.dislikedByIds, next.song.dislikedByIds)
+  && prev.memberTier === next.memberTier
+  && prev.mySocketId === next.mySocketId
+  && prev.nickname === next.nickname
+  && prev.canControlPlayback === next.canControlPlayback
+  && prev.memberJumpEnabled === next.memberJumpEnabled
+  && prev.dislikeSkipThreshold === next.dislikeSkipThreshold
+  && prev.canReorder === next.canReorder
+  && prev.likeRaisesOrder === next.likeRaisesOrder
+  && prev.isDragOver === next.isDragOver
+  && prev.hasSourceError === next.hasSourceError
+  && prev.hasCrossSource === next.hasCrossSource
+  && prev.crossSourceFrom === next.crossSourceFrom
+  && prev.isFavorited === next.isFavorited
+  && prev.favoriteCategory === next.favoriteCategory
+  && prev.favoriteCategories === next.favoriteCategories
+  && prev.onLike === next.onLike
+  && prev.onDislike === next.onDislike
+  && prev.onShare === next.onShare
+  && prev.onJump === next.onJump
+  && prev.onRemove === next.onRemove
+  && prev.onBan === next.onBan
+  && prev.onArtistClick === next.onArtistClick
+  && prev.onDragStart === next.onDragStart
+  && prev.onDragOver === next.onDragOver
+  && prev.onDrop === next.onDrop
+  && prev.onDragEnd === next.onDragEnd
+  && prev.onToggleFavorite === next.onToggleFavorite
+  && prev.onSelectFavoriteCategory === next.onSelectFavoriteCategory
+));

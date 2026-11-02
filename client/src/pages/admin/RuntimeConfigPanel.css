@@ -58,6 +58,10 @@
   max-width: 820px;
 }
 
+.settings-section--stacked .settings-section__content {
+  max-width: 100%;
+}
+
 .settings-section__content > .ant-space,
 .settings-section__content > .ant-row,
 .settings-section__content > .ant-input,

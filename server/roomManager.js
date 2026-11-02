@@ -23,8 +23,18 @@ import { decryptSensitiveValue, encryptSensitiveValue, hasRoomCredentialEncrypti
 import { resizeCoverForThumb } from "./coverUrl.js";
 import { isDirectCoverUrl, resolveSongCoverUrl } from "./resolveSongCover.js";
 import { isSongPlayableOnServer } from "./songPlayableProbe.js";
-import { clearRoomAiContext } from "./roomAiContext.js";
-import { clearRoomAiUserState } from "./roomAiUserState.js";
+import {
+  clearRoomAiContext,
+  exportRoomAiContextForStorage,
+  restoreRoomAiContextFromStorage,
+  setRoomAiContextPersistHook,
+} from "./roomAiContext.js";
+import {
+  clearRoomAiUserState,
+  exportRoomAiUserStateForStorage,
+  restoreRoomAiUserStateFromStorage,
+  setRoomAiUserStatePersistHook,
+} from "./roomAiUserState.js";
 import { runWithMetingRequestContext } from "./metingUpstream.js";
 import { recordSongPlay } from "./songHotRank.js";
 import {
@@ -35,7 +45,7 @@ import {
   sanitizeStoredAiBotMessage,
   verifyAiBotMessage,
 } from "./chatAiAuth.js";
-import { normalizeRoomAiBotName, resolveRoomAiBotName } from "./aiModelService.js";
+import { getPublicRoomAiConfig, normalizeRoomAiBotName, normalizeRoomAiPersona, resolveRoomAiBotName } from "./aiModelService.js";
 import {
   applyPermanentResidence,
   cancelPermanentApplication,
@@ -812,7 +822,11 @@ export function snapshotRoomForStorage(room) {
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
+    roomAiDeskPetEnabled: room.roomAiDeskPetEnabled === true,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
+    roomAiPersona: normalizeRoomAiPersona(room.roomAiPersona) || undefined,
+    roomAiMemory: exportRoomAiContextForStorage(room.id) || undefined,
+    roomAiUserStates: exportRoomAiUserStateForStorage(room.id) || undefined,
     songRequestEnabled: room.songRequestEnabled !== false,
     queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),
@@ -913,7 +927,11 @@ function restoreRoomFromStorage(data) {
   room.joinNoticeEnabled = data.joinNoticeEnabled !== false;
   room.joinNoticeCooldownSec = normalizeJoinNoticeCooldownSec(data.joinNoticeCooldownSec);
   room.roomAiEnabled = data.roomAiEnabled !== false;
+  room.roomAiDeskPetEnabled = data.roomAiDeskPetEnabled === true;
   room.roomAiBotName = normalizeRoomAiBotName(data.roomAiBotName);
+  room.roomAiPersona = normalizeRoomAiPersona(data.roomAiPersona);
+  if (data.roomAiMemory) restoreRoomAiContextFromStorage(room.id, data.roomAiMemory);
+  if (data.roomAiUserStates) restoreRoomAiUserStateFromStorage(room.id, data.roomAiUserStates);
   room.songRequestEnabled = data.songRequestEnabled !== false;
   room.queueLikeSortEnabled = data.queueLikeSortEnabled !== false;
   room.songRequestMinStaySec = normalizeSongRequestMinStaySec(data.songRequestMinStaySec);
@@ -999,6 +1017,8 @@ function invalidateRoomsListCache() {
 }
 
 export async function initRooms() {
+  setRoomAiContextPersistHook((roomId) => persistRoomById(roomId));
+  setRoomAiUserStatePersistHook((roomId) => persistRoomById(roomId));
   const keyResult = ensureRoomCredentialEncryptionKey();
   if (keyResult.error) console.error(`房间凭证密钥初始化失败：${keyResult.error}`);
   await initRoomStorage();
@@ -1339,8 +1359,12 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     joinNoticeCooldownSec: DEFAULT_JOIN_NOTICE_COOLDOWN_SEC,
     /** 房主是否允许本房 AI（默认开启；站点未开 AI 时仍无效） */
     roomAiEnabled: true,
+    /** 房主是否开启本房网页桌宠（与 AI 助手开关独立，默认关闭） */
+    roomAiDeskPetEnabled: false,
     /** 本房 AI 昵称；有值时优先于站点默认 */
     roomAiBotName: "",
+    /** 本房 AI 自定义性格设定 */
+    roomAiPersona: "",
     lastJoinNoticeAt: new Map(),
     /**
      * 进程重启恢复后，已知成员重连时静默进房/贵宾通知的截止时间。
@@ -3415,8 +3439,14 @@ export function setRoomAiSettings(roomId, actorId, settings = {}, connectionId =
   if (settings.enabled !== undefined) {
     room.roomAiEnabled = Boolean(settings.enabled);
   }
+  if (settings.deskPetEnabled !== undefined) {
+    room.roomAiDeskPetEnabled = Boolean(settings.deskPetEnabled);
+  }
   if (settings.botName !== undefined) {
     room.roomAiBotName = normalizeRoomAiBotName(settings.botName);
+  }
+  if (settings.persona !== undefined) {
+    room.roomAiPersona = normalizeRoomAiPersona(settings.persona);
   }
   persistRoom(room);
   return { room: serializeRoom(room) };
@@ -5247,7 +5277,7 @@ export async function skipSongAsAi(roomId, options = {}) {
   if (!room.current) return { error: "当前没有正在播放的歌曲" };
 
   const songTitle = formatSongTitle(room.current);
-  const botName = String(options.botName || "小音").trim().slice(0, 20) || "小音";
+  const botName = String(options.botName || "小肥鱼").trim().slice(0, 20) || "小肥鱼";
   const reasonText = String(options.reasonText || "").trim().slice(0, 40);
 
   await playNext(room, { allowFetchRandom: false, forceAdvance: true });
@@ -5290,6 +5320,11 @@ export function getAiActorPermissions(roomId, userId) {
       canRequestSong: false,
       canSkipDirectly: false,
       canRequestSkip: false,
+      canControlPlayMode: false,
+      canControlFmMode: false,
+      canJumpOwnSong: false,
+      canManageQueue: false,
+      canLikeQueue: false,
       canRecommend: false,
       canUseEmoji: false,
       canUseSticker: false,
@@ -5308,6 +5343,11 @@ export function getAiActorPermissions(roomId, userId) {
       canRequestSong: false,
       canSkipDirectly: false,
       canRequestSkip: false,
+      canControlPlayMode: false,
+      canControlFmMode: false,
+      canJumpOwnSong: false,
+      canManageQueue: false,
+      canLikeQueue: false,
       canRecommend: false,
       canUseEmoji: false,
       canUseSticker: false,
@@ -5325,6 +5365,11 @@ export function getAiActorPermissions(roomId, userId) {
       canRequestSong: false,
       canSkipDirectly: false,
       canRequestSkip: false,
+      canControlPlayMode: false,
+      canControlFmMode: false,
+      canJumpOwnSong: false,
+      canManageQueue: false,
+      canLikeQueue: false,
       canRecommend: true,
       canUseEmoji: false,
       canUseSticker: false,
@@ -5386,6 +5431,11 @@ export function getAiActorPermissions(roomId, userId) {
     canRequestSong: canRequest && !requestBlocked,
     canSkipDirectly: canPlayControl,
     canRequestSkip: !canPlayControl && Boolean(room.current),
+    canControlPlayMode: canPlayControl,
+    canControlFmMode: isOwner,
+    canJumpOwnSong: canPlayControl || Boolean(room.memberJumpEnabled),
+    canManageQueue: canPlayControl,
+    canLikeQueue: true,
     canRecommend: true,
     // 表情由 AI 账号发出，不占用用户发言权；但只读访客不允许整活
     canUseEmoji: true,
@@ -5417,7 +5467,7 @@ export async function skipSongOnBehalfOfUser(roomId, userId, options = {}) {
   });
   if (result.error) return result;
 
-  const botName = String(options.botName || "小音").trim().slice(0, 20) || "小音";
+  const botName = String(options.botName || "小肥鱼").trim().slice(0, 20) || "小肥鱼";
   return {
     ...result,
     message: result.systemMessage?.text || `${botName} 已按你的权限切歌`,
@@ -5448,6 +5498,102 @@ export function assertAiCanRequestSong(roomId, userId) {
     };
   }
   return { ok: true, permissions: perms };
+}
+
+/** AI 代用户切换播放顺序（仅房主/管理员） */
+export function setRoomPlayModeOnBehalfOfUser(roomId, userId, mode) {
+  const perms = getAiActorPermissions(roomId, userId);
+  if (!perms.ok) return { error: perms.error || "无权操作" };
+  if (!perms.canControlPlayMode) return { error: "仅房主或管理员可切换播放模式" };
+  const room = rooms.get(roomId);
+  const connectionId = resolveUserConnectionId(room, userId);
+  if (!connectionId) return { error: "会话无效，请刷新页面后再试" };
+  return setRoomPlayMode(roomId, userId, mode, connectionId);
+}
+
+/** AI 代房主调整私人漫游模式与平台（仅房主） */
+export function setRoomFmModeOnBehalfOfUser(roomId, userId, mode, source = null) {
+  const perms = getAiActorPermissions(roomId, userId);
+  if (!perms.ok) return { error: perms.error || "无权操作" };
+  if (!perms.canControlFmMode) return { error: "仅房主可调整私人漫游设置" };
+  const room = rooms.get(roomId);
+  const connectionId = resolveUserConnectionId(room, userId);
+  if (!connectionId) return { error: "会话无效，请刷新页面后再试" };
+  return setRoomFmMode(roomId, userId, mode, connectionId, source);
+}
+
+/** AI 代用户为待播歌曲插队（房主/管理员可插任意曲，成员在开启成员插队时可插自己点的歌） */
+export async function jumpQueueSongOnBehalfOfUser(roomId, userId, target = {}) {
+  const perms = getAiActorPermissions(roomId, userId);
+  if (!perms.ok) return { error: perms.error || "无权操作" };
+  const room = rooms.get(roomId);
+  if (!room || !Array.isArray(room.queue) || room.queue.length === 0) {
+    return { error: "当前待播队列为空" };
+  }
+  const connectionId = resolveUserConnectionId(room, userId);
+  if (!connectionId) return { error: "会话无效，请刷新页面后再试" };
+
+  let item = null;
+  const idx = Number(target.queueIndex);
+  const nameQuery = String(target.songName || "").trim().toLowerCase();
+  if (Number.isFinite(idx) && idx >= 1 && idx <= room.queue.length) {
+    item = room.queue[idx - 1];
+  } else if (nameQuery) {
+    item = room.queue.find((s) => String(s.name || "").toLowerCase().includes(nameQuery));
+  } else {
+    // 默认找该用户自己最近点的待播曲
+    const mine = room.queue.filter((s) => s.requestedById === userId);
+    if (mine.length === 1) item = mine[0];
+  }
+  if (!item) return { error: "未在待播队列中找到目标歌曲，请说明队列序号或准确歌名" };
+  return requestJump(roomId, userId, item.queueId, connectionId);
+}
+
+/** AI 代用户移除待播歌曲（房主/管理员可删任意曲，普通成员可删自己点的歌） */
+export function removeQueueSongOnBehalfOfUser(roomId, userId, target = {}) {
+  const perms = getAiActorPermissions(roomId, userId);
+  if (!perms.ok) return { error: perms.error || "无权操作" };
+  const room = rooms.get(roomId);
+  if (!room || !Array.isArray(room.queue) || room.queue.length === 0) {
+    return { error: "当前待播队列为空" };
+  }
+  const connectionId = resolveUserConnectionId(room, userId);
+  if (!connectionId) return { error: "会话无效，请刷新页面后再试" };
+
+  let item = null;
+  const idx = Number(target.queueIndex);
+  const nameQuery = String(target.songName || "").trim().toLowerCase();
+  if (Number.isFinite(idx) && idx >= 1 && idx <= room.queue.length) {
+    item = room.queue[idx - 1];
+  } else if (nameQuery) {
+    item = room.queue.find((s) => String(s.name || "").toLowerCase().includes(nameQuery));
+  } else {
+    const mine = room.queue.filter((s) => s.requestedById === userId);
+    if (mine.length > 0) item = mine[mine.length - 1];
+  }
+  if (!item) return { error: "未在待播队列中找到要移除的歌曲，请说明队列序号或歌名" };
+  return removeFromQueue(roomId, userId, item.queueId, connectionId);
+}
+
+/** AI 代用户给在播或待播歌曲点赞 */
+export function likeQueueSongOnBehalfOfUser(roomId, userId, target = {}) {
+  const perms = getAiActorPermissions(roomId, userId);
+  if (!perms.ok) return { error: perms.error || "无权操作" };
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在" };
+
+  let queueId = "";
+  const idx = Number(target.queueIndex);
+  const nameQuery = String(target.songName || "").trim().toLowerCase();
+  if (Number.isFinite(idx) && idx >= 1 && idx <= (room.queue?.length || 0)) {
+    queueId = room.queue[idx - 1]?.queueId || "";
+  } else if (nameQuery && Array.isArray(room.queue)) {
+    queueId = room.queue.find((s) => String(s.name || "").toLowerCase().includes(nameQuery))?.queueId || "";
+  } else if (room.current?.queueId) {
+    queueId = room.current.queueId;
+  }
+  if (!queueId) return { error: "未找到要点赞的歌曲" };
+  return toggleQueueLike(roomId, userId, queueId);
 }
 
 export async function finishCurrentSong(roomId, socketId, connectionId, queueId) {
@@ -5814,6 +5960,7 @@ function serializeChatMessage(message, options = {}) {
       ? source.confettiEnabled !== false
       : Boolean(source.confettiEnabled),
     songs,
+    ...(Array.isArray(source.aiThoughts) && source.aiThoughts.length ? { aiThoughts: source.aiThoughts.slice(0, 12) } : {}),
   };
   if (aiBotSig) out.aiBotSig = aiBotSig;
   return out;
@@ -6020,9 +6167,9 @@ export function postBotChatMessage(roomId, options = {}) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
 
-  const botName = String(options.nickname || resolveRoomAiBotName(room) || "小音")
+  const botName = String(options.nickname || resolveRoomAiBotName(room) || "小肥鱼")
     .trim()
-    .slice(0, 20) || "小音";
+    .slice(0, 20) || "小肥鱼";
   const imageUrl = String(options.imageUrl || "").trim();
   const imageKey = String(options.imageKey || "").trim();
   const asSticker = Boolean(options.asSticker);
@@ -6046,6 +6193,13 @@ export function postBotChatMessage(roomId, options = {}) {
     if (imageCheck.error) return imageCheck;
   }
 
+  const aiThoughts = Array.isArray(options.aiThoughts)
+    ? options.aiThoughts
+      .map((item) => String(item || "").trim().slice(0, 240))
+      .filter(Boolean)
+      .slice(0, 12)
+    : [];
+
   const message = {
     id: generateId(),
     userId: AI_BOT_USER_ID,
@@ -6058,6 +6212,7 @@ export function postBotChatMessage(roomId, options = {}) {
     replyTo: sanitizeChatReplyRef(options.replyTo, roomId),
     timestamp: Date.now(),
     songs: songs.length ? songs : undefined,
+    ...(aiThoughts.length ? { aiThoughts } : {}),
   };
 
   room.messages.push(message);
@@ -6111,6 +6266,9 @@ export function getRoomAiSnapshot(roomId, viewerUserId = null) {
     queueCount: room.queue?.length || 0,
     isPlaying: Boolean(room.isPlaying),
     playMode: room.playMode || 'order',
+    playbackRate: normalizePlaybackRate(room.playbackRate),
+    fmMode: normalizeFmMode(room.neteaseFmMode),
+    fmSource: normalizeFmSource(room.fmSource),
     current,
     queuePreview: queue,
     viewerUserId: uid || null,
@@ -6129,7 +6287,7 @@ function requireAiIdentity() {
     getAiModelConfig: () => {
       const cfg = getRuntimeConfig();
       return {
-        botName: String(cfg.aiBotName || "小音").trim().slice(0, 20) || "小音",
+        botName: String(cfg.aiBotName || "小肥鱼").trim().slice(0, 20) || "小肥鱼",
       };
     },
   };
@@ -6516,7 +6674,10 @@ function serializeRoom(room, options = {}) {
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
+    roomAiDeskPetEnabled: room.roomAiDeskPetEnabled === true,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
+    roomAiPersona: normalizeRoomAiPersona(room.roomAiPersona) || undefined,
+    roomAi: getPublicRoomAiConfig(undefined, room),
     songRequestEnabled: room.songRequestEnabled !== false,
     queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),
@@ -6601,7 +6762,10 @@ export function prepareRoomBroadcast(roomId) {
     joinNoticeEnabled: room.joinNoticeEnabled !== false,
     joinNoticeCooldownSec: normalizeJoinNoticeCooldownSec(room.joinNoticeCooldownSec),
     roomAiEnabled: room.roomAiEnabled !== false,
+    roomAiDeskPetEnabled: room.roomAiDeskPetEnabled === true,
     roomAiBotName: normalizeRoomAiBotName(room.roomAiBotName) || undefined,
+    roomAiPersona: normalizeRoomAiPersona(room.roomAiPersona) || undefined,
+    roomAi: getPublicRoomAiConfig(undefined, room),
     songRequestEnabled: room.songRequestEnabled !== false,
     queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     songRequestMinStaySec: normalizeSongRequestMinStaySec(room.songRequestMinStaySec),

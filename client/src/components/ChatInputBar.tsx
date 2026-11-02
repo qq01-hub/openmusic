@@ -239,6 +239,13 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
   }, [showEmoji]);
 
   useEffect(() => {
+    if (roomAi?.enabled) return;
+    setShowSlashPicker(false);
+    setSlashQuery('');
+    slashQueryRef.current = '';
+  }, [roomAi?.enabled]);
+
+  useEffect(() => {
     if (!showEmoji) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;

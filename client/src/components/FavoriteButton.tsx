@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Heart, Loader2 } from 'lucide-react';
 import type { Song } from '../types';
 import { useFavorites } from '../hooks/useFavorites';
@@ -14,6 +14,8 @@ interface Props {
   showOnHover?: boolean;
   /** 由父级传入时可避免列表行重复订阅收藏状态 */
   favorited?: boolean;
+  /** 由父级传入时可完全跳过内部 useFavorites / useSocket 订阅，大幅降低虚拟列表行挂载开销 */
+  onToggle?: (song: Song) => Promise<{ success: boolean; error?: string }>;
   /** 队列区域使用 QueueTip */
   useQueueTip?: boolean;
   /** 双击时执行分类收藏，提供后会延迟单击以区分双击 */
@@ -21,30 +23,33 @@ interface Props {
   onToggleResult?: (favorited: boolean) => void;
 }
 
-export default function FavoriteButton({
+interface ViewProps extends Omit<Props, 'favorited' | 'onToggle'> {
+  favorited: boolean;
+  onToggle: (song: Song) => Promise<{ success: boolean; error?: string }>;
+}
+
+const FavoriteButtonView = memo(function FavoriteButtonView({
   song,
   className = 'w-8 h-8 text-netease-muted hover:text-rose-300',
   iconClassName = 'w-4 h-4',
   titlePrefix = '',
   showOnHover = false,
-  favorited: favoritedProp,
+  favorited,
+  onToggle,
   useQueueTip = false,
   onDoubleClick,
   onToggleResult,
-}: Props) {
-  const { isFavorite, toggleFavorite } = useFavorites();
+}: ViewProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const clickTimer = useRef<number | null>(null);
-
-  const favorited = favoritedProp ?? isFavorite(song);
 
   const handleToggle = async (event?: React.MouseEvent) => {
     event?.stopPropagation();
     if (!song || loading) return;
     setLoading(true);
     setError('');
-    const res = await toggleFavorite(song);
+    const res = await onToggle(song);
     setLoading(false);
     if (res.success) onToggleResult?.(favorited);
     if (!res.success) {
@@ -103,4 +108,29 @@ export default function FavoriteButton({
       </button>
     </TipWrapper>
   );
+});
+
+function ConnectedFavoriteButton(props: Props) {
+  const { isFavorite, toggleFavorite } = useFavorites();
+  const favorited = props.favorited ?? isFavorite(props.song);
+  return (
+    <FavoriteButtonView
+      {...props}
+      favorited={favorited}
+      onToggle={props.onToggle ?? toggleFavorite}
+    />
+  );
 }
+
+export default memo(function FavoriteButton(props: Props) {
+  if (props.favorited !== undefined && props.onToggle !== undefined) {
+    return (
+      <FavoriteButtonView
+        {...props}
+        favorited={props.favorited}
+        onToggle={props.onToggle}
+      />
+    );
+  }
+  return <ConnectedFavoriteButton {...props} />;
+});

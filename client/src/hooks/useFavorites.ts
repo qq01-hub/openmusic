@@ -118,16 +118,16 @@ if (typeof window !== 'undefined') {
 
 export function useFavorites() {
   const { listFavorites, listFavoriteCategories, createFavoriteCategory, deleteFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
-  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => new Set());
-  const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>([]);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => sharedFavoriteIds);
+  const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>(() => sharedFavoriteSongs);
   const [syncState, setSyncState] = useState<FavoritesSyncState>(() => sharedSyncState);
   const [categories, setCategories] = useState<string[]>([]);
   const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const listener = () => {
-      setFavoriteIds(sharedFavoriteIds);
-      setFavoriteSongs(sharedFavoriteSongs);
+      setFavoriteIds((prev) => (prev === sharedFavoriteIds ? prev : sharedFavoriteIds));
+      setFavoriteSongs((prev) => (prev === sharedFavoriteSongs ? prev : sharedFavoriteSongs));
     };
     listeners.add(listener);
     listener();

@@ -30,6 +30,7 @@ services:
       # 首次 IP/HTTP 部署允许 Cookie，HTTPS 上线后设为 0 强制 Secure
       ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
       DOCKER_REDIS_URL: redis://redis:6379/0
+      OPENMUSIC_UPDATE_SOCKET: /run/openmusic-update/control.sock
     volumes:
       # 首次部署向导与管理后台写入的配置需要持久化，否则容器重建后清空
       - type: bind
@@ -53,12 +54,28 @@ services:
         bind:
           create_host_path: false
       - ./data/downloads:/app/server/downloads
+      - openmusic-update:/run/openmusic-update
     depends_on:
       redis:
         condition: service_healthy
 
+  updater:
+    image: w3126197382/openmusic:latest
+    restart: unless-stopped
+    command: ["node", "/app/deploy/updater/index.mjs", "docker"]
+    networks:
+      - openmusic
+    volumes:
+      # Docker 控制权限只授予独立升级服务，不挂载到主站
+      - /var/run/docker.sock:/var/run/docker.sock
+      - openmusic-update:/run/openmusic-update
+    depends_on:
+      openmusic:
+        condition: service_started
+
 volumes:
   redis-data:
+  openmusic-update:
 
 networks:
   openmusic:

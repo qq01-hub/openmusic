@@ -369,6 +369,14 @@ async function applyCachedOwnerRoomConfigAfterJoin(room: RoomState, socketId?: s
   if (config.maxAdmins !== undefined) {
     await applySetting('set_room_max_admins', { maxAdmins: config.maxAdmins });
   }
+  if (config.roomAiEnabled !== undefined || config.roomAiDeskPetEnabled !== undefined || config.roomAiBotName !== undefined || config.roomAiPersona !== undefined) {
+    await applySetting('set_room_ai_settings', {
+      enabled: config.roomAiEnabled !== false,
+      deskPetEnabled: config.roomAiDeskPetEnabled === true,
+      botName: config.roomAiBotName || '',
+      persona: config.roomAiPersona || '',
+    });
+  }
   await applySetting('set_room_song_request', {
     enabled: config.songRequestEnabled,
     queueLikeSortEnabled: config.queueLikeSortEnabled,
@@ -828,6 +836,8 @@ export function useSocket() {
       attempt?: number;
       maxAttempts?: number;
       error?: string;
+      stepText?: string;
+      thoughtSteps?: string[];
     }) => {
       const requestId = String(payload.requestId || '').trim();
       if (!requestId) return;
@@ -847,6 +857,10 @@ export function useSocket() {
           attempt: Math.max(0, Number(payload.attempt) || 0),
           maxAttempts: Math.max(1, Number(payload.maxAttempts) || 3),
           error: String(payload.error || '').trim() || undefined,
+          stepText: String(payload.stepText || '').trim() || undefined,
+          thoughtSteps: Array.isArray(payload.thoughtSteps)
+            ? payload.thoughtSteps.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 10)
+            : undefined,
         });
       } else if (payload.status === 'end') {
         store.endAiProcessing(requestId);
@@ -931,7 +945,9 @@ export function useSocket() {
         ...room,
         roomAi,
         roomAiEnabled: roomAi.roomAiEnabled !== false,
+        roomAiDeskPetEnabled: (roomAi.roomAiDeskPetEnabled ?? roomAi.deskPetEnabled) === true,
         roomAiBotName: roomAi.roomAiBotName || '',
+        roomAiPersona: roomAi.roomAiPersona || '',
       });
     };
     s.on('room_ai_update', onRoomAiUpdate);
@@ -1814,8 +1830,10 @@ export function useSocket() {
   }, []);
 
   const setRoomAiSettings = useCallback((options: {
-    enabled: boolean;
-    botName: string;
+    enabled?: boolean;
+    deskPetEnabled?: boolean;
+    botName?: string;
+    persona?: string;
   }): Promise<{ success: boolean; error?: string; room?: RoomState; roomAi?: RoomAiConfig }> => {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState; roomAi?: RoomAiConfig }>(
       'set_room_ai_settings',
@@ -1825,6 +1843,7 @@ export function useSocket() {
       if (res.success && res.room) {
         const merged = res.roomAi ? { ...res.room, roomAi: res.roomAi } : res.room;
         applyRoomSnapshot(merged);
+        cacheCurrentOwnerRoomConfig(merged);
       }
       return res;
     });

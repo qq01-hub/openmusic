@@ -154,11 +154,12 @@ function envDefaults() {
     aiApiBaseUrl: envText('AI_API_BASE_URL', envText('AI_API_URL', 'https://api.siliconflow.cn/v1')),
     aiApiProtocol: envText('AI_API_PROTOCOL', 'chat_completions'),
     aiEnabled: false,
-    aiBotName: '小音',
+    aiBotName: '小肥鱼',
     aiTextModel: envText('AI_TEXT_MODEL', 'Qwen/Qwen3-8B'),
     aiVisionModel: envText('AI_VISION_MODEL', 'Qwen/Qwen3.5-4B'),
     aiMaxRequestsPerMinute: envNumber('AI_MAX_RPM', 1000, 1, 10_000),
     aiMaxTokensPerMinute: envNumber('AI_MAX_TPM', 50_000, 1_000, 2_000_000),
+    aiProviders: [],
   };
 }
 
@@ -230,6 +231,13 @@ function decodePersisted(raw) {
       out.aiModelPools = [];
     }
   }
+  if (typeof out.aiProviders === 'string' && out.aiProviders.startsWith(ENC_PREFIX)) {
+    try {
+      out.aiProviders = JSON.parse(decryptSecret(out.aiProviders));
+    } catch {
+      out.aiProviders = [];
+    }
+  }
   return out;
 }
 
@@ -264,6 +272,14 @@ function encodeForDisk(config) {
       out.aiModelPools = out.aiModelPools.map(({ apiKey: _apiKey, ...pool }) => pool);
     } else {
       out.aiModelPools = encrypted;
+    }
+  }
+  if (Array.isArray(out.aiProviders) && out.aiProviders.length > 0) {
+    const encrypted = encryptSecret(JSON.stringify(out.aiProviders));
+    if (encrypted === null) {
+      out.aiProviders = out.aiProviders.map(({ apiKey: _apiKey, ...provider }) => provider);
+    } else {
+      out.aiProviders = encrypted;
     }
   }
   return out;
@@ -324,7 +340,8 @@ function normalize(config) {
   } catch {
     // 旧文件或手工编辑产生的非法配置不进入运行时；保存时会返回明确校验错误。
   }
-  const aiModelPools = normalizeAiModelPools(config.aiModelPools);
+  const aiProviders = normalizeAiProviders(config.aiProviders, config.aiModelPools);
+  const aiModelPools = flattenAiProvidersToPools(aiProviders, normalizeAiModelPools(config.aiModelPools));
   const musicSourcesEnabled = normalizeMusicSourcesEnabled(config.musicSourcesEnabled);
   let blockedArtistKeywords = [];
   try {
@@ -434,11 +451,14 @@ function normalize(config) {
       || config.aiEnabled === 1
       || String(config.aiEnabled || '').trim().toLowerCase() === 'true'
       || String(config.aiEnabled || '').trim() === '1',
-    aiBotName: String(config.aiBotName || '小音').trim().slice(0, 20) || '小音',
+    aiBotName: ['小音', '大肥鱼'].includes(String(config.aiBotName || '').trim())
+      ? '小肥鱼'
+      : String(config.aiBotName || '小肥鱼').trim().slice(0, 20) || '小肥鱼',
     aiTextModel: normalizeAiModelField(config.aiTextModel || config.aiModel, 'Qwen/Qwen3-8B'),
     aiVisionModel: normalizeAiModelField(config.aiVisionModel, 'Qwen/Qwen3.5-4B'),
     aiMaxRequestsPerMinute: normalizeAiRateLimit(config.aiMaxRequestsPerMinute, 1000, 1, 10_000),
     aiMaxTokensPerMinute: normalizeAiRateLimit(config.aiMaxTokensPerMinute, 50_000, 1_000, 2_000_000),
+    aiProviders,
     aiModelPools,
   };
 }
@@ -449,14 +469,148 @@ function normalizeAiRateLimit(value, fallback, min, max) {
   return Math.max(min, Math.min(Math.round(numeric), max));
 }
 
+function normalizeAiProviderModels(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (let index = 0; index < value.length && out.length < 40; index += 1) {
+    const item = value[index];
+    const model = normalizeAiModelField(item?.model || item?.id, '');
+    if (!model) continue;
+    const key = model.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: String(item?.id || `model-${out.length + 1}`).trim().slice(0, 80) || `model-${out.length + 1}`,
+      model,
+      name: String(item?.name || '').trim().slice(0, 40),
+      enabled: item?.enabled !== false,
+      supportsVision: item?.supportsVision === true || item?.type === 'vision',
+      enableThinking: item?.enableThinking === true,
+      contextWindowTokens: normalizeAiRateLimit(item?.contextWindowTokens, 256 * 1024, 4 * 1024, 2048 * 1024),
+      sortOrder: normalizeAiRateLimit(item?.sortOrder ?? item?.priority ?? (out.length + 1) * 10, (out.length + 1) * 10, 1, 1000),
+    });
+  }
+  return out.sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function migratePoolsToAiProviders(pools) {
+  const normalizedPools = normalizeAiModelPools(pools);
+  if (!normalizedPools.length) return [];
+  const groups = new Map();
+  for (const pool of normalizedPools) {
+    const baseUrl = normalizeAiApiBaseUrl(pool.apiBaseUrl, '');
+    const protocol = normalizeAiApiProtocol(pool.apiProtocol);
+    const apiKey = String(pool.apiKey || '').trim();
+    const groupKey = `${baseUrl}|${protocol}|${apiKey}`;
+    let group = groups.get(groupKey);
+    if (!group) {
+      group = {
+        id: `provider-${groups.size + 1}`,
+        name: pool.name || `供应商 ${groups.size + 1}`,
+        enabled: true,
+        apiBaseUrl: baseUrl,
+        apiProtocol: protocol,
+        apiKey,
+        maxRequestsPerMinute: pool.maxRequestsPerMinute,
+        maxTokensPerMinute: pool.maxTokensPerMinute,
+        sortOrder: pool.priority,
+        models: [],
+      };
+      groups.set(groupKey, group);
+    } else {
+      group.sortOrder = Math.min(group.sortOrder, pool.priority);
+    }
+    const existingModel = group.models.find((m) => m.model.toLowerCase() === pool.model.toLowerCase());
+    if (existingModel) {
+      if (pool.type === 'vision' || pool.supportsVision) existingModel.supportsVision = true;
+      if (pool.enabled) existingModel.enabled = true;
+      if (pool.enableThinking) existingModel.enableThinking = true;
+      existingModel.sortOrder = Math.min(existingModel.sortOrder, pool.priority);
+    } else if (pool.model) {
+      group.models.push({
+        id: pool.id || `model-${group.models.length + 1}`,
+        model: pool.model,
+        name: pool.name || '',
+        enabled: pool.enabled !== false,
+        supportsVision: pool.type === 'vision' || pool.supportsVision === true,
+        enableThinking: pool.enableThinking === true,
+        contextWindowTokens: pool.contextWindowTokens,
+        sortOrder: pool.priority,
+      });
+    }
+  }
+  return Array.from(groups.values())
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .slice(0, 20)
+    .map((group, idx) => ({
+      ...group,
+      sortOrder: normalizeAiRateLimit(group.sortOrder, (idx + 1) * 10, 1, 1000),
+      models: normalizeAiProviderModels(group.models),
+    }));
+}
+
+function normalizeAiProviders(value, fallbackPools = []) {
+  if (!Array.isArray(value)) {
+    return migratePoolsToAiProviders(fallbackPools);
+  }
+  return value.slice(0, 20).map((item, index) => ({
+    id: String(item?.id || `provider-${index + 1}`).trim().slice(0, 80) || `provider-${index + 1}`,
+    name: String(item?.name || '').trim().slice(0, 40),
+    enabled: item?.enabled !== false,
+    apiBaseUrl: normalizeAiApiBaseUrl(item?.apiBaseUrl || item?.apiUrl, ''),
+    apiProtocol: normalizeAiApiProtocol(item?.apiProtocol),
+    apiKey: String(item?.apiKey || '').trim(),
+    maxRequestsPerMinute: normalizeAiRateLimit(item?.maxRequestsPerMinute, 1000, 1, 10_000),
+    maxTokensPerMinute: normalizeAiRateLimit(item?.maxTokensPerMinute, 50_000, 1_000, 2_000_000),
+    sortOrder: normalizeAiRateLimit(item?.sortOrder ?? item?.priority ?? (index + 1) * 10, (index + 1) * 10, 1, 1000),
+    models: normalizeAiProviderModels(item?.models),
+  })).sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+function flattenAiProvidersToPools(providers, fallbackPools = []) {
+  if (!Array.isArray(providers) || providers.length === 0) return fallbackPools;
+  const out = [];
+  const sortedProviders = [...providers].sort((a, b) => a.sortOrder - b.sortOrder);
+  sortedProviders.forEach((provider, pIdx) => {
+    const models = [...(provider.models || [])].sort((a, b) => a.sortOrder - b.sortOrder);
+    models.forEach((modelItem, mIdx) => {
+      const priority = Math.min(1000, (pIdx + 1) * 50 + (mIdx + 1));
+      out.push({
+        id: `${provider.id}:${modelItem.id}`,
+        providerId: provider.id,
+        modelId: modelItem.id,
+        enabled: provider.enabled !== false && modelItem.enabled !== false,
+        type: 'text',
+        supportsVision: modelItem.supportsVision === true,
+        name: modelItem.name || provider.name || modelItem.model,
+        providerName: provider.name || '',
+        apiBaseUrl: provider.apiBaseUrl,
+        apiProtocol: provider.apiProtocol,
+        apiKey: provider.apiKey,
+        model: modelItem.model,
+        enableThinking: modelItem.enableThinking === true,
+        contextWindowTokens: modelItem.contextWindowTokens,
+        maxRequestsPerMinute: provider.maxRequestsPerMinute,
+        maxTokensPerMinute: provider.maxTokensPerMinute,
+        priority,
+        providerSortOrder: provider.sortOrder,
+        modelSortOrder: modelItem.sortOrder,
+      });
+    });
+  });
+  return out;
+}
+
 function normalizeAiModelPools(value) {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, 20).map((item, index) => {
+  return value.slice(0, 40).map((item, index) => {
     const type = item?.type === 'vision' ? 'vision' : 'text';
     return {
       id: String(item?.id || `pool-${index + 1}`).trim().slice(0, 80) || `pool-${index + 1}`,
       enabled: item?.enabled !== false,
       type,
+      supportsVision: item?.supportsVision === true || type === 'vision',
       name: String(item?.name || '').trim().slice(0, 40),
       apiBaseUrl: normalizeAiApiBaseUrl(item?.apiBaseUrl || item?.apiUrl, ''),
       apiProtocol: normalizeAiApiProtocol(item?.apiProtocol),
@@ -612,6 +766,11 @@ export function getRuntimeConfigForAdmin() {
     result.configuredSecrets[field] = Boolean(config[field]);
     result[field] = field === 'turnstileSecretKey' ? '' : config[field] ? maskSecret(config[field]) : '';
   }
+  result.aiProviders = (config.aiProviders || []).map(({ apiKey, ...provider }) => ({
+    ...provider,
+    apiKey: '',
+    configuredApiKey: Boolean(apiKey),
+  }));
   result.aiModelPools = config.aiModelPools.map(({ apiKey, ...pool }) => ({
     ...pool,
     apiKey: '',
@@ -662,7 +821,40 @@ export function setRuntimeConfig(raw = {}) {
       return { success: false, error: err?.message || 'musicApis 配置无效' };
     }
   }
-  if (Array.isArray(raw.aiModelPools)) {
+  if (Array.isArray(raw.aiProviders)) {
+    for (let pIndex = 0; pIndex < raw.aiProviders.length; pIndex += 1) {
+      const provider = raw.aiProviders[pIndex];
+      const baseUrl = String(provider?.apiBaseUrl || '').trim();
+      if (baseUrl) {
+        const urlErr = validateHttpUrl(baseUrl, `第 ${pIndex + 1} 个 AI 供应商的 Base URL`, { allowPrivate: true });
+        if (urlErr) return { success: false, error: urlErr };
+      }
+      const models = Array.isArray(provider?.models) ? provider.models : [];
+      const invalidModelIndex = models.findIndex((m) => {
+        const model = String(m?.model || '').trim();
+        return !model || /\s/.test(model) || model.length > 64 || !/^[A-Za-z0-9._+:\-/]+$/.test(model);
+      });
+      if (invalidModelIndex >= 0) {
+        const model = String(models[invalidModelIndex]?.model || '').trim();
+        return {
+          success: false,
+          error: model
+            ? `第 ${pIndex + 1} 个供应商的第 ${invalidModelIndex + 1} 个模型 ID 不支持空格或其它非法字符`
+            : `第 ${pIndex + 1} 个供应商的第 ${invalidModelIndex + 1} 个模型 ID 不能为空`,
+        };
+      }
+    }
+    const existingProviderById = new Map((current.aiProviders || []).map((p) => [p.id, p]));
+    next.aiProviders = raw.aiProviders.map((provider) => {
+      const prev = existingProviderById.get(String(provider?.id || ''));
+      const clearKey = provider?.clearApiKey === true;
+      return {
+        ...provider,
+        apiKey: clearKey ? '' : (String(provider?.apiKey || '').trim() || prev?.apiKey || ''),
+      };
+    });
+    next.aiModelPools = [];
+  } else if (Array.isArray(raw.aiModelPools)) {
     const invalidIndex = raw.aiModelPools.findIndex((pool) => {
       const model = String(pool?.model || '').trim();
       return !model || /\s/.test(model) || model.length > 64 || !/^[A-Za-z0-9._+:\-/]+$/.test(model);
@@ -678,6 +870,7 @@ export function setRuntimeConfig(raw = {}) {
       ...pool,
       apiKey: String(pool?.apiKey || '').trim() || existingById.get(String(pool?.id || ''))?.apiKey || '',
     }));
+    next.aiProviders = migratePoolsToAiProviders(next.aiModelPools);
   }
 
   for (const field of Object.keys(current)) {
@@ -686,7 +879,7 @@ export function setRuntimeConfig(raw = {}) {
     if (Array.isArray(raw.metingSources) && (field === 'metingApiUrl' || field === 'metingApiAuth')) {
       continue;
     }
-    if (field === 'aiModelPools') continue;
+    if (field === 'aiModelPools' || field === 'aiProviders') continue;
     if (SECRET_FIELDS.has(field)) {
       if (clearSecrets.has(field)) next[field] = '';
       else if (typeof raw[field] === 'string' && raw[field].trim()) next[field] = raw[field].trim();

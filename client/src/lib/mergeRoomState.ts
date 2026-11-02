@@ -58,7 +58,25 @@ export function mergeRoomState(incoming: RoomState, current: RoomState | null): 
   }
 
   if (!incoming.roomAi && current.roomAi) {
-    merged.roomAi = current.roomAi;
+    const nextRoomEnabled = incoming.roomAiEnabled !== false;
+    const nextDeskPetEnabled = incoming.roomAiDeskPetEnabled === true;
+    const nextBotName = incoming.roomAiBotName?.trim()
+      || current.roomAi.defaultBotName
+      || current.roomAi.botName;
+    const nextGlobalEnabled = current.roomAi.globalEnabled !== false;
+    const nextEnabled = Boolean(nextGlobalEnabled && nextRoomEnabled);
+    merged.roomAi = {
+      ...current.roomAi,
+      enabled: nextEnabled,
+      roomAiEnabled: nextRoomEnabled,
+      deskPetEnabled: nextDeskPetEnabled,
+      roomAiDeskPetEnabled: nextDeskPetEnabled,
+      botName: nextBotName,
+      roomAiBotName: incoming.roomAiBotName || undefined,
+      roomAiPersona: incoming.roomAiPersona || undefined,
+      wakePrefixes: nextEnabled ? [`/${nextBotName}`, `@${nextBotName}`, '/ai', '@ai'] : [],
+      commands: nextEnabled ? current.roomAi.commands : [],
+    };
   }
 
   // 广播只带当前相关昵称子集，与已有 Map 合并而非整包替换

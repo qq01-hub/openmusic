@@ -12,6 +12,12 @@ import {
   postBotChatMessage,
   getRoomAiSnapshot,
   getRoomInternal,
+  getSongHistory,
+  setRoomPlayModeOnBehalfOfUser,
+  setRoomFmModeOnBehalfOfUser,
+  jumpQueueSongOnBehalfOfUser,
+  removeQueueSongOnBehalfOfUser,
+  likeQueueSongOnBehalfOfUser,
 } from './roomManager.js';
 import {
   AI_BOT_USER_ID,
@@ -20,6 +26,7 @@ import {
   buildRoomAiTools,
   describeImageWithVision,
   detectAiUserMisconduct,
+  extractAssistantReasoning,
   extractAssistantText,
   getPublicRoomAiConfig,
   getAiModelConfig,
@@ -58,6 +65,11 @@ const MUTATING_TOOL_NAMES = new Set([
   'request_song',
   'skip_song',
   'request_skip_song',
+  'set_play_mode',
+  'set_fm_mode',
+  'jump_queue_song',
+  'remove_queue_song',
+  'like_queue_song',
   'send_emoji',
   'send_sticker',
   'reply_message',
@@ -154,7 +166,21 @@ function pumpAiQueue() {
     attempt: task.attempt,
     maxAttempts: AI_MAX_ATTEMPTS,
   });
-  void handleRoomAiChat({ ...task.params, executionLedger: task.executionLedger })
+  void handleRoomAiChat({
+    ...task.params,
+    executionLedger: task.executionLedger,
+    onProgress: (stepText, thoughtSteps) => {
+      task.onStatus?.({
+        status: 'start',
+        queuePosition: 0,
+        pendingCount: aiQueue.filter((item) => item.roomId === task.roomId).length + getRoomActiveTaskCount(task.roomId),
+        attempt: task.attempt,
+        maxAttempts: AI_MAX_ATTEMPTS,
+        stepText,
+        thoughtSteps,
+      });
+    },
+  })
     .then((result) => {
       if (result?.error) throw new Error(result.error);
       aiActiveTasks.delete(task.requestId);
@@ -347,12 +373,20 @@ function stripEmbeddedQqFaces(text) {
 export function sanitizeAiUserFacingText(value) {
   return String(value || '')
     .replace(/(?:用\s*)?`?request_song`?\s*点上/gi, '让我帮你点上')
-    .replace(/`?(?:request_song|search_songs|recommend_songs|skip_song|request_skip_song|reply_message|send_emoji|send_sticker|send_song_card|get_room_status|get_my_permissions)`?/gi, (name) => ({
+    .replace(/`?(?:request_song|search_songs|recommend_songs|skip_song|request_skip_song|toggle_playback|set_play_mode|set_playback_rate|set_fm_mode|jump_queue_song|remove_queue_song|like_queue_song|get_song_history|reply_message|send_emoji|send_sticker|send_song_card|get_room_status|get_my_permissions)`?/gi, (name) => ({
       request_song: '点歌',
       search_songs: '搜歌',
       recommend_songs: '歌曲推荐',
       skip_song: '切歌',
       request_skip_song: '切歌申请',
+      toggle_playback: '播放控制',
+      set_play_mode: '切换播放模式',
+      set_playback_rate: '调整倍速',
+      set_fm_mode: '调整漫游',
+      jump_queue_song: '插队顶歌',
+      remove_queue_song: '移除待播歌',
+      like_queue_song: '歌曲点赞',
+      get_song_history: '播放历史',
       reply_message: '回复功能',
       send_emoji: '表情功能',
       send_sticker: '表情包功能',
@@ -498,6 +532,43 @@ function findRememberedSong(ctx, id, server) {
  * 目的是让「一次回复里的多张候选卡片」只占一条消息，而不是刷屏多条。
  * finalText 是本轮模型的最终文字：有它就用它，避免只留下工具参数里的半句话而显得被截断。
  */
+function describeToolStep(fnName, args = {}) {
+  switch (fnName) {
+    case 'search_songs':
+      return `正在四平台搜索歌曲「${String(args.keyword || '').trim().slice(0, 24) || '候选'}」`;
+    case 'recommend_songs':
+      return `正在根据「${String(args.mood || args.keyword || '当前氛围').trim().slice(0, 20)}」挑选推荐歌曲`;
+    case 'request_song':
+      return `正在为你将歌曲加入播放队列`;
+    case 'skip_song':
+      return `正在校验权限并执行切歌`;
+    case 'request_skip_song':
+      return `正在为你发起切歌投票申请`;
+    case 'get_room_status':
+      return `正在查看当前房间在播与队列状态`;
+    case 'get_song_history':
+      return `正在翻阅房间最近播放历史记录`;
+    case 'get_my_permissions':
+      return `正在核对你的房间角色与操作权限`;
+    case 'set_play_mode':
+      return `正在切换房间播放顺序模式`;
+    case 'set_fm_mode':
+      return `正在调整房间私人漫游配置`;
+    case 'jump_queue_song':
+      return `正在将待播歌曲插队到下一首`;
+    case 'remove_queue_song':
+      return `正在从待播队列移除指定歌曲`;
+    case 'like_queue_song':
+      return `正在为歌曲点赞助威`;
+    case 'send_song_card':
+      return `正在生成可试听的音乐卡片`;
+    case 'send_sticker':
+      return `正在挑选合适的表情包`;
+    default:
+      return '';
+  }
+}
+
 function flushPendingSongCards(ctx, finalText = '') {
   const buffer = ctx?.cardBuffer;
   if (!buffer || buffer.cards.length === 0) return;
@@ -511,6 +582,7 @@ function flushPendingSongCards(ctx, finalText = '') {
     text,
     songs: cards,
     replyTo: ctx.triggerMessage || null,
+    aiThoughts: ctx.thoughtSteps,
   });
   if (posted.error) return;
   ctx.replied = true;
@@ -585,9 +657,28 @@ async function executeTool(name, args, ctx) {
       if (!perms.inRoom && !perms.ok) {
         return { success: false, error: perms.error || '无权查看' };
       }
-      const snap = getRoomAiSnapshot(roomId);
+      const snap = getRoomAiSnapshot(roomId, userId);
       if (!snap) return { success: false, error: '房间不存在' };
       return { success: true, ...snap, actorRole: perms.role };
+    }
+
+    case 'get_song_history': {
+      if (!perms.inRoom && !perms.ok) {
+        return { success: false, error: perms.error || '无权查看' };
+      }
+      const limit = Math.max(1, Math.min(10, Number(args.limit) || 5));
+      const historyResult = getSongHistory(roomId, { limit });
+      if (historyResult.error) return { success: false, error: historyResult.error };
+      const songs = (historyResult.songs || []).slice(0, limit).map((item, idx) => ({
+        index: idx + 1,
+        id: item.id,
+        name: item.name,
+        artist: item.artist,
+        server: item.source || 'netease',
+        requestedBy: item.requestedBy || null,
+      }));
+      rememberSongCandidates(ctx, songs);
+      return { success: true, songs };
     }
 
     case 'search_songs': {
@@ -752,6 +843,81 @@ async function executeTool(name, args, ctx) {
       };
     }
 
+    case 'set_play_mode': {
+      const mode = String(args.mode || '').trim();
+      const result = setRoomPlayModeOnBehalfOfUser(roomId, userId, mode);
+      if (result.error) return { success: false, error: result.error };
+      if (result.room && broadcastRoom) broadcastRoom();
+      const modeNames = {
+        order: '顺序播放',
+        random: '列表随机',
+        loop: '单曲循环',
+        'user-round-robin': '用户轮播',
+      };
+      return {
+        success: true,
+        playMode: result.room?.playMode || mode,
+        message: `已切换为「${modeNames[result.room?.playMode || mode] || mode}」`,
+      };
+    }
+
+    case 'set_fm_mode': {
+      const mode = String(args.mode || 'DEFAULT').trim();
+      const source = args.source ? String(args.source).trim() : null;
+      const result = setRoomFmModeOnBehalfOfUser(roomId, userId, mode, source);
+      if (result.error) return { success: false, error: result.error };
+      if (result.room && broadcastRoom) broadcastRoom();
+      return {
+        success: true,
+        fmMode: result.room?.neteaseFmMode,
+        fmSource: result.room?.fmSource,
+        message: `已更新私人漫游设置（${result.room?.fmSource || 'netease'} · ${result.room?.neteaseFmMode || mode}）`,
+      };
+    }
+
+    case 'jump_queue_song': {
+      const result = await jumpQueueSongOnBehalfOfUser(roomId, userId, {
+        queueIndex: args.queueIndex,
+        songName: args.songName,
+      });
+      if (result.error) return { success: false, error: result.error };
+      if (result.systemMessage && emitSystem) emitSystem(result.systemMessage);
+      if (result.room && broadcastRoom) broadcastRoom();
+      return {
+        success: true,
+        message: result.systemMessage?.text || '已将歌曲插队到下一首',
+      };
+    }
+
+    case 'remove_queue_song': {
+      const result = removeQueueSongOnBehalfOfUser(roomId, userId, {
+        queueIndex: args.queueIndex,
+        songName: args.songName,
+      });
+      if (result.error) return { success: false, error: result.error };
+      if (result.systemMessage && emitSystem) emitSystem(result.systemMessage);
+      if (result.room && broadcastRoom) broadcastRoom();
+      return {
+        success: true,
+        message: result.systemMessage?.text || '已从待播队列移除该歌曲',
+      };
+    }
+
+    case 'like_queue_song': {
+      const result = likeQueueSongOnBehalfOfUser(roomId, userId, {
+        queueIndex: args.queueIndex,
+        songName: args.songName,
+      });
+      if (result.error) return { success: false, error: result.error };
+      if (result.systemMessage && emitSystem) emitSystem(result.systemMessage);
+      if (broadcastRoom) broadcastRoom();
+      return {
+        success: true,
+        liked: result.liked,
+        message: result.liked ? '已为该歌曲点赞' : '已取消点赞',
+      };
+    }
+
     case 'send_emoji': {
       if (isUserRequestingExpression(ctx.requestText)) {
         return { success: false, error: '表情只能由 AI 根据回复情绪主动决定，不能按用户指定发送' };
@@ -804,6 +970,7 @@ async function executeTool(name, args, ctx) {
       const posted = postBotChatMessage(roomId, {
         text,
         replyTo: ctx.triggerMessage || null,
+        aiThoughts: ctx.thoughtSteps,
       });
       if (posted.error) return { success: false, error: posted.error };
       if (posted.message && emitChat) emitChat(posted.message);
@@ -902,9 +1069,10 @@ async function executeTool(name, args, ctx) {
   }
 }
 
-function buildSystemPrompt(botName, snapshot, permissions, rapport, userProfile, timeContext) {
+function buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext) {
   return buildOpenMusicAiSystemPrompt({
     botName,
+    roomPersona,
     mode: 'room',
     snapshot,
     actorPermissions: permissions,
@@ -930,6 +1098,7 @@ export async function handleRoomAiChat(params = {}) {
   if (!isRoomAiEnabledForRoom(room)) return { handled: false };
   const aiCtx = getPublicRoomAiConfig(undefined, room);
   const botName = aiCtx.botName;
+  const roomPersona = aiCtx.roomAiPersona || '';
 
   const triggerMessage = params.triggerMessage;
   const text = String(triggerMessage?.text || '').trim();
@@ -996,22 +1165,37 @@ export async function handleRoomAiChat(params = {}) {
     userPrompt = `${userPrompt}\n\n[用户正在回复「${replyContext.nickname}」的消息]\n${replyContext.text || '（无文字内容）'}`;
   }
 
+  const thoughtSteps = [];
+  const reportStep = (stepText) => {
+    const clean = String(stepText || '').trim().slice(0, 180);
+    if (!clean) return;
+    if (thoughtSteps[thoughtSteps.length - 1] !== clean) {
+      thoughtSteps.push(clean);
+      if (thoughtSteps.length > 10) thoughtSteps.shift();
+    }
+    params.onProgress?.(clean, [...thoughtSteps]);
+  };
+
   // 当前图片和被回复的截图都要先走视觉模型，再交给文本 Agent 调工具。
   if (hasImage) {
+    reportStep('正在识别你发送的图片内容…');
     const vision = await describeImageWithVision(imageUrl, userPrompt, roomId);
     if (vision.success) {
+      reportStep('已完成图片识别，提取到音乐线索');
       userPrompt = `${userPrompt}\n\n[识图结果·${vision.model}]\n${vision.description}`;
     } else {
       userPrompt = `${userPrompt}\n\n[识图失败] ${vision.error || '无法识别图片'}`;
     }
   }
   if (replyContext?.imageUrl && !replyContext.asSticker && replyContext.imageUrl !== imageUrl) {
+    reportStep('正在识别引用消息中的图片…');
     const vision = await describeImageWithVision(replyContext.imageUrl, [
       `用户正在回复这张图片，并说：“${requestText}”。`,
       '请识别图片中正在展示的单首歌曲，并严格按一行输出：歌曲：<歌名>｜歌手：<歌手>。',
       '看不清歌名或歌手时写「不确定」，不要猜测或补全。',
     ].join('\n'), roomId);
     if (vision.success) {
+      reportStep('已完成引用图片识别');
       userPrompt = `${userPrompt}\n\n[引用图片识图结果·${vision.model}]\n${vision.description}`;
     } else {
       userPrompt = `${userPrompt}\n\n[引用图片识图失败] ${vision.error || '无法识别图片'}`;
@@ -1044,6 +1228,7 @@ export async function handleRoomAiChat(params = {}) {
     requestText,
     replied: false,
     intent: null,
+    thoughtSteps,
     songCandidates: new Map(persistedSongCandidates.map((song) => [songCandidateKey(song), song])),
     executionLedger: params.executionLedger instanceof Map ? params.executionLedger : new Map(),
     /** 本轮音乐卡片缓冲：多次 send_song_card 会合并成一条聊天消息 */
@@ -1053,6 +1238,7 @@ export async function handleRoomAiChat(params = {}) {
   const userTurnLabel = `用户「${params.userNickname || '匿名'}」（角色 ${permissions.role}）说：${userPrompt}`;
 
   try {
+    reportStep('正在理解你的意图与房间上下文…');
     const intentAnalysis = await analyzeRoomAiIntent({
       cfg,
       roomId,
@@ -1067,8 +1253,22 @@ export async function handleRoomAiChat(params = {}) {
     intentAnalysis.actionEvidence = hasExplicitRoomActionEvidence(requestText, intentAnalysis.operation, {
       candidates: persistedSongCandidates,
     });
+    const intentLabels = {
+      chat: '日常聊天与陪伴互动',
+      search_songs: '搜索候选歌曲',
+      recommend_songs: '按心情/风格推荐音乐',
+      request_song: '点歌加入播放队列',
+      skip_song: '执行切歌操作',
+      request_skip_song: '提交切歌申请',
+      send_emoji: '匹配心情表情',
+      send_sticker: '搜索表情包',
+    };
+    if (intentAnalysis.operation && intentAnalysis.operation !== 'unknown') {
+      reportStep(`意图识别：${intentLabels[intentAnalysis.operation] || intentAnalysis.operation}`);
+    }
+
     const messages = [
-      { role: 'system', content: buildSystemPrompt(botName, snapshot, permissions, rapport, userProfile, timeContext) },
+      { role: 'system', content: buildSystemPrompt(botName, roomPersona, snapshot, permissions, rapport, userProfile, timeContext) },
       {
         role: 'system',
         content: [
@@ -1089,6 +1289,9 @@ export async function handleRoomAiChat(params = {}) {
     let finalAssistantText = '';
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
+      if (round === 0) {
+        reportStep(`${botName}正在组织思路与回应…`);
+      }
       const completion = await aiChatCompletions({
         roomId,
         taskType: 'text',
@@ -1102,6 +1305,12 @@ export async function handleRoomAiChat(params = {}) {
 
       const choice = completion?.choices?.[0]?.message;
       if (!choice) break;
+
+      const reasoningText = extractAssistantReasoning(completion);
+      if (reasoningText) {
+        const snippet = reasoningText.replace(/\s+/g, ' ').slice(0, 140);
+        reportStep(`思考推理：${snippet}${reasoningText.length > 140 ? '…' : ''}`);
+      }
 
       const toolCalls = Array.isArray(choice.tool_calls) ? choice.tool_calls : [];
       messages.push({
@@ -1123,17 +1332,20 @@ export async function handleRoomAiChat(params = {}) {
           const posted = postBotChatMessage(roomId, {
             text: reply.slice(0, 500),
             replyTo: triggerMessage,
+            aiThoughts: ctx.thoughtSteps,
           });
           if (posted.message && params.emitChat) params.emitChat(posted.message);
         }
-        appendRoomAiTurn(roomId, userId, 'user', userPrompt);
-        if (finalAssistantText) appendRoomAiTurn(roomId, userId, 'assistant', finalAssistantText);
+        appendRoomAiTurn(roomId, userId, 'user', userPrompt, { nickname: params.userNickname });
+        if (finalAssistantText) appendRoomAiTurn(roomId, userId, 'assistant', finalAssistantText, { nickname: botName });
         return { handled: true, reply: finalAssistantText || undefined };
       }
 
       for (const call of toolCalls) {
         const fnName = call?.function?.name || '';
         const args = safeJsonParse(call?.function?.arguments || '{}', {});
+        const stepLabel = describeToolStep(fnName, args);
+        if (stepLabel) reportStep(stepLabel);
         const ledgerKey = `${fnName}:${stableJson(args)}`;
         const result = MUTATING_TOOL_NAMES.has(fnName) && ctx.executionLedger.has(ledgerKey)
           ? ctx.executionLedger.get(ledgerKey)
@@ -1159,14 +1371,15 @@ export async function handleRoomAiChat(params = {}) {
       const posted = postBotChatMessage(roomId, {
         text: fallback,
         replyTo: triggerMessage,
+        aiThoughts: ctx.thoughtSteps,
       });
       if (posted.message && params.emitChat) params.emitChat(posted.message);
     }
-    appendRoomAiTurn(roomId, userId, 'user', userPrompt);
+    appendRoomAiTurn(roomId, userId, 'user', userPrompt, { nickname: params.userNickname });
     if (finalAssistantText) {
-      appendRoomAiTurn(roomId, userId, 'assistant', finalAssistantText);
+      appendRoomAiTurn(roomId, userId, 'assistant', finalAssistantText, { nickname: botName });
     } else if (ctx.replied) {
-      appendRoomAiTurn(roomId, userId, 'assistant', '(已执行操作)');
+      appendRoomAiTurn(roomId, userId, 'assistant', '(已执行操作)', { nickname: botName });
     }
     return { handled: true };
   } catch (err) {

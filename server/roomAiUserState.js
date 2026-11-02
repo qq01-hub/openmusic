@@ -4,10 +4,17 @@
 import { trimMapByUpdatedAt } from './roomAiMemory.js';
 
 const states = new Map();
-const MAX_USER_STATE_ENTRIES = 1800;
-/** 内存回收：长期无互动的条目清理 */
-const STALE_MS = 45 * 60 * 1000;
-const SONG_CANDIDATES_TTL_MS = 10 * 60 * 1000;
+const MAX_USER_STATE_ENTRIES = 2400;
+/** 违规冷处理基准时长 */
+const IGNORE_BASE_MS = 22 * 60 * 1000;
+const SONG_CANDIDATES_TTL_MS = 15 * 60 * 1000;
+
+let persistHook = null;
+
+/** 注册房间持久化回调，使成员画像与偏好随房间持久化到 Redis */
+export function setRoomAiUserStatePersistHook(fn) {
+  persistHook = typeof fn === 'function' ? fn : null;
+}
 const MOOD_KEYWORDS = [
   '治愈', '摇滚', '说唱', '民谣', '电子', '古典', '爵士', '粤语', '国语', '英语',
   '安静', '学习', '运动', '开车', '夜听', '睡前', 'emo', '伤感', '快乐', '兴奋',
@@ -22,10 +29,6 @@ function stateKey(roomId, userId) {
 }
 
 function pruneExpired() {
-  const now = Date.now();
-  for (const [key, entry] of states) {
-    if (now - (entry.updatedAt || 0) > STALE_MS) states.delete(key);
-  }
   trimMapByUpdatedAt(states, MAX_USER_STATE_ENTRIES, (v) => v?.updatedAt || 0);
 }
 function defaultProfile() {
@@ -186,6 +189,7 @@ export function recordAiUserInteraction(roomId, userId, payload = {}) {
   }
 
   entry.updatedAt = now;
+  persistHook?.(String(roomId || '').trim().toUpperCase());
 }
 
 function familiarityLevel(interactionCount) {
@@ -278,6 +282,7 @@ export function recordAiSongRequest(roomId, userId, song = {}) {
   if (name) pushUniqueLimited(profile.recentSongs, artist ? `${name} - ${artist}` : name, 8);
   bumpArtistCount(profile, artist);
   entry.updatedAt = Date.now();
+  persistHook?.(String(roomId || '').trim().toUpperCase());
 }
 
 /** 保存当前用户最近一次搜歌/推荐的候选，供下一条消息选择歌曲。 */
@@ -319,14 +324,67 @@ export function recordAiUserViolation(roomId, userId, reason = '') {
   entry.updatedAt = Date.now();
   let justEnteredIgnore = false;
   if (entry.violationCount >= 4) {
-    entry.ignoredUntil = Date.now() + STALE_MS / 2;    justEnteredIgnore = true;
+    entry.ignoredUntil = Date.now() + IGNORE_BASE_MS;
+    justEnteredIgnore = true;
   }
+  persistHook?.(String(roomId || '').trim().toUpperCase());
   return {
     ignored: entry.ignoredUntil > Date.now(),
     violationCount: entry.violationCount,
     justEnteredIgnore,
     reason: entry.lastViolationReason,
   };
+}
+
+/** 导出该房间的全部成员画像与关系状态，随房间写入 Redis */
+export function exportRoomAiUserStateForStorage(roomId) {
+  const rid = String(roomId || '').trim().toUpperCase();
+  if (!rid) return null;
+  const prefix = `${rid}:`;
+  const out = {};
+  for (const [key, entry] of states.entries()) {
+    if (!key.startsWith(prefix)) continue;
+    const uid = key.slice(prefix.length);
+    if (!uid || !entry) continue;
+    out[uid] = {
+      violationCount: Number(entry.violationCount) || 0,
+      ignoredUntil: Number(entry.ignoredUntil) || 0,
+      lastViolationReason: entry.lastViolationReason || undefined,
+      profile: entry.profile || defaultProfile(),
+      songCandidates: Array.isArray(entry.songCandidates) ? entry.songCandidates.slice(0, 5) : [],
+      songCandidatesUpdatedAt: Number(entry.songCandidatesUpdatedAt) || 0,
+      updatedAt: Number(entry.updatedAt) || Date.now(),
+    };
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/** 从房间存储快照恢复成员画像与关系状态 */
+export function restoreRoomAiUserStateFromStorage(roomId, stored) {
+  const rid = String(roomId || '').trim().toUpperCase();
+  if (!rid || !stored || typeof stored !== 'object') return;
+  for (const [uid, raw] of Object.entries(stored)) {
+    if (!uid || !raw || typeof raw !== 'object') continue;
+    const key = `${rid}:${uid}`;
+    const rawProfile = raw.profile && typeof raw.profile === 'object' ? raw.profile : {};
+    states.set(key, {
+      violationCount: Math.max(0, Number(raw.violationCount) || 0),
+      ignoredUntil: Math.max(0, Number(raw.ignoredUntil) || 0),
+      lastViolationReason: raw.lastViolationReason ? String(raw.lastViolationReason).slice(0, 80) : undefined,
+      profile: {
+        ...defaultProfile(),
+        ...rawProfile,
+        artistCounts: rawProfile.artistCounts && typeof rawProfile.artistCounts === 'object' ? rawProfile.artistCounts : {},
+        recentMoods: Array.isArray(rawProfile.recentMoods) ? rawProfile.recentMoods.slice(0, 8) : [],
+        recentSongs: Array.isArray(rawProfile.recentSongs) ? rawProfile.recentSongs.slice(0, 8) : [],
+        dislikes: Array.isArray(rawProfile.dislikes) ? rawProfile.dislikes.slice(0, 6) : [],
+        notes: Array.isArray(rawProfile.notes) ? rawProfile.notes.slice(0, 6) : [],
+      },
+      songCandidates: Array.isArray(raw.songCandidates) ? raw.songCandidates.slice(0, 5) : [],
+      songCandidatesUpdatedAt: Number(raw.songCandidatesUpdatedAt) || 0,
+      updatedAt: Number(raw.updatedAt) || Date.now(),
+    });
+  }
 }
 
 export function clearRoomAiUserState(roomId) {

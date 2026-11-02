@@ -91,6 +91,10 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return `更新登录地址 ${entry.path || ''}`;
     case 'set_runtime_config':
       return '更新运行配置';
+    case 'system_upgrade_start':
+      return '启动系统升级';
+    case 'system_upgrade_rejected':
+      return '系统升级请求被拒绝';
     case 'risk_account_update':
       return `更新账户风控 ${entry.accountId || ''}（${entry.status === 'blocked' ? '限制访问' : entry.status === 'watch' ? '关注' : '正常'}）`;
     case 'risk_policy_update':

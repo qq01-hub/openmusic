@@ -22,6 +22,7 @@ import AdminLoading from './AdminLoading';
 import AiModelPoolManager from './AiModelPoolManager';
 import JsonPathTree from './JsonPathTree';
 import SettingsSection from './SettingsSection';
+import SystemUpgradePanel from './SystemUpgradePanel';
 import './RuntimeConfigPanel.css';
 import type {
   CustomMusicApi,
@@ -54,6 +55,7 @@ type RuntimeTextField = Exclude<
   | 'aiApiProtocol'
   | 'aiMaxRequestsPerMinute'
   | 'aiMaxTokensPerMinute'
+  | 'aiProviders'
   | 'aiModelPools'
   | 'configuredSecrets'
   | 'metingApiUrl'
@@ -336,11 +338,28 @@ export default function RuntimeConfigPanel({
       aiEnabled: Boolean(config.aiEnabled),
       aiApiBaseUrl: config.aiApiBaseUrl || 'https://api.siliconflow.cn/v1',
       aiApiProtocol: config.aiApiProtocol || 'chat_completions',
-      aiBotName: config.aiBotName || '小音',
+      aiBotName: config.aiBotName || '小肥鱼',
       aiTextModel: config.aiTextModel || 'Qwen/Qwen3-8B',
       aiVisionModel: config.aiVisionModel || 'Qwen/Qwen3.5-4B',
       aiMaxRequestsPerMinute: Number(config.aiMaxRequestsPerMinute) || 1000,
       aiMaxTokensPerMinute: Number(config.aiMaxTokensPerMinute) || 50_000,
+      aiProviders: Array.isArray(config.aiProviders)
+        ? config.aiProviders.map((provider, pIdx) => ({
+            ...provider,
+            sortOrder: Number(provider.sortOrder) || (pIdx + 1) * 10,
+            maxRequestsPerMinute: Number(provider.maxRequestsPerMinute) || 1000,
+            maxTokensPerMinute: Number(provider.maxTokensPerMinute) || 50_000,
+            models: Array.isArray(provider.models)
+              ? provider.models.map((m, mIdx) => ({
+                  ...m,
+                  supportsVision: Boolean(m.supportsVision),
+                  enableThinking: Boolean(m.enableThinking),
+                  contextWindowTokens: Number(m.contextWindowTokens) || 256 * 1024,
+                  sortOrder: Number(m.sortOrder) || (mIdx + 1) * 10,
+                }))
+              : [],
+          }))
+        : [],
       aiModelPools: Array.isArray(config.aiModelPools)
         ? config.aiModelPools.map((pool) => ({
             ...pool,
@@ -417,17 +436,21 @@ export default function RuntimeConfigPanel({
 
   const save = async () => {
     if (!draft || saving) return;
-    const invalidModelIndex = draft.aiModelPools.findIndex((pool) => {
-      const model = pool.model.trim();
-      return !model || /\s/.test(model);
-    });
-    if (invalidModelIndex >= 0) {
-      const model = draft.aiModelPools[invalidModelIndex].model;
-      onError(model.trim()
-        ? `第 ${invalidModelIndex + 1} 个模型的模型 ID 不支持空格`
-        : `请填写第 ${invalidModelIndex + 1} 个模型的模型 ID 后再保存`);
-      setActiveTab('ai');
-      return;
+    const providersList = draft.aiProviders || [];
+    for (let pIndex = 0; pIndex < providersList.length; pIndex += 1) {
+      const provider = providersList[pIndex];
+      const invalidIdx = (provider.models || []).findIndex((m) => {
+        const model = (m.model || '').trim();
+        return !model || /\s/.test(model);
+      });
+      if (invalidIdx >= 0) {
+        const model = provider.models[invalidIdx].model || '';
+        onError(model.trim()
+          ? `第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID 不支持空格`
+          : `请填写第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID`);
+        setActiveTab('ai');
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -1374,7 +1397,7 @@ export default function RuntimeConfigPanel({
     return group ? renderFieldGroup(group) : null;
   };
 
-  const runAiTest = async (pool: AiModelPool) => {
+  const runAiTest = async (pool: AiModelPool, mode: 'text' | 'vision' = pool.type) => {
     if (aiTestLoading) return;
     const model = pool.model.trim();
     if (!model) {
@@ -1392,6 +1415,7 @@ export default function RuntimeConfigPanel({
       const payload: {
         message: string;
         poolId: string;
+        providerId?: string;
         type: 'text' | 'vision';
         apiKey?: string;
         model?: string;
@@ -1404,13 +1428,14 @@ export default function RuntimeConfigPanel({
       } = {
         message: '你好',
         poolId: pool.id,
-        type: pool.type,
+        providerId: pool.providerId,
+        type: mode,
         model,
         apiBaseUrl: pool.apiBaseUrl,
         apiProtocol: pool.apiProtocol,
         maxRequestsPerMinute: pool.maxRequestsPerMinute,
         maxTokensPerMinute: pool.maxTokensPerMinute,
-        ...(pool.type === 'text' ? { enableThinking: pool.enableThinking === true } : {}),
+        ...(mode === 'text' ? { enableThinking: pool.enableThinking === true } : {}),
         contextWindowTokens: pool.contextWindowTokens,
       };
       // 仅当用户正在编辑密钥时，把草稿 Key 带给测试接口（不落盘）
@@ -1455,7 +1480,7 @@ export default function RuntimeConfigPanel({
 
   const aiModelSection = (
     <>
-      <SettingsSection title="聊天室 AI" description={`开启后可用「@${draft.aiBotName || '小音'}」「/${draft.aiBotName || '小音'}」唤醒；图片识图走视觉模型。改完后点下方保存。`}>
+      <SettingsSection title="聊天室 AI" description={`开启后可用「@${draft.aiBotName || '小肥鱼'}」「/${draft.aiBotName || '小肥鱼'}」唤醒；房主也可在房间设置内自定义昵称与性格`}>
         <Row gutter={[24, 16]} align="middle">
           <Col xs={24} sm={8}>
             <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 8 }}>功能状态</Typography.Text>
@@ -1468,16 +1493,16 @@ export default function RuntimeConfigPanel({
             />
           </Col>
           <Col xs={24} sm={16}>
-            <label htmlFor="admin-ai-bot-name" style={{ display: 'block', marginBottom: 8 }}>助手昵称</label>
-            <Input id="admin-ai-bot-name" value={draft.aiBotName} placeholder="小音" onChange={(e) => setDraft({ ...draft, aiBotName: e.target.value })} />
+            <label htmlFor="admin-ai-bot-name" style={{ display: 'block', marginBottom: 8 }}>默认助手昵称</label>
+            <Input id="admin-ai-bot-name" value={draft.aiBotName} placeholder="小肥鱼" onChange={(e) => setDraft({ ...draft, aiBotName: e.target.value })} />
           </Col>
         </Row>
       </SettingsSection>
-      <SettingsSection title="模型池" description="文本与识图分别调度，使用紧凑列表管理模型，在弹窗中编辑详细参数">
+      <SettingsSection stacked title="供应商与模型" description="先选择供应商，再添加或调整模型顺序，点击模型的「设置」可配置图像识别、深度思考与上下文窗口">
         <AiModelPoolManager
-          pools={draft.aiModelPools}
-          onChange={(aiModelPools) => setDraft({ ...draft, aiModelPools })}
-          onTest={(pool) => void runAiTest(pool)}
+          providers={draft.aiProviders || []}
+          onChange={(aiProviders) => setDraft({ ...draft, aiProviders })}
+          onTest={(pool, mode) => void runAiTest(pool, mode)}
           testingId={aiTestLoading ? aiTestingPoolId : ''}
         />
       </SettingsSection>
@@ -1638,6 +1663,11 @@ export default function RuntimeConfigPanel({
   );
 
   const tabItems = [
+    {
+      key: 'upgrade',
+      label: '系统升级',
+      children: <SystemUpgradePanel active={activeTab === 'upgrade'} />,
+    },
     ...(securityTab
       ? [{
           key: 'security',
@@ -1742,7 +1772,7 @@ export default function RuntimeConfigPanel({
         items={tabItems}
       />
 
-      <div
+      {activeTab !== 'upgrade' && <div
           className="runtime-config-savebar"
           style={{
             position: 'sticky',
@@ -1765,7 +1795,7 @@ export default function RuntimeConfigPanel({
           <Button type="primary" onClick={() => void save()} loading={saving}>
             保存配置
           </Button>
-      </div>
+      </div>}
     </div>
   );
 }

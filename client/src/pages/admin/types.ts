@@ -161,6 +161,7 @@ export interface RuntimeConfig {
   aiMaxRequestsPerMinute: number;
   /** 全站共享的 AI 上游每分钟 Token 上限 */
   aiMaxTokensPerMinute: number;
+  aiProviders?: AiProvider[];
   aiModelPools: AiModelPool[];
   /** SEO：留空则前端/公开接口回退内置默认 */
   seoTitle: string;
@@ -185,23 +186,55 @@ export interface DonationEntry {
   createdAt?: number;
 }
 
+export interface AiProviderModel {
+  id: string;
+  model: string;
+  name: string;
+  enabled: boolean;
+  supportsVision: boolean;
+  enableThinking?: boolean;
+  contextWindowTokens: number;
+  sortOrder: number;
+}
+
+export interface AiProvider {
+  id: string;
+  name: string;
+  enabled: boolean;
+  apiBaseUrl: string;
+  apiProtocol: 'chat_completions' | 'responses';
+  apiKey: string;
+  configuredApiKey: boolean;
+  clearApiKey?: boolean;
+  maxRequestsPerMinute: number;
+  maxTokensPerMinute: number;
+  sortOrder: number;
+  models: AiProviderModel[];
+}
+
 export interface AiModelPool {
   id: string;
+  providerId?: string;
+  modelId?: string;
   enabled: boolean;
   type: 'text' | 'vision';
+  supportsVision?: boolean;
   name: string;
+  providerName?: string;
   apiBaseUrl: string;
   apiProtocol: 'chat_completions' | 'responses';
   apiKey: string;
   configuredApiKey: boolean;
   model: string;
-  /** 文本模型是否开启深度思考；视觉模型不使用该字段 */
+  /** 文本模型是否开启深度思考 */
   enableThinking?: boolean;
   /** 模型上下文窗口 Token 数，默认 256K */
   contextWindowTokens: number;
   maxRequestsPerMinute: number;
   maxTokensPerMinute: number;
   priority: number;
+  providerSortOrder?: number;
+  modelSortOrder?: number;
 }
 
 export type MusicApiPlatform = 'netease' | 'tencent' | 'kugou' | 'qishui';

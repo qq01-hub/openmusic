@@ -20,7 +20,37 @@ server/downloads/*.exe
 .playwright-mcp
 .codex/
 .dsh-meow/
-/.tmp-*
+
+# 临时文件、缓存和编辑器备份（所有层级）
+tmp/
+temp/
+.tmp/
+.temp/
+.tmp-*
+*.tmp
+*.temp
+*.bak
+*.orig
+*.rej
+*.swp
+*.swo
+*~
+.cache/
+.vite/
+.eslintcache
+.stylelintcache
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+.taste-skill/
+Thumbs.db
+Desktop.ini
 
 # Docker 部署持久化目录（deploy/deploy.sh docker 生成）
 /data/
@@ -61,5 +91,13 @@ mobile/.android-version.local
 dow/
 
 desktop-build.local.json
+/.openmusic-update/
+/deployment-version.json
 
 electron/desktop-runtime-config.json
+
+# 桌宠上游许可文档（仅保留本地）
+/client/public/desk-pet/LICENSE-dsh-pet.txt
+/client/public/desk-pet/LICENSE-dsh-whale-widget-plus.txt
+/client/public/desk-pet/LICENSE-DeepSeek-Balance-Whale-Widget.txt
+/client/public/desk-pet/LICENSE-gpt-pet.txt

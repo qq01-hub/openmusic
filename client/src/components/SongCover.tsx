@@ -9,6 +9,8 @@ interface Props {
   size?: CoverSize;
   className?: string;
   eager?: boolean;
+  /** 虚拟列表行内可关闭原生 lazy，避免快速滚动时 IntersectionObserver 滞后导致封面空白 */
+  lazy?: boolean;
 }
 
 function coverIdentity(song: Pick<Song, 'id' | 'source' | 'pic'>): string {
@@ -22,6 +24,7 @@ export default memo(function SongCover({
   size = 'thumb',
   className = '',
   eager = false,
+  lazy = true,
 }: Props) {
   const identity = coverIdentity(song);
   const [stageFor, setStageFor] = useState<{ id: string; stage: LoadStage } | null>(null);
@@ -29,7 +32,7 @@ export default memo(function SongCover({
 
   // 切歌后必须清掉失败态，否则底栏单例封面会一直卡在黑底占位
   useEffect(() => {
-    setStageFor(null);
+    setStageFor((prev) => (prev === null ? prev : null));
   }, [identity]);
 
   const raw = getCoverUrl(song, size);
@@ -52,7 +55,7 @@ export default memo(function SongCover({
       className={className}
       width={pixelSize}
       height={pixelSize}
-      loading={eager ? 'eager' : 'lazy'}
+      loading={eager || !lazy ? 'eager' : 'lazy'}
       decoding="async"
       referrerPolicy="no-referrer"
       {...(eager ? { fetchpriority: 'high' } : {})}
@@ -64,4 +67,10 @@ export default memo(function SongCover({
       }}
     />
   );
-})
+}, (prev, next) => (
+  coverIdentity(prev.song) === coverIdentity(next.song)
+  && prev.size === next.size
+  && prev.className === next.className
+  && prev.eager === next.eager
+  && prev.lazy === next.lazy
+))

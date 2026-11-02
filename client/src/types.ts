@@ -153,8 +153,13 @@ export interface RoomAiConfig {
   globalEnabled?: boolean;
   /** 房主是否允许本房 AI */
   roomAiEnabled?: boolean;
+  /** 房主是否启用本房网页桌宠 */
+  deskPetEnabled?: boolean;
+  roomAiDeskPetEnabled?: boolean;
   /** 本房自定义昵称（有值时 botName 即为此） */
   roomAiBotName?: string;
+  /** 本房自定义 AI 性格设定 */
+  roomAiPersona?: string;
   /** 站点默认昵称 */
   defaultBotName?: string;
 }
@@ -192,6 +197,8 @@ export interface ChatMessage {
   confettiEnabled?: boolean;
   /** 聊天音乐卡片（一条消息可带多张，如 AI 候选） */
   songs?: ChatSongCard[];
+  /** AI 助手思考与工具执行过程步骤 */
+  aiThoughts?: string[];
 }
 
 export interface SkipRequest {
@@ -331,8 +338,12 @@ export interface RoomState {
   joinNoticeCooldownSec?: number;
   /** 房主是否允许本房 AI（默认 true） */
   roomAiEnabled?: boolean;
+  /** 房主是否启用本房网页桌宠（与 AI 开关独立，默认关闭） */
+  roomAiDeskPetEnabled?: boolean;
   /** 本房 AI 昵称；有值时优先于站点默认 */
   roomAiBotName?: string;
+  /** 本房 AI 性格设定 */
+  roomAiPersona?: string;
   /** 是否允许成员点歌（关闭后仅房主/管理员可点） */
   songRequestEnabled?: boolean;
   /** 待播歌曲点赞是否提高排序，默认开启 */

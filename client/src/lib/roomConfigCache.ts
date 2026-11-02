@@ -10,6 +10,10 @@ export interface CachedOwnerRoomConfigSettings {
   chatHistoryVisibleOnJoin?: boolean;
   chatShowAvatars?: boolean;
   maxAdmins?: number;
+  roomAiEnabled?: boolean;
+  roomAiDeskPetEnabled?: boolean;
+  roomAiBotName?: string;
+  roomAiPersona?: string;
   songRequestEnabled?: boolean;
   queueLikeSortEnabled?: boolean;
   memberJumpEnabled?: boolean;
@@ -79,6 +83,10 @@ function sanitizeSettings(raw: unknown): CachedOwnerRoomConfigSettings {
     chatHistoryVisibleOnJoin: asBoolean(obj.chatHistoryVisibleOnJoin),
     chatShowAvatars: asBoolean(obj.chatShowAvatars),
     maxAdmins: asNumber(obj.maxAdmins),
+    roomAiEnabled: asBoolean(obj.roomAiEnabled),
+    roomAiDeskPetEnabled: asBoolean(obj.roomAiDeskPetEnabled),
+    roomAiBotName: asString(obj.roomAiBotName),
+    roomAiPersona: asString(obj.roomAiPersona),
     songRequestEnabled: asBoolean(obj.songRequestEnabled),
     queueLikeSortEnabled: asBoolean(obj.queueLikeSortEnabled),
     memberJumpEnabled: asBoolean(obj.memberJumpEnabled),
@@ -159,6 +167,10 @@ export function extractOwnerRoomConfig(room: RoomState): CachedOwnerRoomConfigSe
     chatHistoryVisibleOnJoin: Boolean(room.chatHistoryVisibleOnJoin),
     chatShowAvatars: Boolean(room.chatShowAvatars),
     maxAdmins: room.maxAdmins,
+    roomAiEnabled: room.roomAiEnabled !== false,
+    roomAiDeskPetEnabled: room.roomAiDeskPetEnabled === true,
+    roomAiBotName: room.roomAiBotName || '',
+    roomAiPersona: room.roomAiPersona || '',
     songRequestEnabled: room.songRequestEnabled !== false,
     queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     memberJumpEnabled: Boolean(room.memberJumpEnabled),

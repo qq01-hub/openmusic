@@ -21,13 +21,19 @@ FROM node:20-alpine AS server-deps
 WORKDIR /app/server
 COPY server/package.json server/package-lock.json* ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+COPY deploy/updater/package.json deploy/updater/package-lock.json /app/deploy/updater/
+RUN --mount=type=cache,target=/root/.npm cd /app/deploy/updater && npm ci --omit=dev
 
 # ---- 运行时镜像 ----
 FROM node:20-alpine AS runtime
+ARG OPENMUSIC_RELEASE_VERSION=development
 ENV NODE_ENV=production
+ENV OPENMUSIC_RELEASE_VERSION=$OPENMUSIC_RELEASE_VERSION
 WORKDIR /app
 COPY --from=server-deps /app/server/node_modules ./server/node_modules
 COPY server ./server
+COPY deploy/updater ./deploy/updater
+COPY --from=server-deps /app/deploy/updater/node_modules ./deploy/updater/node_modules
 COPY --from=client-builder /app/client/dist ./client/dist
 RUN mkdir -p ./server/downloads
 
