@@ -1144,12 +1144,11 @@ export default function RoomAiDesktopPet({
     if (!menuPos || !menu) return;
     const fitMenu = () => {
       const rect = menu.getBoundingClientRect();
-      setMenuPos((previous) => {
-        if (!previous) return previous;
-        const x = Math.max(12, Math.min(previous.x, window.innerWidth - rect.width - 12));
-        const y = Math.max(12, Math.min(previous.y, window.innerHeight - rect.height - 12));
-        return x === previous.x && y === previous.y ? previous : { x, y };
-      });
+      const x = Math.max(12, Math.min(menu.offsetLeft, window.innerWidth - Math.ceil(rect.width) - 12));
+      const y = Math.max(12, Math.min(menu.offsetTop, window.innerHeight - Math.ceil(rect.height) - 12));
+      // 定位直接更新 DOM，不写回触发本 effect 的状态，避免尺寸微小变化引发循环渲染
+      menu.style.left = `${x}px`;
+      menu.style.top = `${y}px`;
     };
     fitMenu();
     const observer = new ResizeObserver(fitMenu);
@@ -1559,7 +1558,7 @@ export default function RoomAiDesktopPet({
         </div>
       </div>
 
-      {/* dafeiyu-pet 同款纯白圆角右键菜单 (#menu) */}
+      {/* 右键菜单沿用站点主题配色 */}
       {menuPos && (
         <div
           ref={menuRef}
@@ -1567,9 +1566,6 @@ export default function RoomAiDesktopPet({
           style={{
             left: menuPos.x,
             top: menuPos.y,
-            background: '#fff',
-            color: '#1e2a52',
-            boxShadow: '0 10px 28px rgba(18, 32, 86, 0.32), 0 0 0 1px rgba(120, 150, 255, 0.26)',
           }}
           className="pointer-events-auto fixed z-[55] flex max-h-[calc(100dvh-24px)] w-[320px] min-w-[216px] max-w-[min(360px,90vw)] flex-col gap-0.5 overflow-y-auto overscroll-contain rounded-[12px] p-1.5 text-[14px] [&>button]:shrink-0 [&>div]:shrink-0"
         >
@@ -1579,7 +1575,7 @@ export default function RoomAiDesktopPet({
               setMenuPos(null);
               say(pickMusicLine(), 5000, { withBars: true, force: true });
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>💬</span>
             <span>音乐碎碎念</span>
@@ -1590,7 +1586,7 @@ export default function RoomAiDesktopPet({
               setMenuPos(null);
               handleFeedMusicSnack();
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>🍙</span>
             <span>投喂音符点心</span>
@@ -1601,7 +1597,7 @@ export default function RoomAiDesktopPet({
               setMenuPos(null);
               handlePatPet();
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>🤍</span>
             <span>摸摸头夸夸</span>
@@ -1611,7 +1607,7 @@ export default function RoomAiDesktopPet({
           <button
             type="button"
             onClick={() => setShowActSubmenu((v) => !v)}
-            className="flex items-center justify-between rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center justify-between rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span className="flex items-center gap-2">
               <span>🎬</span>
@@ -1621,10 +1617,10 @@ export default function RoomAiDesktopPet({
           </button>
 
           {showActSubmenu && (
-            <div className="my-0.5 grid grid-cols-2 gap-1 rounded-[9px] bg-[#4d6bfe]/[0.06] p-1.5 text-[13px] whitespace-nowrap">
+            <div className="my-0.5 grid grid-cols-2 gap-1 rounded-[9px] bg-[var(--om-surface)] p-1.5 text-[13px] whitespace-nowrap">
               <div className="col-span-2">
                 <OriginalPetActionPicker character={character} onPlay={playOriginalAction} />
-                <div className="mt-2 border-t border-[#1e2a52]/10 pt-2 text-[13px] text-[#475280]">音乐房间互动</div>
+                <div className="mt-2 border-t border-[var(--om-border)] pt-2 text-[13px] text-[var(--om-text-secondary)]">音乐房间互动</div>
               </div>
               <button
                 type="button"
@@ -1632,7 +1628,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerPeekDivAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🫣 躲面板探头
               </button>
@@ -1642,7 +1638,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerPonderButtonAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🤔 按钮旁思考
               </button>
@@ -1652,7 +1648,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerSneakClickButtonAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 😤 偷戳按钮弹开
               </button>
@@ -1662,7 +1658,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerSurfProgressAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🏄 进度条冲浪
               </button>
@@ -1672,7 +1668,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerFishQueueAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🎣 队列钓音符
               </button>
@@ -1682,7 +1678,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerDjCoverAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🕶️ 封面搓碟DJ
               </button>
@@ -1692,7 +1688,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerTreasureHotAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🔍 热榜寻宝歌
               </button>
@@ -1702,7 +1698,7 @@ export default function RoomAiDesktopPet({
                   setMenuPos(null);
                   triggerPerchChatAction();
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🧹 擦亮聊天框
               </button>
@@ -1713,14 +1709,14 @@ export default function RoomAiDesktopPet({
                   setPetState('slingshot_aim');
                   say('🚀 已进入弹弓准备！直接按住本鱼往后拉再松手就能发射啦～', 4500, { force: true });
                 }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[#4d6bfe]/16 hover:text-[#2f4fe0]"
+                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
               >
                 🚀 蓄力弹射
               </button>
             </div>
           )}
 
-          <div className="my-0.5 h-px bg-[#1e2a52]/10" />
+          <div className="my-0.5 h-px bg-[var(--om-border)]" />
 
           <button
             type="button"
@@ -1742,7 +1738,7 @@ export default function RoomAiDesktopPet({
                 { force: true },
               );
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>{petState === 'sleep' ? '☀️' : '😴'}</span>
             <span>{petState === 'sleep' ? '叫醒它' : '让它睡一会儿'}</span>
@@ -1765,7 +1761,7 @@ export default function RoomAiDesktopPet({
                 force: true,
               });
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>📊</span>
             <span>本场听歌账本</span>
@@ -1780,7 +1776,7 @@ export default function RoomAiDesktopPet({
                 setPomodoroRemainingText('25:00');
                 say('🍅 25 分钟专注听歌番茄钟开启！本鱼陪你安心听歌专注做事～', 4500, { force: true });
               }}
-              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
             >
               <span>🍅</span>
               <span>专注听歌番茄钟 (25m)</span>
@@ -1794,7 +1790,7 @@ export default function RoomAiDesktopPet({
                 setPomodoroRemainingText('');
                 say('⏹ 已结束本次专注听歌番茄钟，休息一下听首轻松的歌吧～', 4000, { force: true });
               }}
-              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[#d4551c] transition-colors hover:bg-[#4d6bfe]/12"
+              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[var(--om-warning)] transition-colors hover:bg-[var(--om-surface-hover)]"
             >
               <span>⏹</span>
               <span>结束番茄钟 ({pomodoroRemainingText})</span>
@@ -1808,14 +1804,14 @@ export default function RoomAiDesktopPet({
                 setMenuPos(null);
                 onQuickWake(botName);
               }}
-              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+              className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
             >
               <span>🎤</span>
               <span>@{botName} 帮我点歌</span>
             </button>
           )}
 
-          <div className="my-0.5 h-px bg-[#1e2a52]/10" />
+          <div className="my-0.5 h-px bg-[var(--om-border)]" />
 
           <button
             type="button"
@@ -1826,7 +1822,7 @@ export default function RoomAiDesktopPet({
               updatePref('roamEnabled', !roamEnabled);
               setMenuPos(null);
             }}
-            className="flex items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center justify-between gap-3 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span className="flex items-center gap-2"><span>👣</span><span>走动漫游</span></span>
             <span className="text-xs">{roamEnabled ? '已开启' : '已关闭'}</span>
@@ -1842,7 +1838,7 @@ export default function RoomAiDesktopPet({
                 window.dispatchEvent(new CustomEvent('openmusic:open-room-settings', { detail: { tab: 'chat', section: 'desk-pet' } }));
               }
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#2f4fe0]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>⚙️</span>
             <span>我的桌宠设置</span>
@@ -1854,7 +1850,7 @@ export default function RoomAiDesktopPet({
               setMenuPos(null);
               updatePref('enabled', false);
             }}
-            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[#475280] transition-colors hover:bg-[#4d6bfe]/12 hover:text-[#1e2a52]"
+            className="flex items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[var(--om-text-secondary)] transition-colors hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
           >
             <span>🙈</span>
             <span>收起我的桌宠</span>

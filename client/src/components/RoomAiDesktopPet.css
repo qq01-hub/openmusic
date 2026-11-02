@@ -13,6 +13,15 @@
   font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
   font-weight: 500;
   line-height: 1.5;
+  color: var(--om-text);
+  background: var(--om-surface-raised);
+  border: 1px solid var(--om-border-strong);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+
+.room-desk-pet [data-desk-pet-menu="true"] button:focus-visible {
+  outline: 2px solid var(--om-accent);
+  outline-offset: -2px;
 }
 
 /* 原素材为 640×360 透明画布，命中框只覆盖居中的角色 */
