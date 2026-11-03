@@ -186,6 +186,26 @@ export function getQQFaceItem(id: string): QFaceItem {
   };
 }
 
+/** 仅用于 AI 输出兼容旧数字标记，普通成员输入仍按原协议解析 */
+export function normalizeAiQqFaceText(value: string, { allowFaces = true } = {}): string {
+  return String(value || '')
+    .replace(/\uFFFC/g, '')
+    .replace(/[\[［【]\s*(?:qqface\s*[:：]\s*([^\]\r\n］】]*)|([0-9０-９]+))\s*[\]］】]/gi,
+      (_raw: string, face: string | undefined, number: string | undefined) => {
+        if (!allowFaces) return '';
+        const nameOrId = String(face ?? number ?? '').trim()
+          .replace(/[０-９]/g, (digit) => String(digit.charCodeAt(0) - 0xFF10));
+        const known = fullFacesCache?.find((item) => item.id === nameOrId
+          || item.text.replace(/^\//, '').toLowerCase() === nameOrId.replace(/^\//, '').toLowerCase());
+        if (known) return qqFaceToken(known.id);
+        // 清单加载前仍可使用服务端已规范化的编号，不额外请求整份清单
+        return !fullFacesCache && /^\d{1,4}$/.test(nameOrId) ? qqFaceToken(nameOrId) : '';
+      })
+    .replace(/[\[［【]\s*(?:q|qq|qqf|qqfa|qqfac|qqface)(?:\s*[:：][^\]\r\n］】]*)?$/gi, '')
+    .replace(/[\[［【]\s*[0-9０-９]+\s*$/g, '')
+    .trim();
+}
+
 export function extractQQFaceIds(text: string): string[] {
   const ids: string[] = [];
   for (const match of text.matchAll(QQ_FACE_TOKEN_RE)) {

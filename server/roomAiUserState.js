@@ -1,5 +1,5 @@
 /**
- * 每房间 × 每用户的 AI 状态：关系温度与个性化画像（内存，随房间销毁清理）。
+ * 每房间 × 每用户的 AI 状态：关系、画像与候选，随房间持久化和清理
  */
 import { trimMapByUpdatedAt } from './roomAiMemory.js';
 
@@ -171,7 +171,7 @@ export function recordAiUserInteraction(roomId, userId, payload = {}) {
   if (signals?.preferredCallName) {
     profile.preferredCallName = signals.preferredCallName;
   }
-  if (signals?.rejectedCallName) {
+  if (signals?.rejectedCallName?.reason === 'inappropriate') {
     pushUniqueLimited(profile.notes, `曾要求不当称呼「${signals.rejectedCallName.attempted}」（已拒绝）`, 4);
   }
   if (signals?.likeTopic) {
@@ -269,6 +269,7 @@ export function forgiveAiUserAfterApology(roomId, userId, text) {
   entry.ignoredUntil = 0;
   entry.violationCount = Math.max(0, (entry.violationCount || 0) - 2);
   entry.updatedAt = Date.now();
+  persistHook?.(String(roomId || '').trim().toUpperCase());
   return true;
 }
 
@@ -301,6 +302,7 @@ export function setAiSongCandidates(roomId, userId, songs = []) {
     : [];
   entry.songCandidatesUpdatedAt = Date.now();
   entry.updatedAt = Date.now();
+  persistHook?.(String(roomId || '').trim().toUpperCase());
 }
 
 /** 获取尚未过期的候选；候选按用户隔离，避免串歌。 */

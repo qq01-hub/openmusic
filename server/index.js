@@ -223,7 +223,7 @@ import {
   createChatImageUploadToken,
   isQiniuConfigured,
 } from './qiniuOss.js';
-import { enqueueRoomAiChat } from './roomAiAgent.js';
+import { enqueueRoomAiChat, isRoomAiReply } from './roomAiAgent.js';
 import { getPublicRoomAiConfig, getAiModelConfig, isRoomAiEnabledForRoom, isAiModelEnabled, resolveRoomAiBotName, shouldTriggerRoomAi, stripAiTriggerPrefix } from './aiModelService.js';
 import {
   isApihzStickerConfigured,
@@ -6919,7 +6919,9 @@ io.on('connection', (socket) => {
           return;
         }
       }
-      if (!shouldTriggerRoomAi(triggerText, botName, [], { hasImage })) return;
+      if (!shouldTriggerRoomAi(triggerText, botName, [], {
+        hasImage, isReplyToAi: isRoomAiReply(roomId, result.message),
+      })) return;
       const aiRate = await consumeDistributedSocketRate(socket, 'room-ai', {
         windowMs: 60_000,
         max: 8,

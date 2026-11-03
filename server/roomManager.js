@@ -58,6 +58,7 @@ import {
 } from "./permanentApplication.js";
 import { buildUserRoundRobinOrder, selectNextUserRoundRobinSong } from "./playbackOrder.js";
 import { sanitizeChatSongCards } from "./chatSongCard.js";
+import { normalizeAiQqFaceText } from "./qqFaces.js";
 import { isSongArtistBlocked, filterSongPayloadByArtist } from "./songArtistFilter.js";
 import { incrementMetric } from "./logger.js";
 import { resolveAdminOwnerLastJoinedAt } from "./adminRoomUtils.js";
@@ -6033,18 +6034,20 @@ export function toggleChatReaction(roomId, userId, messageId, emoji) {
 function sanitizeChatReplyRef(replyTo, roomId) {
   if (!replyTo || typeof replyTo !== "object") return null;
   const id = String(replyTo.id || "").trim();
-  const userId = String(replyTo.userId || "").trim();
-  const nickname = String(replyTo.nickname || "")
+  const source = rooms.get(roomId)?.messages?.find((message) => message.id === id);
+  if (!source) return null;
+  const userId = String(source.userId || "").trim();
+  const nickname = String(source.nickname || "")
     .trim()
     .slice(0, 32);
-  const text = String(replyTo.text || "")
+  const text = String(source.text || "")
     .trim()
     .slice(0, 48);
   if (!id || !userId || !nickname) return null;
 
-  const imageUrl = String(replyTo.imageUrl || "").trim();
-  const imageKey = String(replyTo.imageKey || "").trim();
-  const asSticker = Boolean(replyTo.asSticker);
+  const imageUrl = String(source.imageUrl || "").trim();
+  const imageKey = String(source.imageKey || "").trim();
+  const asSticker = Boolean(source.asSticker);
   const result = { id, userId, nickname, text };
   if (asSticker) result.asSticker = true;
 
@@ -6174,7 +6177,7 @@ export function postBotChatMessage(roomId, options = {}) {
   const imageKey = String(options.imageKey || "").trim();
   const asSticker = Boolean(options.asSticker);
   const songs = sanitizeChatSongCards(options.songs);
-  const content = String(options.text || "").trim();
+  const content = normalizeAiQqFaceText(options.text);
 
   if (!content && !imageUrl && songs.length === 0) return { error: "消息不能为空" };
   if (content.length > 500) return { error: "消息过长" };
@@ -6234,6 +6237,8 @@ export function getRoomAiSnapshot(roomId, viewerUserId = null) {
   const uid = String(viewerUserId || '').trim();
   const current = room.current
     ? {
+        id: room.current.id,
+        source: room.current.source,
         name: room.current.name,
         artist: room.current.artist,
         requestedBy: room.current.requestedBy,
@@ -6242,6 +6247,8 @@ export function getRoomAiSnapshot(roomId, viewerUserId = null) {
     : null;
   const queue = (room.queue || []).slice(0, 5).map((item, index) => ({
     index: index + 1,
+    id: item.id,
+    source: item.source,
     name: item.name,
     artist: item.artist,
     requestedBy: item.requestedBy,
@@ -6263,6 +6270,10 @@ export function getRoomAiSnapshot(roomId, viewerUserId = null) {
   return {
     roomName: room.name || room.id,
     onlineCount: room.users?.size || 0,
+    members: Array.from(room.users?.entries() || []).slice(0, 30).map(([memberId, member]) => ({
+      userId: memberId,
+      nickname: member.nickname || "匿名",
+    })),
     queueCount: room.queue?.length || 0,
     isPlaying: Boolean(room.isPlaying),
     playMode: room.playMode || 'order',

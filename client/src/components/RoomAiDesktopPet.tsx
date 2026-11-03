@@ -10,6 +10,7 @@ import { readLocalPlaybackTime } from '../hooks/useSmoothPlaybackTime';
 import { getActiveLyricLine } from '../lib/lyricLookup';
 import { sampleLyricReaction, type LyricReactionMemory } from '../lib/deskPetLyrics';
 import { AI_BOT_USER_ID } from '../lib/chatAi';
+import { normalizeAiQqFaceText } from '../lib/qface';
 import Tooltip from './Tooltip';
 import OriginalPetActionPicker from './OriginalPetActionPicker';
 import DeskPetAppearance from './DeskPetAppearance';
@@ -40,7 +41,6 @@ type PetState =
   | 'happy'
   | 'dizzy'
   | 'angry_bounced'
-  | 'peek_div'
   | 'ponder_button'
   | 'sneak_click'
   | 'surf_progress'
@@ -157,7 +157,6 @@ export default function RoomAiDesktopPet({
   const [facingLeft, setFacingLeft] = useState(false);
   const [tiltDeg, setTiltDeg] = useState(0);
   const [squash, setSquash] = useState<{ sx: number; sy: number }>({ sx: 1, sy: 1 });
-  const [peekSide, setPeekSide] = useState<'left' | 'right' | 'top' | null>(null);
 
   // 气泡、双进度条（音浪能量 + 心情指数）、听歌账本、番茄钟
   const [bubble, setBubble] = useState<{ text: string; aiOnly: boolean } | null>(null);
@@ -213,7 +212,6 @@ export default function RoomAiDesktopPet({
     roamTargetRef.current = null;
     lastInteractRef.current = Date.now();
     autoDozeRef.current = false;
-    setPeekSide(null);
     setTiltDeg(0);
     setOriginalAction(name);
     setPlayKey((serial) => serial + 1);
@@ -379,7 +377,6 @@ export default function RoomAiDesktopPet({
   const handleFeedMusicSnack = useCallback(() => {
     const food = MUSIC_FOODS[Math.floor(Math.random() * MUSIC_FOODS.length)];
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('eat');
     setPlayKey((serial) => serial + 1);
@@ -396,7 +393,6 @@ export default function RoomAiDesktopPet({
   // 摸摸头夸夸
   const handlePatPet = useCallback(() => {
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
-    setPeekSide(null);
     setTiltDeg(0);
     playOriginalAction(UPSTREAM_ANIM.clicks[Math.floor(Math.random() * UPSTREAM_ANIM.clicks.length)]);
     setMoodScore((v) => Math.min(100, v + 12));
@@ -412,27 +408,9 @@ export default function RoomAiDesktopPet({
   const findRoomUiTargets = useCallback(() => {
     if (typeof document === 'undefined') {
       return {
-        panels: [] as Array<{ el: HTMLElement; name: string }>,
         buttons: [] as Array<{ el: HTMLElement; name: string; rect: DOMRect }>,
       };
     }
-    const panelSelectors: Array<{ sel: string; name: string }> = [
-      { sel: '[data-guide="room-queue"]', name: '播放队列' },
-      { sel: '[data-guide="room-chat"]', name: '聊天室' },
-      { sel: '[data-guide="room-search"]', name: '点歌搜索栏' },
-      { sel: '#bottom-bar', name: '底栏播放器' },
-    ];
-    const panels: Array<{ el: HTMLElement; name: string }> = [];
-    for (const item of panelSelectors) {
-      const el = document.querySelector<HTMLElement>(item.sel);
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width > 120 && rect.height > 48) {
-          panels.push({ el, name: item.name });
-        }
-      }
-    }
-
     const rawButtons = Array.from(document.querySelectorAll<HTMLElement>('button'));
     const buttons: Array<{ el: HTMLElement; name: string; rect: DOMRect }> = [];
     for (const btn of rawButtons) {
@@ -464,64 +442,8 @@ export default function RoomAiDesktopPet({
         rect,
       });
     }
-    return { panels, buttons };
+    return { buttons };
   }, []);
-
-  // 动作1：躲在某个房间 div 后面冒个头（Peek）
-  const triggerPeekDivAction = useCallback(() => {
-    const { panels } = findRoomUiTargets();
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    let targetX = w - PET_W - 6;
-    let targetY = Math.round(h * 0.48);
-    let side: 'left' | 'right' | 'top' = 'right';
-    let panelName = '房间面板';
-
-    if (panels.length > 0) {
-      const chosen = panels[Math.floor(Math.random() * panels.length)];
-      const rect = chosen.el.getBoundingClientRect();
-      panelName = chosen.name;
-      if (rect.left > PET_W + 24 && Math.random() < 0.55) {
-        targetX = Math.max(8, rect.left - PET_W * 0.58);
-        targetY = Math.min(h - PET_H - 96, Math.max(70, rect.top + Math.min(140, rect.height * 0.32)));
-        side = 'left';
-      } else if (rect.right < w - 30) {
-        targetX = Math.min(w - PET_W * 0.55, rect.right - PET_W * 0.42);
-        targetY = Math.min(h - PET_H - 96, Math.max(70, rect.top + Math.min(140, rect.height * 0.32)));
-        side = 'right';
-      } else {
-        targetX = Math.min(w - PET_W - 20, Math.max(20, rect.left + rect.width * 0.65));
-        targetY = Math.max(54, rect.top - PET_H * 0.52);
-        side = 'top';
-      }
-    }
-
-    setPeekSide(null);
-    setTiltDeg(0);
-    setPetState('roam');
-    roamTargetRef.current = {
-      x: targetX,
-      y: targetY,
-      speed: 220,
-      onArrive: () => {
-        setPetState('peek_div');
-        setPeekSide(side);
-        setFacingLeft(side === 'right');
-        const peekLines = [
-          `👀 偷偷躲在「${panelName}」后面探个小脑袋听歌，没人发现本鱼吧～`,
-          `🫣 从「${panelName}」边边冒个头！暗中观察今天谁点的歌最好听～`,
-          `🐟 嘿嘿，把尾巴藏在「${panelName}」后面，只露呆毛打节拍 ♪`,
-        ];
-        say(peekLines[Math.floor(Math.random() * peekLines.length)], 5400);
-        if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
-        stateTimerRef.current = window.setTimeout(() => {
-          setPeekSide(null);
-          setTiltDeg(0);
-          setPetState('idle');
-        }, 5500);
-      },
-    };
-  }, [findRoomUiTargets, say]);
 
   // 动作2：在某个房间按钮旁边歪头思考（Ponder Button）
   const triggerPonderButtonAction = useCallback(() => {
@@ -534,7 +456,6 @@ export default function RoomAiDesktopPet({
     const rawY = rect.top + rect.height / 2 - PET_H * 0.65;
     const dest = clampViewportPos(rawX, rawY);
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -571,7 +492,6 @@ export default function RoomAiDesktopPet({
       rect.top + rect.height / 2 - PET_H * 0.62,
     );
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     say(`🐾 嘿嘿，趁没人注意，本鱼悄悄去戳一下「${name}」按钮…`, 2600);
@@ -622,7 +542,6 @@ export default function RoomAiDesktopPet({
     const startX = Math.max(24, Math.round(w * 0.14));
     const endX = Math.min(w - PET_W - 24, Math.round(w * 0.78));
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -663,7 +582,6 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + rect.width * 0.55 - PET_W / 2, rect.top - PET_H * 0.65)
       : clampViewportPos(window.innerWidth * 0.52, window.innerHeight * 0.28);
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -699,7 +617,6 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + 58, rect.top - PET_H + 6)
       : clampViewportPos(48, window.innerHeight - PET_H - 80);
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -733,7 +650,6 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + Math.min(140, rect.width * 0.45), rect.top + Math.min(120, rect.height * 0.35))
       : clampViewportPos(90, window.innerHeight * 0.36);
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -761,7 +677,6 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + rect.width * 0.5 - PET_W / 2, rect.bottom - PET_H - 54)
       : clampViewportPos(window.innerWidth - PET_W - 80, window.innerHeight - PET_H - 130);
 
-    setPeekSide(null);
     setTiltDeg(0);
     setPetState('roam');
     roamTargetRef.current = {
@@ -802,7 +717,7 @@ export default function RoomAiDesktopPet({
       return;
     }
     if (!latestBotMessage?.text || !dialogEnabled) return;
-    const clean = latestBotMessage.text.replace(/\[qqface:[^\]]+\]/gi, '').trim().slice(0, 44);
+    const clean = normalizeAiQqFaceText(latestBotMessage.text, { allowFaces: false }).slice(0, 44);
     if (!clean) return;
     if (!['drag', 'slingshot_aim', 'physics', 'sleep'].includes(stateRef.current)
       && !ONE_SHOT_STATES.has(stateRef.current)) {
@@ -872,7 +787,6 @@ export default function RoomAiDesktopPet({
       && !ONE_SHOT_STATES.has(stateRef.current)) {
       if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
       roamTargetRef.current = null;
-      setPeekSide(null);
       setPetState('work');
     } else if (!working && stateRef.current === 'work') {
       setPetState('idle');
@@ -1019,7 +933,6 @@ export default function RoomAiDesktopPet({
             40 + Math.random() * Math.max(120, w - PET_W - 80),
             72 + Math.random() * Math.max(120, h - PET_H - 180),
           );
-          setPeekSide(null);
           setPetState('roam');
           roamTargetRef.current = { x: dest.x, y: dest.y, speed: 135 };
         });
@@ -1034,7 +947,6 @@ export default function RoomAiDesktopPet({
       if (uiInteractEnabled) {
         actions.push(() => {
           const uiPool = [
-            triggerPeekDivAction,
             triggerPonderButtonAction,
             triggerSneakClickButtonAction,
             triggerSurfProgressAction,
@@ -1077,7 +989,6 @@ export default function RoomAiDesktopPet({
     say,
     triggerDjCoverAction,
     triggerFishQueueAction,
-    triggerPeekDivAction,
     triggerPerchChatAction,
     character,
     playOriginalAction,
@@ -1181,7 +1092,6 @@ export default function RoomAiDesktopPet({
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
     setMenuPos(null);
     setShowActSubmenu(false);
-    setPeekSide(null);
     roamTargetRef.current = null;
 
     lastInteractRef.current = Date.now();
@@ -1341,16 +1251,6 @@ export default function RoomAiDesktopPet({
     : bubble?.aiOnly && !aiEnabled ? '' : bubble?.text || '';
   const listenMins = Math.floor(sessionListenSeconds / 60);
 
-  // 计算躲在 div 后探头时的旋转与位移
-  const peekTransform =
-    petState === 'peek_div'
-      ? peekSide === 'left'
-        ? 'translateX(18px) rotate(26deg)'
-        : peekSide === 'right'
-          ? 'translateX(-18px) rotate(-26deg)'
-          : 'translateY(14px) rotate(12deg)'
-      : `rotate(${tiltDeg}deg)`;
-
   return createPortal(
     <div
       data-desk-pet-root="true"
@@ -1404,16 +1304,16 @@ export default function RoomAiDesktopPet({
               color: '#1e2a52',
               boxShadow: '0 8px 22px rgba(18, 32, 86, 0.3), 0 0 0 1px rgba(120, 150, 255, 0.22)',
             }}
-            className={`pointer-events-none absolute left-1/2 -translate-x-1/2 z-20 w-max max-w-[238px] rounded-[16px] px-[14px] py-[10px] text-[14px] leading-[1.5] transition-all duration-200 ${
+            className={`room-desk-pet__bubble pointer-events-none absolute left-1/2 -translate-x-1/2 z-20 w-max max-w-[min(260px,calc(100vw-24px))] rounded-[16px] px-4 py-3 text-[14px] leading-[1.6] transition-all duration-200 ${
               bubbleFlipBelow ? 'top-[134px]' : 'bottom-[134px]'
             }`}
           >
-            <div className="break-words text-center">{displayBubbleText}</div>
+            <div className="room-desk-pet__bubble-text text-center">{displayBubbleText}</div>
 
             {/* dafeiyu-pet 同款双进度条 (#bubble-bars)：音浪能量 & 心情指数 */}
             {showBubbleBars && (
               <div className="mt-1.5 flex flex-col gap-1 border-t border-dashed border-[#1e2a52]/15 pt-1.5">
-                <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#5a6690]">
+                <div className="flex items-center gap-1.5 text-[11px] font-normal text-[#475280]">
                   <span className="shrink-0 whitespace-nowrap text-left">🎵 音浪</span>
                   <div className="h-[5px] min-w-[72px] flex-1 overflow-hidden rounded-full bg-[#dce3ff]">
                     <div
@@ -1426,7 +1326,7 @@ export default function RoomAiDesktopPet({
                   </div>
                   <span className="w-7 shrink-0 text-right tabular-nums">{Math.round(rhythmEnergy)}%</span>
                 </div>
-                <div className="flex items-center gap-1.5 text-[10px] font-semibold text-[#5a6690]">
+                <div className="flex items-center gap-1.5 text-[11px] font-normal text-[#475280]">
                   <span className="shrink-0 whitespace-nowrap text-left">💖 心情</span>
                   <div className="h-[5px] min-w-[72px] flex-1 overflow-hidden rounded-full bg-[#dce3ff]">
                     <div
@@ -1540,7 +1440,7 @@ export default function RoomAiDesktopPet({
           >
             <div
               style={{
-                transform: peekTransform,
+                transform: `rotate(${tiltDeg}deg)`,
               }}
               className="h-full w-full transition-transform duration-200"
             >
@@ -1622,16 +1522,6 @@ export default function RoomAiDesktopPet({
                 <OriginalPetActionPicker character={character} onPlay={playOriginalAction} />
                 <div className="mt-2 border-t border-[var(--om-border)] pt-2 text-[13px] text-[var(--om-text-secondary)]">音乐房间互动</div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setMenuPos(null);
-                  triggerPeekDivAction();
-                }}
-                className="rounded-[6px] px-2 py-1 text-left hover:bg-[var(--om-surface-hover)] hover:text-[var(--om-text)]"
-              >
-                🫣 躲面板探头
-              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1725,7 +1615,6 @@ export default function RoomAiDesktopPet({
               roamTargetRef.current = null;
               autoDozeRef.current = false;
               lastInteractRef.current = Date.now();
-              setPeekSide(null);
               setTiltDeg(0);
               const nextSleeping = petState !== 'sleep';
               setPetState(nextSleeping ? 'sleep' : baseStateRef.current);
@@ -1880,7 +1769,7 @@ function RoomPetAnimation({ character, facingLeft, state, thinking, originalActi
     : state === 'work' ? 'work'
     : state === 'happy' ? 'happy'
     : state === 'roam' || state === 'surf_progress' ? 'roam'
-    : state === 'peek_div' || state === 'treasure_hot' || state === 'sneak_click' ? 'ponder'
+    : state === 'treasure_hot' || state === 'sneak_click' ? 'ponder'
     : thinking ? 'think' : 'idle';
   return <DeskPetAppearance character={character} animation={animation} facingLeft={facingLeft}
     loop={!ONE_SHOT_STATES.has(state)} playKey={playKey} onComplete={onComplete} />;

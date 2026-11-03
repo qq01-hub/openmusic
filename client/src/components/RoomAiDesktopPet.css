@@ -2,10 +2,31 @@
   font-family: "OpenMusicPet";
   src: url("/desk-pet/shoushou.woff2") format("woff2");
   font-display: swap;
+  font-weight: 400;
+  font-style: normal;
 }
 
 .room-desk-pet {
   font-family: "OpenMusicPet", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+}
+
+.room-desk-pet__bubble {
+  font-weight: 400;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-shadow: none;
+}
+
+.room-desk-pet__bubble-text {
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: 0.025em;
+  overflow-wrap: anywhere;
+}
+
+.room-desk-pet__bubble b {
+  font-weight: 400;
 }
 
 /* 操作菜单使用系统界面字体，避免手写字体在小字号下难以辨认 */

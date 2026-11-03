@@ -353,7 +353,7 @@ export default memo(function MiniPlayer({
           trackClassName="bg-netease-border"
           fillClassName="bg-netease-red"
           showThumb
-          thumbClassName="h-2 w-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+          thumbClassName="h-1.5 w-1.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
         />
       </div>
 

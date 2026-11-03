@@ -1775,7 +1775,7 @@ export default function RoomSettingsModal({
                       disabled={!deskPetEnabled}
                       onChange={(next) => updateDeskPetPref('uiInteractEnabled', next)}
                       label="房间组件调皮互动"
-                      description="在进度条、播放队列、专辑封面和聊天框旁互动，支持躲面板探头与偷戳按钮被弹开"
+                      description="在进度条、播放队列、专辑封面和聊天框旁互动，支持偷戳按钮被弹开"
                     />
 
                     <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5">
