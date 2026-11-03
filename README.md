@@ -259,6 +259,8 @@ npm run package:build # 组装发版包
 |------|------|------|
 | [Mineradio](https://github.com/XxHuberrr/Mineradio) | [@XxHuberrr](https://github.com/XxHuberrr) | 星河粒子、沉浸玻璃质感、舞台歌词等 |
 | [folia-major](https://github.com/chthollyphile/folia-major) | [@chthollyphile](https://github.com/chthollyphile) | 沉浸模式视觉与交互灵感 |
+| [dafeiyu-pet](https://github.com/shenliuyu18/dafeiyu-pet) | [@shenliuyu18](https://github.com/shenliuyu18) | 桌宠角色素材、动作配置与互动实现参考 |
+| [dsh-pet](https://github.com/PC2005-cloud/dsh-pet) | [@PC2005-cloud](https://github.com/PC2005-cloud) | 桌宠原始动画与拖拽、弹射、碰撞等物理算法参考 |
 
 ## 🔗 友情链接
 
