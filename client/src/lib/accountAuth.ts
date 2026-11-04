@@ -209,8 +209,16 @@ export async function fetchAccountProviders(): Promise<AccountProviderStatus> {
   };
 }
 
-export async function requestAccountEmailCode(email: string, turnstileToken = '', purpose: 'register' | 'password-reset' = 'register'): Promise<{ resendAfterSec: number }> {
-  const response = await fetchWithTimeout(purpose === 'password-reset' ? '/api/auth/email/password-reset/code' : '/api/auth/email/code', {
+export async function requestAccountEmailCode(email: string, turnstileToken = '', purpose: 'register' | 'password-reset' | 'bind' = 'register'): Promise<{ resendAfterSec: number }> {
+  if (purpose === 'bind' && !await ensureFreshAccountAccess()) {
+    throw new Error('请先登录账户');
+  }
+  const endpoint = purpose === 'password-reset'
+    ? '/api/auth/email/password-reset/code'
+    : purpose === 'bind'
+      ? '/api/auth/email/bind/code'
+      : '/api/auth/email/code';
+  const response = await fetchWithTimeout(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, turnstileToken }),
@@ -218,6 +226,23 @@ export async function requestAccountEmailCode(email: string, turnstileToken = ''
   const data = await response.json().catch(() => ({})) as { error?: string; resendAfterSec?: number };
   if (!response.ok) throw new Error(data.error || '验证码发送失败');
   return { resendAfterSec: Number(data.resendAfterSec) || 60 };
+}
+
+export async function bindAccountWithEmail(
+  email: string,
+  password: string,
+  code: string,
+  turnstileToken = '',
+): Promise<AccountProfile> {
+  if (!await ensureFreshAccountAccess()) {
+    throw new Error('请先登录账户');
+  }
+  const response = await fetchWithTimeout('/api/auth/email/bind', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password, code, turnstileToken }),
+  }, 15000);
+  return readAccountResponse(response);
 }
 
 export async function resetAccountPasswordWithEmail(email: string, password: string, code: string, turnstileToken = ''): Promise<void> {

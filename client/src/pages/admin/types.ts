@@ -29,6 +29,9 @@ export interface MetingUpstreamStatus {
 
 export interface AdminAuditEntry {
   id: string;
+  outcome?: string;
+  smtpCode?: string;
+  smtpStatus?: number;
   accountId?: string;
   at: number;
   action: string;
@@ -186,6 +189,9 @@ export interface DonationEntry {
   createdAt?: number;
 }
 
+export type AiThinkingAdapter = 'auto' | 'openai' | 'gateway' | 'siliconflow' | 'qwen' | 'deepseek' | 'gemini' | 'kimi' | 'glm' | 'openrouter' | 'vllm' | 'groq' | 'minimax' | 'mistral' | 'ark';
+export type AiThinkingEffort = 'auto' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface AiProviderModel {
   id: string;
   model: string;
@@ -193,6 +199,11 @@ export interface AiProviderModel {
   enabled: boolean;
   supportsVision: boolean;
   enableThinking?: boolean;
+  thinkingAdapter?: AiThinkingAdapter;
+  thinkingEffort?: AiThinkingEffort;
+  thinkingBudgetTokens?: number;
+  /** 模型或中转入口自带联网搜索，开启后不再提供外部搜索工具 */
+  builtinWebSearch?: boolean;
   contextWindowTokens: number;
   sortOrder: number;
 }
@@ -228,6 +239,11 @@ export interface AiModelPool {
   model: string;
   /** 文本模型是否开启深度思考 */
   enableThinking?: boolean;
+  thinkingAdapter?: AiThinkingAdapter;
+  thinkingEffort?: AiThinkingEffort;
+  thinkingBudgetTokens?: number;
+  /** 模型或中转入口自带联网搜索，开启后不再提供外部搜索工具 */
+  builtinWebSearch?: boolean;
   /** 模型上下文窗口 Token 数，默认 256K */
   contextWindowTokens: number;
   maxRequestsPerMinute: number;

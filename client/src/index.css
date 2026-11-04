@@ -370,6 +370,24 @@ body {
   background: #444;
 }
 
+/* 聊天区只在鼠标靠近滚动条时显示，移开后自动收起 */
+.chat-scroll-root::-webkit-scrollbar-thumb,
+.chat-scroll-root:hover::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+.chat-scroll-root {
+  scrollbar-color: transparent transparent;
+}
+.chat-scroll-root.chat-scrollbar-active {
+  scrollbar-color: #444 transparent;
+}
+.chat-scroll-root.chat-scrollbar-active::-webkit-scrollbar-thumb {
+  background: #444;
+}
+.chat-scroll-root.chat-scrollbar-active::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
 *:hover::-webkit-scrollbar-thumb:hover,
 *:focus-within::-webkit-scrollbar-thumb:hover {
   background: #666;
@@ -4034,11 +4052,15 @@ body.immersive-mode #hand-canvas {
 }
 
 /* 队列虚拟列表快速滚动时，避免贵宾边框逐行提升独立 GPU 层及贵宾角标逐帧触发 backdrop-filter 重采样 */
-.room-main-panel--queue .member-queue-shell {
+.queue-scroll-viewport {
+  isolation: isolate;
+}
+
+.queue-scroll-viewport .member-queue-shell {
   will-change: auto;
 }
 
-.room-main-panel--queue .member-badge-shine::before {
+.queue-scroll-viewport .member-badge-shine::before {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }

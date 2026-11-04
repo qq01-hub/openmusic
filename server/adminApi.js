@@ -1083,6 +1083,11 @@ export function mountAdminApi(app, {
       maxRequestsPerMinute: Number.isFinite(draftMaxRequestsPerMinute) ? draftMaxRequestsPerMinute : (savedProvider?.maxRequestsPerMinute ?? savedPool?.maxRequestsPerMinute),
       maxTokensPerMinute: Number.isFinite(draftMaxTokensPerMinute) ? draftMaxTokensPerMinute : (savedProvider?.maxTokensPerMinute ?? savedPool?.maxTokensPerMinute),
       enableThinking: typeof draftEnableThinking === 'boolean' ? draftEnableThinking : savedPool?.enableThinking === true,
+      thinkingAdapter: req.body?.thinkingAdapter ?? savedPool?.thinkingAdapter,
+      thinkingEffort: req.body?.thinkingEffort ?? savedPool?.thinkingEffort,
+      thinkingBudgetTokens: req.body?.thinkingBudgetTokens ?? savedPool?.thinkingBudgetTokens,
+      builtinWebSearch: typeof req.body?.builtinWebSearch === 'boolean' ? req.body.builtinWebSearch : savedPool?.builtinWebSearch === true,
+      testWebSearch: req.body?.testWebSearch === true,
       contextWindowTokens: Number.isFinite(draftContextWindowTokens) ? draftContextWindowTokens : savedPool?.contextWindowTokens,
     };
     const isVisionPool = req.body?.type === 'vision' || req.body?.supportsVision === true || savedPool?.type === 'vision';
@@ -1143,7 +1148,7 @@ export function mountAdminApi(app, {
     const ip = getClientIp?.(req) || req.ip || '';
     const result = setRuntimeConfig(req.body || {});
     if (!result.success) {
-      return res.status(400).json({ error: result.error });
+      return res.status(400).json({ error: result.error, ...(result.code ? { code: result.code } : {}) });
     }
     try {
       const cfg = getRuntimeConfig();

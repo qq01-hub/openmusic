@@ -296,6 +296,25 @@ export function songKey(song: Pick<SearchResult, 'source' | 'id'>): string {
   return `${song.source}-${song.id}`;
 }
 
+/** 仅将歌名或歌手匹配搜索词的收藏提前，其他结果保留原有顺序 */
+export function prioritizeMatchingFavorites(
+  songs: SearchResult[],
+  favoriteIds: ReadonlySet<string>,
+  keyword = '',
+): SearchResult[] {
+  const terms = keyword.trim().split(/\s+/).map(normalizeRelevanceText).filter(Boolean);
+  const favorites: SearchResult[] = [];
+  const others: SearchResult[] = [];
+  for (const song of songs) {
+    const name = normalizeRelevanceText(song.name);
+    const artist = normalizeRelevanceText(song.artist);
+    const matches = !keyword.trim() || (terms.length > 0
+      && terms.every(term => name.includes(term) || artist.includes(term)));
+    (matches && favoriteIds.has(songKey(song)) ? favorites : others).push(song);
+  }
+  return favorites.length ? [...favorites, ...others] : songs;
+}
+
 /** 歌手名规范化，用于分组标题去重 */
 export function artistGroupKey(artist: string): string {
   return normalize(artist);

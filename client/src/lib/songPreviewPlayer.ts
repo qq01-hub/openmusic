@@ -16,7 +16,7 @@ import {
 import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
 
-export type SongPreviewStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
+export type SongPreviewStatus = 'idle' | 'loading' | 'playing' | 'error';
 
 export type SongPreviewState = {
   key: string | null;
@@ -56,7 +56,7 @@ function getOrCreatePreviewAudio(): HTMLAudioElement {
     previewAudio.preload = 'metadata';
     syncPreviewVolume();
     const notifyProgress = () => {
-      if (activeKey && (status === 'playing' || status === 'paused')) notify();
+      if (activeKey && status === 'playing') notify();
     };
     for (const event of ['timeupdate', 'loadedmetadata', 'durationchange', 'seeked']) {
       previewAudio.addEventListener(event, notifyProgress);
@@ -97,12 +97,16 @@ function pauseRoomAudioLocally() {
 function takeOverPreviewAudio() {
   pauseRoomAudioLocally();
   acquireRoomAudio('preview', () => {
-    // 被其它本机播放接管：立即停止试听，避免两路音频同时出声
-    if (previewAudio && !previewAudio.paused) previewAudio.pause();
-    if (status === 'playing' || status === 'loading') {
-      loadToken += 1;
-      previewAbortController?.abort();
-      previewAbortController = null;
+    // 被其它本机播放接管：立即停止试听并销毁试听条，避免两路音频同时出声
+    loadToken += 1;
+    previewAbortController?.abort();
+    previewAbortController = null;
+    if (previewAudio) {
+      previewAudio.pause();
+      previewAudio.removeAttribute('src');
+      previewAudio.load();
+    }
+    if (status !== 'idle' || activeKey !== null) {
       activeKey = null;
       status = 'idle';
       lastError = null;
@@ -118,7 +122,7 @@ function releaseAudio(): boolean {
 function resumeRoomAudioIfNeeded() {
   // 其它本机播放（如聊天音乐卡片）仍占用音频时不要抢回播放
   if (isRoomAudioTakenOver()) return;
-  if (!consumeRoomResumeRequest()) return;
+  consumeRoomResumeRequest();
   const room = useRoomStore.getState().room;
   if (room?.isPlaying) {
     useAudioStore.getState().retryPlayback?.(true);
@@ -126,6 +130,7 @@ function resumeRoomAudioIfNeeded() {
 }
 
 function finishPreview(options: { resumeRoom: boolean }) {
+  const wasActive = status !== 'idle' || activeKey !== null;
   loadToken += 1;
   previewAbortController?.abort();
   previewAbortController = null;
@@ -140,12 +145,12 @@ function finishPreview(options: { resumeRoom: boolean }) {
   lastError = null;
   const released = releaseAudio();
   unregisterRoomAudio('preview');
-  notify();
-  if (options.resumeRoom !== false && released) resumeRoomAudioIfNeeded();
+  if (wasActive || released) notify();
+  if (options.resumeRoom !== false && (wasActive || released)) resumeRoomAudioIfNeeded();
 }
 
 export function getSongPreviewState(): SongPreviewState {
-  const audio = activeKey && (status === 'playing' || status === 'paused') ? previewAudio : null;
+  const audio = activeKey && status === 'playing' ? previewAudio : null;
   const duration = audio && Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 0;
   const currentTime = audio && Number.isFinite(audio.currentTime)
     ? Math.max(0, Math.min(audio.currentTime, duration))
@@ -155,7 +160,7 @@ export function getSongPreviewState(): SongPreviewState {
 
 export function seekSongPreview(time: number, key: string): void {
   if (!previewAudio || activeKey !== key || !Number.isFinite(time)) return;
-  if (status !== 'playing' && status !== 'paused') return;
+  if (status !== 'playing') return;
   const { duration } = getSongPreviewState();
   if (duration <= 0) return;
   previewAudio.currentTime = Math.max(0, Math.min(time, duration));
@@ -187,26 +192,7 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
   if (activeKey === key) {
     if (status === 'loading') return;
     if (status === 'playing') {
-      audio.pause();
-      status = 'paused';
-      notify();
-      return;
-    }
-    if (status === 'paused') {
-      takeOverPreviewAudio();
-      syncPreviewVolume();
-      try {
-        await audio.play();
-        status = 'playing';
-        lastError = null;
-        notify();
-      } catch {
-        lastError = '无法播放试听';
-        status = 'error';
-        notify();
-        releaseAudio();
-        resumeRoomAudioIfNeeded();
-      }
+      finishPreview({ resumeRoom: true });
       return;
     }
     // error：重新拉流

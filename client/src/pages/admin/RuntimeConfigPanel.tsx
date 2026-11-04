@@ -28,6 +28,7 @@ import type {
   CustomMusicApi,
   CustomMusicApiStatus,
   AiModelPool,
+  AiProvider,
   MusicApiOperation,
   MusicApiPlatform,
   RuntimeConfig,
@@ -291,6 +292,46 @@ function formatJsonResponse(value: string): string {
   }
 }
 
+function normalizeLoadedAiProviders(providers: RuntimeConfig['aiProviders']): AiProvider[] {
+  return Array.isArray(providers)
+    ? providers.map((provider, pIdx) => ({
+        ...provider,
+        sortOrder: Number(provider.sortOrder) || (pIdx + 1) * 10,
+        maxRequestsPerMinute: Number(provider.maxRequestsPerMinute) || 1000,
+        maxTokensPerMinute: Number(provider.maxTokensPerMinute) || 50_000,
+        models: Array.isArray(provider.models)
+          ? provider.models.map((m, mIdx) => ({
+              ...m,
+              supportsVision: Boolean(m.supportsVision),
+              enableThinking: Boolean(m.enableThinking),
+              thinkingAdapter: m.thinkingAdapter || 'auto',
+              thinkingEffort: m.thinkingEffort || 'auto',
+              thinkingBudgetTokens: m.thinkingBudgetTokens || 0,
+              builtinWebSearch: m.builtinWebSearch === true,
+              contextWindowTokens: Number(m.contextWindowTokens) || 256 * 1024,
+              sortOrder: Number(m.sortOrder) || (mIdx + 1) * 10,
+            }))
+          : [],
+      }))
+    : [];
+}
+
+function findInvalidAiModel(providers: AiProvider[]): string {
+  for (let pIndex = 0; pIndex < providers.length; pIndex += 1) {
+    const provider = providers[pIndex];
+    const invalidIdx = (provider.models || []).findIndex((m) => {
+      const model = (m.model || '').trim();
+      return !model || /\s/.test(model);
+    });
+    if (invalidIdx >= 0) {
+      return (provider.models[invalidIdx].model || '').trim()
+        ? `第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID 不支持空格`
+        : `请填写第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID`;
+    }
+  }
+  return '';
+}
+
 export default function RuntimeConfigPanel({
   onError,
   securityTab,
@@ -324,6 +365,9 @@ export default function RuntimeConfigPanel({
     usage?: unknown;
     rawResponse?: string;
     curl?: string;
+    thinking?: { adapter?: string; requested?: boolean; active?: boolean; requestedEffort?: string; effectiveEffort?: string | null; budgetTokens?: number };
+    thinkingOutputDetected?: boolean;
+    network?: { mode?: string; requested?: boolean; verified?: boolean; detail?: string };
   } | null>(null);
 
   const applyLoadedConfig = (config: RuntimeConfig) => {
@@ -343,23 +387,7 @@ export default function RuntimeConfigPanel({
       aiVisionModel: config.aiVisionModel || 'Qwen/Qwen3.5-4B',
       aiMaxRequestsPerMinute: Number(config.aiMaxRequestsPerMinute) || 1000,
       aiMaxTokensPerMinute: Number(config.aiMaxTokensPerMinute) || 50_000,
-      aiProviders: Array.isArray(config.aiProviders)
-        ? config.aiProviders.map((provider, pIdx) => ({
-            ...provider,
-            sortOrder: Number(provider.sortOrder) || (pIdx + 1) * 10,
-            maxRequestsPerMinute: Number(provider.maxRequestsPerMinute) || 1000,
-            maxTokensPerMinute: Number(provider.maxTokensPerMinute) || 50_000,
-            models: Array.isArray(provider.models)
-              ? provider.models.map((m, mIdx) => ({
-                  ...m,
-                  supportsVision: Boolean(m.supportsVision),
-                  enableThinking: Boolean(m.enableThinking),
-                  contextWindowTokens: Number(m.contextWindowTokens) || 256 * 1024,
-                  sortOrder: Number(m.sortOrder) || (mIdx + 1) * 10,
-                }))
-              : [],
-          }))
-        : [],
+      aiProviders: normalizeLoadedAiProviders(config.aiProviders),
       aiModelPools: Array.isArray(config.aiModelPools)
         ? config.aiModelPools.map((pool) => ({
             ...pool,
@@ -436,21 +464,11 @@ export default function RuntimeConfigPanel({
 
   const save = async () => {
     if (!draft || saving) return;
-    const providersList = draft.aiProviders || [];
-    for (let pIndex = 0; pIndex < providersList.length; pIndex += 1) {
-      const provider = providersList[pIndex];
-      const invalidIdx = (provider.models || []).findIndex((m) => {
-        const model = (m.model || '').trim();
-        return !model || /\s/.test(model);
-      });
-      if (invalidIdx >= 0) {
-        const model = provider.models[invalidIdx].model || '';
-        onError(model.trim()
-          ? `第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID 不支持空格`
-          : `请填写第 ${pIndex + 1} 个供应商的第 ${invalidIdx + 1} 个模型 ID`);
-        setActiveTab('ai');
-        return;
-      }
+    const invalidModel = findInvalidAiModel(draft.aiProviders || []);
+    if (invalidModel) {
+      onError(invalidModel);
+      setActiveTab('ai');
+      return;
     }
     setSaving(true);
     try {
@@ -1397,6 +1415,34 @@ export default function RuntimeConfigPanel({
     return group ? renderFieldGroup(group) : null;
   };
 
+  const saveAiProviders = async (providers: AiProvider[]): Promise<boolean> => {
+    if (saving) return false;
+    const invalidModel = findInvalidAiModel(providers);
+    if (invalidModel) {
+      onError(invalidModel);
+      return false;
+    }
+    setSaving(true);
+    try {
+      const res = await adminFetch<{ config: RuntimeConfig }>('/api/admin/runtime-config', {
+        method: 'PUT',
+        body: JSON.stringify({ aiProviders: providers }),
+      });
+      const savedProviders = normalizeLoadedAiProviders(res.config.aiProviders);
+      // 只替换刚提交的模型快照，保留其他标签页草稿和保存期间的新修改
+      setDraft((prev) => (prev && prev.aiProviders === providers
+        ? { ...prev, aiProviders: savedProviders, aiModelPools: res.config.aiModelPools }
+        : prev));
+      message.success('模型配置已保存并立即生效');
+      return true;
+    } catch (err) {
+      onError(err instanceof Error ? err.message : '保存模型配置失败');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const runAiTest = async (pool: AiModelPool, mode: 'text' | 'vision' = pool.type) => {
     if (aiTestLoading) return;
     const model = pool.model.trim();
@@ -1424,7 +1470,12 @@ export default function RuntimeConfigPanel({
         maxRequestsPerMinute?: number;
         maxTokensPerMinute?: number;
         enableThinking?: boolean;
+        thinkingAdapter?: AiModelPool['thinkingAdapter'];
+        thinkingEffort?: AiModelPool['thinkingEffort'];
+        thinkingBudgetTokens?: number;
         contextWindowTokens?: number;
+        builtinWebSearch?: boolean;
+        testWebSearch?: boolean;
       } = {
         message: '你好',
         poolId: pool.id,
@@ -1436,7 +1487,12 @@ export default function RuntimeConfigPanel({
         maxRequestsPerMinute: pool.maxRequestsPerMinute,
         maxTokensPerMinute: pool.maxTokensPerMinute,
         ...(mode === 'text' ? { enableThinking: pool.enableThinking === true } : {}),
+        thinkingAdapter: pool.thinkingAdapter || 'auto',
+        thinkingEffort: pool.thinkingEffort || 'auto',
+        thinkingBudgetTokens: pool.thinkingBudgetTokens || 0,
         contextWindowTokens: pool.contextWindowTokens,
+        builtinWebSearch: pool.builtinWebSearch === true,
+        testWebSearch: true,
       };
       // 仅当用户正在编辑密钥时，把草稿 Key 带给测试接口（不落盘）
       if (String(pool.apiKey || '').trim()) {
@@ -1462,6 +1518,9 @@ export default function RuntimeConfigPanel({
         latencyMs?: number;
         error?: string;
         usage?: unknown;
+        thinking?: { adapter?: string; requested?: boolean; active?: boolean; effectiveEffort?: string | null; budgetTokens?: number };
+        thinkingOutputDetected?: boolean;
+        network?: { mode?: string; requested?: boolean; verified?: boolean; detail?: string };
         rawResponse?: string;
         curl?: string;
       };
@@ -1501,8 +1560,10 @@ export default function RuntimeConfigPanel({
       <SettingsSection stacked title="供应商与模型" description="先选择供应商，再添加或调整模型顺序，点击模型的「设置」可配置图像识别、深度思考与上下文窗口">
         <AiModelPoolManager
           providers={draft.aiProviders || []}
-          onChange={(aiProviders) => setDraft({ ...draft, aiProviders })}
+          onChange={(aiProviders) => setDraft((prev) => (prev ? { ...prev, aiProviders } : prev))}
           onTest={(pool, mode) => void runAiTest(pool, mode)}
+          onSave={saveAiProviders}
+          saving={saving}
           testingId={aiTestLoading ? aiTestingPoolId : ''}
         />
       </SettingsSection>
@@ -1511,6 +1572,21 @@ export default function RuntimeConfigPanel({
           {aiTestResult.success !== true && (
             <Typography.Paragraph type={aiTestResult.success === false ? 'danger' : undefined} style={{ margin: 0, whiteSpace: 'pre-wrap' }}>
               {aiTestResult.success === undefined ? '正在测试…' : (aiTestResult.error || '未知错误')}
+            </Typography.Paragraph>
+          )}
+          {aiTestResult.thinking && (
+            <Typography.Paragraph type="secondary">
+              思考协议：{aiTestResult.thinking.adapter}
+              {' · '}配置强度：{aiTestResult.thinking.requestedEffort || 'auto'}
+              {' · '}发送强度：{aiTestResult.thinking.effectiveEffort || '未指定'}
+              {' · '}思考预算：{aiTestResult.thinking.budgetTokens || '默认'}
+              {' · '}请求思考输出：{aiTestResult.thinkingOutputDetected ? '已返回' : '未检测到'}
+            </Typography.Paragraph>
+          )}
+          {aiTestResult.network && (
+            <Typography.Paragraph type="secondary">
+              联网测试：{aiTestResult.network.verified ? '已验证' : '未通过验证'}
+              {aiTestResult.network.detail ? ` · ${aiTestResult.network.detail}` : ''}
             </Typography.Paragraph>
           )}
           {(aiTestResult.curl || aiTestResult.rawResponse) && (
@@ -1663,11 +1739,6 @@ export default function RuntimeConfigPanel({
   );
 
   const tabItems = [
-    {
-      key: 'upgrade',
-      label: '系统升级',
-      children: <SystemUpgradePanel active={activeTab === 'upgrade'} />,
-    },
     ...(securityTab
       ? [{
           key: 'security',
@@ -1760,6 +1831,11 @@ export default function RuntimeConfigPanel({
       key: 'room',
       label: '房间',
       children: roomSection,
+    },
+    {
+      key: 'upgrade',
+      label: '系统升级',
+      children: <SystemUpgradePanel active={activeTab === 'upgrade'} />,
     },
   ];
 

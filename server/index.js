@@ -288,6 +288,8 @@ import {
   EMAIL_CODE_TTL_SEC,
   EMAIL_CODE_RESEND_INTERVAL_SEC,
   requestEmailRegistrationCode,
+  requestEmailBindCode,
+  bindEmailWithPassword,
   requestPasswordResetCode,
   resetPasswordWithEmail,
   registerWithEmail,
@@ -2857,22 +2859,23 @@ app.post('/api/auth/email/password-reset/code', async (req, res) => {
     if (!await verifyAccountChallenge(req, res)) return;
     const result = await requestPasswordResetCode({ email: req.body?.email });
     appendAdminAudit('account_password_reset_code_request', {
-      outcome: 'accepted',
+      outcome: result.deliveryOutcome,
+      ...(result.deliveryReason ? { reason: result.deliveryReason } : {}),
       emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
     }, ip);
     recordAccountAuthMetric('password_reset_code', 'success');
-    return res.json({ ok: true, ...result });
+    return res.json({ ok: true, expiresInSec: result.expiresInSec, resendAfterSec: result.resendAfterSec });
   } catch (error) {
     const outcome = error instanceof AccountAuthError ? error.code : 'error';
     recordAccountAuthMetric('password_reset_code', outcome);
     appendAdminAudit('account_password_reset_code_request', {
       outcome,
+      ...(error.code === 'EMAIL_SEND_FAILED' ? {
+        smtpCode: ['EAUTH', 'ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EENVELOPE', 'EMESSAGE', 'EDNS'].includes(error.cause?.code) ? error.cause.code : 'UNKNOWN',
+        ...(Number.isInteger(error.cause?.responseCode) ? { smtpStatus: error.cause.responseCode } : {}),
+      } : {}),
       emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
     }, ip);
-    // 投递失败保留审计与失败计数，对外仍使用统一受理结果，避免暴露邮箱是否已注册
-    if (error.code === 'EMAIL_SEND_FAILED') {
-      return res.json({ ok: true, expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC });
-    }
     return sendAccountAuthError(res, error);
   }
 });
@@ -2944,6 +2947,80 @@ app.post('/api/auth/email/login', async (req, res) => {
     }
     recordAccountAuthMetric('email_login', error instanceof AccountAuthError ? error.code : 'error');
     void riskControl.recordAuthFailure({ ip, email, code: error.code || 'AUTH_ERROR' }).catch(() => incrementMetric('risk_storage_error_total', { operation: 'auth_failure' }));
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/bind/code', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  try {
+    const account = await requireAccountSession(req, res);
+    if (!account) return;
+    if (!limitAccountEmailCodeIp(`account-email-code:${ip}`)
+      || (email && !limitAccountEmailCodeEmail(`account-email-code:${email}`))) {
+      recordAccountAuthMetric('email_bind_code', 'rate_limited');
+      return res.status(429).json({ error: '验证码发送过于频繁，请稍后重试', code: 'EMAIL_CODE_RATE_LIMITED' });
+    }
+    if (!await verifyAccountChallenge(req, res)) return;
+    const result = await requestEmailBindCode(account.id, { email: req.body?.email });
+    appendAdminAudit('account_email_bind_code_request', {
+      outcome: 'accepted',
+      accountId: account.id,
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    recordAccountAuthMetric('email_bind_code', 'success');
+    return res.json({ ok: true, ...result });
+  } catch (error) {
+    const outcome = error instanceof AccountAuthError ? error.code : 'error';
+    appendAdminAudit('account_email_bind_code_request', {
+      outcome,
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    recordAccountAuthMetric('email_bind_code', outcome);
+    return sendAccountAuthError(res, error);
+  }
+});
+
+app.post('/api/auth/email/bind', async (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const ip = getRequestIp(req);
+  const email = normalizeEmail(req.body?.email);
+  const emailKey = accountLoginEmailKey(email);
+  try {
+    const account = await requireAccountSession(req, res);
+    if (!account) return;
+    if (!limitAccountLogin(`account-email-bind:${ip}`)
+      || (emailKey && !limitAccountLoginEmail(`account-email-bind-email:${emailKey}`))
+      || (emailKey && !limitAccountLoginEmailIp(`account-email-bind-email-ip:${emailKey}:${ip}`))) {
+      recordAccountAuthMetric('email_bind', 'rate_limited');
+      return res.status(429).json({ error: '绑定尝试过于频繁，请稍后重试', code: 'LOGIN_RATE_LIMITED' });
+    }
+    if (!await verifyAccountChallenge(req, res)) return;
+    const updated = await bindEmailWithPassword(account.id, {
+      email: req.body?.email,
+      password: req.body?.password,
+      code: req.body?.code,
+    });
+    appendAdminAudit('account_email_bind', {
+      outcome: 'success',
+      accountId: account.id,
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    recordAccountAuthMetric('email_bind', 'success');
+    return res.json({ ok: true, account: publicAccount(updated) });
+  } catch (error) {
+    const outcome = error instanceof AccountAuthError ? error.code : 'error';
+    appendAdminAudit('account_email_bind', {
+      outcome,
+      emailHash: email ? createHash('sha256').update(email).digest('hex').slice(0, 16) : '',
+    }, ip);
+    recordAccountAuthMetric('email_bind', outcome);
+    if (error.code === 'INVALID_EMAIL_CODE') {
+      void riskControl.recordAuthFailure({ ip, email, code: error.code })
+        .catch(() => incrementMetric('risk_storage_error_total', { operation: 'auth_failure' }));
+    }
     return sendAccountAuthError(res, error);
   }
 });
@@ -6939,6 +7016,7 @@ io.on('connection', (socket) => {
       enqueueRoomAiChat({
         requestId,
         roomId,
+        riskAccountId: socket.data.accountId,
         triggerMessage: result.message,
         userId,
         userNickname: nickname,

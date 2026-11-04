@@ -25,6 +25,7 @@ import { Link } from 'react-router-dom';
 import MusicLoading from './MusicLoading';
 import Toast from './Toast';
 import {
+  bindAccountWithEmail,
   completeWechatAccount,
   consumeAccountAuthReturn,
   fetchAccountProviders,
@@ -53,7 +54,7 @@ import type { AccountRoomSummary, RoomMusicAccounts } from '../types';
 
 const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false };
 
-type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'email-reset' | 'wechat-login' | 'wechat-bind' | 'manage';
+type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'email-reset' | 'email-bind' | 'wechat-login' | 'wechat-bind' | 'manage';
 
 const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: string; description: string }> = {
   linuxdo: { label: 'Linux Do', description: '社区身份' },
@@ -357,14 +358,19 @@ export default function AccountAccess({
       setView('manage');
       setToast({ message: register ? '账户创建完成' : '欢迎回来', type: 'success' });
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '登录失败');
+      const message = reason instanceof Error ? reason.message : '登录失败';
+      if (!register && reason instanceof Error && 'code' in reason && reason.code === 'AUTH_INVALID') {
+        setToast({ message, type: 'error' });
+      } else {
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
       setTurnstileToken(''); setChallengeAttempt(value => value + 1);
     }
   };
 
-  const switchEmailView = (next: 'email-login' | 'email-register' | 'email-reset') => {
+  const switchEmailView = (next: 'email-login' | 'email-register' | 'email-reset' | 'email-bind') => {
     if (submitting) return;
     setError('');
     setPassword('');
@@ -373,6 +379,31 @@ export default function AccountAccess({
     setTurnstileToken('');
     setChallengeAttempt(value => value + 1);
     setView(next);
+  };
+
+  const submitEmailBind = async () => {
+    if (submitting) return;
+    if (!email.trim() || password.length < 8 || password.length > 128 || !/^\d{6}$/.test(code)) {
+      setError('请填写邮箱、至少 8 位密码和 6 位验证码');
+      return;
+    }
+    if (providers.turnstile?.enabled && !turnstileToken) { setError('请先完成人机校验'); return; }
+    setSubmitting(true);
+    setError('');
+    try {
+      const next = await bindAccountWithEmail(email, password, code, turnstileToken);
+      announceAccountSessionChanged();
+      setAccount(next);
+      setPassword('');
+      setCode('');
+      setView('manage');
+      setToast({ message: '邮箱与密码已绑定', type: 'success' });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '邮箱绑定失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+      setTurnstileToken(''); setChallengeAttempt(value => value + 1);
+    }
   };
 
   const submitPasswordReset = async () => {
@@ -410,9 +441,10 @@ export default function AccountAccess({
     setSubmitting(true);
     setError('');
     try {
-      const result = await requestAccountEmailCode(email, turnstileToken, view === 'email-reset' ? 'password-reset' : 'register');
+      const purpose = view === 'email-reset' ? 'password-reset' : view === 'email-bind' ? 'bind' : 'register';
+      const result = await requestAccountEmailCode(email, turnstileToken, purpose);
       setCodeCooldown(result.resendAfterSec);
-      setToast({ message: view === 'email-reset' ? '如该邮箱已注册，验证码将发送至邮箱，请留意收件箱及垃圾邮件' : '验证码已发送', type: 'success' });
+      setToast({ message: '验证码已发送', type: 'success' });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '验证码发送失败');
     } finally {
@@ -501,6 +533,8 @@ export default function AccountAccess({
       ? '微信文件传输助手登录'
       : view === 'email-register'
         ? '创建账户'
+        : view === 'email-bind'
+          ? '绑定邮箱与密码'
         : view === 'email-reset'
           ? '找回密码'
         : view === 'email-login'
@@ -537,7 +571,7 @@ export default function AccountAccess({
         <div className="account-dialog-header mb-5 flex items-center justify-between pb-4">
           <div className="flex items-center gap-3">
             {!['welcome', 'manage'].includes(view) && (
-              <button type="button" disabled={submitting} onClick={() => { setError(''); if (view === 'email-reset') switchEmailView('email-login'); else setView(getAccountAccessBackView(view, Boolean(account))); }} className="account-icon-button rounded-xl p-2 text-netease-muted transition disabled:opacity-50" aria-label="返回">
+              <button type="button" disabled={submitting} onClick={() => { setError(''); if (view === 'email-reset') switchEmailView('email-login'); else if (view === 'email-bind') { setPassword(''); setCode(''); setTurnstileToken(''); setView('manage'); } else setView(getAccountAccessBackView(view, Boolean(account))); }} className="account-icon-button rounded-xl p-2 text-netease-muted transition disabled:opacity-50" aria-label="返回">
                 <ArrowLeft className="h-4 w-4" />
               </button>
             )}
@@ -618,22 +652,23 @@ export default function AccountAccess({
           </div>
         )}
 
-        {required && view !== 'wechat-login' && view !== 'wechat-bind' && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
+        {required && view !== 'wechat-login' && view !== 'wechat-bind' && view !== 'email-bind' && <Link to="/" className="mt-4 flex min-h-11 items-center justify-center rounded-xl text-sm text-netease-muted transition-colors hover:bg-white/5 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">返回首页，先逛逛</Link>}
 
-        {(view === 'email-login' || view === 'email-register' || view === 'email-reset') && (
-          <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (view === 'email-reset') void submitPasswordReset(); else void submitEmail(view === 'email-register'); }}>
+        {(view === 'email-login' || view === 'email-register' || view === 'email-reset' || view === 'email-bind') && (
+          <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (view === 'email-reset') void submitPasswordReset(); else if (view === 'email-bind') void submitEmailBind(); else void submitEmail(view === 'email-register'); }}>
             {view === 'email-reset' && <p className="text-sm leading-6 text-netease-muted">使用注册邮箱接收验证码并设置新密码，重置后所有设备需要重新登录</p>}
-            <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">邮箱地址</span><input type="email" value={email} disabled={submitting} required maxLength={254} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="home-modal-input w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/28" placeholder={view === 'email-register' ? 'name@qq.com' : 'name@example.com'} />{view === 'email-register' && <span className="mt-2 block pl-1 text-xs leading-5 text-netease-muted">仅支持 QQ、163、Gmail、Outlook 等常见公共邮箱，不支持自定义域名或企业邮箱<br />已有账户仍可使用原邮箱登录</span>}</label>
-            <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">{view === 'email-reset' ? '新密码' : '密码'}</span><input type="password" value={password} disabled={submitting} onChange={(event) => setPassword(event.target.value)} autoComplete={view === 'email-login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required className="home-modal-input w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/28" placeholder="8–128 位" /></label>
+            {view === 'email-bind' && <p className="text-sm leading-6 text-netease-muted">验证邮箱并设置密码后，可使用邮箱与密码登录当前账户</p>}
+            <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">邮箱地址</span><input type="email" value={email} disabled={submitting} required maxLength={254} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="home-modal-input w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/28" placeholder={view === 'email-register' || view === 'email-bind' ? 'name@qq.com' : 'name@example.com'} />{view === 'email-register' && <span className="mt-2 block pl-1 text-xs leading-5 text-netease-muted">仅支持 QQ、163、Gmail、Outlook 等常见公共邮箱，不支持自定义域名或企业邮箱<br />已有账户仍可使用原邮箱登录</span>}{view === 'email-bind' && <span className="mt-2 block pl-1 text-xs leading-5 text-netease-muted">仅支持 QQ、163、Gmail、Outlook 等常见公共邮箱，不支持自定义域名或企业邮箱</span>}</label>
+            <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">{view === 'email-reset' ? '新密码' : view === 'email-bind' ? '设置密码' : '密码'}</span><input type="password" value={password} disabled={submitting} onChange={(event) => setPassword(event.target.value)} autoComplete={view === 'email-login' ? 'current-password' : 'new-password'} minLength={8} maxLength={128} required className="home-modal-input w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/28" placeholder="8–128 位" /></label>
             {view === 'email-reset' && <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">确认新密码</span><input type="password" value={confirmPassword} disabled={submitting} onChange={(event) => setConfirmPassword(event.target.value)} autoComplete="new-password" minLength={8} maxLength={128} required className="home-modal-input w-full rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm text-white outline-none transition focus:border-white/28" placeholder="再次输入新密码" /></label>}
-            {view === 'email-register' || view === 'email-reset' ? (
+            {view === 'email-register' || view === 'email-reset' || view === 'email-bind' ? (
               <label className="block"><span className="mb-2 block pl-1 text-xs font-medium text-netease-muted">邮箱验证码</span><span className="flex gap-2"><input inputMode="numeric" autoComplete="one-time-code" required pattern="[0-9]{6}" disabled={submitting} value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))} className="home-modal-input min-w-0 flex-1 rounded-xl border border-white/10 bg-white/[0.045] px-4 py-3.5 text-sm tracking-[0.2em] text-white outline-none transition focus:border-white/28" placeholder="6 位验证码" /><button type="button" disabled={submitting || codeCooldown > 0} onClick={() => void sendCode()} className="rounded-xl border border-white/10 bg-white/[0.07] px-4 text-xs font-medium text-white disabled:opacity-45">{codeCooldown > 0 ? `${codeCooldown}s` : '发送验证码'}</button></span></label>
             ) : null}
             {providers.turnstile?.enabled && <HumanVerification key={`${view}:${challengeAttempt}`} siteKey={providers.turnstile.siteKey} onToken={setTurnstileToken} />}
             {error && <p role="alert" className="rounded-2xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</p>}
-            <button type="submit" disabled={submitting} className="account-primary-button flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white transition disabled:opacity-50">{submitting && <Loader2 className="h-4 w-4 animate-spin" />}{view === 'email-reset' ? '重置密码' : view === 'email-register' ? '创建并登录' : '登录'}</button>
+            <button type="submit" disabled={submitting} className="account-primary-button flex w-full items-center justify-center gap-2 rounded-2xl py-3.5 text-sm font-semibold text-white transition disabled:opacity-50">{submitting && <Loader2 className="h-4 w-4 animate-spin" />}{view === 'email-reset' ? '重置密码' : view === 'email-bind' ? '绑定邮箱与密码' : view === 'email-register' ? '创建并登录' : '登录'}</button>
             {view === 'email-login' && <button type="button" disabled={submitting} onClick={() => switchEmailView('email-reset')} className="w-full py-2 text-sm text-netease-muted transition hover:text-white disabled:opacity-50">忘记密码？</button>}
-            <button type="button" disabled={submitting} onClick={() => switchEmailView(view === 'email-login' ? 'email-register' : 'email-login')} className="w-full py-2 text-sm text-netease-muted transition hover:text-white disabled:opacity-50">{view === 'email-reset' ? '返回邮箱登录' : view === 'email-register' ? '已有账户？返回登录' : '没有账户？使用邮箱注册'}</button>
+            {view !== 'email-bind' && <button type="button" disabled={submitting} onClick={() => switchEmailView(view === 'email-login' ? 'email-register' : 'email-login')} className="w-full py-2 text-sm text-netease-muted transition hover:text-white disabled:opacity-50">{view === 'email-reset' ? '返回邮箱登录' : view === 'email-register' ? '已有账户？返回登录' : '没有账户？使用邮箱注册'}</button>}
           </form>
         )}
 
@@ -676,9 +711,15 @@ export default function AccountAccess({
                   {accountRooms.length > 0 ? accountRooms.map((room) => <Link key={room.id} to={`/room/${room.id}`} onClick={() => setPanelOpen(false)} className="account-row flex items-center justify-between rounded-xl px-3 py-2.5 transition"><span className="min-w-0"><span className="block truncate text-sm text-white">{room.name}</span><span className="mt-0.5 block text-xs text-white/40">{room.id} · {room.userCount} 人在线</span></span><ChevronRight className="h-4 w-4 text-white/35" /></Link>) : <p className="py-2 text-xs text-white/40">还没有创建房间</p>}
                 </div>
               </div>
-              {account.hasPassword && (
-                <div className="account-section-card flex items-center gap-3 rounded-2xl p-3.5"><span className="account-provider-icon flex h-9 w-9 items-center justify-center rounded-xl"><Mail className="h-4 w-4" /></span><span className="flex-1"><span className="block text-sm font-medium text-white">邮箱与密码</span><span className="block truncate text-xs text-netease-muted">{account.email}</span></span><span className="text-xs text-emerald-300/80">已启用</span></div>
-              )}
+              <div className="account-section-card flex items-center gap-3 rounded-2xl p-3.5">
+                <span className="account-provider-icon flex h-9 w-9 items-center justify-center rounded-xl"><Mail className="h-4 w-4" /></span>
+                <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-white">邮箱与密码</span><span className="block truncate text-xs text-netease-muted">{account.hasPassword ? account.email : '尚未绑定'}</span></span>
+                {account.hasPassword ? (
+                  <span className="text-xs text-emerald-300/80">已启用</span>
+                ) : (
+                  <button type="button" onClick={() => { setEmail(''); switchEmailView('email-bind'); }} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/65 transition hover:bg-white/[0.07] hover:text-white">绑定</button>
+                )}
+              </div>
               {(['wechat', 'linuxdo', 'github'] as const).map((provider) => {
                 const identity = identityMap.get(provider);
                 const enabled = providers[provider];

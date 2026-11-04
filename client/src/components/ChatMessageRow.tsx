@@ -148,9 +148,7 @@ function renderMessageText(
 
 function normalizeAiRichText(value: string) {
   return normalizeAiQqFaceText(value)
-    .replace(/\r\n?/g, '\n')
-    .replace(/你可以把喜欢的歌用\s*`?request_song`?\s*点上(?:哦)?/gi, '喜欢哪首直接告诉我，我来帮你点上')
-    .replace(/([^\n])\s+(?=\d{1,2}[.、]\s+\*\*)/g, '$1\n');
+    .replace(/\r\n?/g, '\n');
 }
 
 function renderAiInlineText(
@@ -205,10 +203,15 @@ function AiMessageContent({
 }) {
   // 先规范完整文本再逐字显示，避免动画暴露半截表情前缀或改变文本长度
   const messageText = normalizeAiRichText(rawMessageText);
-  const aiThoughts = rawAiThoughts?.filter((step) => !/^思考推理[：:]/.test(step.trim()));
+  const aiThoughts = (rawAiThoughts || [])
+      .map((step) => normalizeAiQqFaceText(String(step || '').trim(), { allowFaces: false }))
+      .filter((step) => step && !/^思考推理[：:]/.test(step));
   const shouldAnimate = useRef<boolean>(
     !animatedAiMessageIds.has(msgId) && timestamp > 0 && Date.now() - timestamp < 12_000,
   );
+  const resizeCallback = useRef(onContentResize);
+  resizeCallback.current = onContentResize;
+  const animationProgress = useRef(0);
   const [visibleChars, setVisibleChars] = useState<number>(() =>
     shouldAnimate.current ? 0 : messageText.length,
   );
@@ -221,19 +224,24 @@ function AiMessageContent({
     }
     animatedAiMessageIds.add(msgId);
     const total = messageText.length;
-    if (total <= 0) return;
+    if (total <= 0) {
+      shouldAnimate.current = false;
+      return;
+    }
     const step = Math.max(1, Math.ceil(total / 42));
-    let current = 0;
+    let current = animationProgress.current;
     const timer = window.setInterval(() => {
       current = Math.min(total, current + step);
+      animationProgress.current = current;
       setVisibleChars(current);
-      onContentResize?.();
+      resizeCallback.current?.();
       if (current >= total) {
+        shouldAnimate.current = false;
         window.clearInterval(timer);
       }
     }, 22);
     return () => window.clearInterval(timer);
-  }, [msgId, messageText, onContentResize]);
+  }, [msgId, messageText]);
 
   const displayedText = visibleChars >= messageText.length
     ? messageText
@@ -622,6 +630,17 @@ function ChatMessageRow({
                   </div>
                 )}
                 {renderPhotoContent()}
+                {isAiBot ? (
+                  <AiMessageContent
+                    msgId={msg.id}
+                    timestamp={msg.timestamp}
+                    messageText={msg.text || ''}
+                    aiThoughts={msg.aiThoughts}
+                    chatScrollRoot={chatScrollRoot}
+                    nicknames={nicknames}
+                    onContentResize={onContentResize}
+                  />
+                ) : msg.text ? renderMessageText(msg.text, 'message', chatScrollRoot, nicknames) : null}
                 {msg.songs?.length ? (
                   <div className={`flex flex-col gap-1.5 ${msg.text ? 'mt-1.5' : ''}`}>
                     {msg.songs.map((card) => (
@@ -634,21 +653,6 @@ function ChatMessageRow({
                     ))}
                   </div>
                 ) : null}
-                {msg.text
-                  ? isAiBot
-                    ? (
-                      <AiMessageContent
-                        msgId={msg.id}
-                        timestamp={msg.timestamp}
-                        messageText={msg.text}
-                        aiThoughts={msg.aiThoughts}
-                        chatScrollRoot={chatScrollRoot}
-                        nicknames={nicknames}
-                        onContentResize={onContentResize}
-                      />
-                    )
-                    : renderMessageText(msg.text, 'message', chatScrollRoot, nicknames)
-                  : null}
               </div>
             )}
             {aiProcessing && (

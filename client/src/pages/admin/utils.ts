@@ -61,6 +61,23 @@ export function formatRelativeTime(at: number | null | undefined): string {
 
 export function formatAuditAction(entry: AdminAuditEntry) {
   switch (entry.action) {
+    case 'account_email_code_request':
+    case 'account_password_reset_code_request': {
+      const label = entry.action === 'account_password_reset_code_request' ? '找回密码发码' : '注册邮箱发码';
+      const reasons: Record<string, string> = {
+        account_missing: '未找到邮箱账户',
+        email_mismatch: '账户邮箱不匹配',
+        password_missing: '账户未设置邮箱密码',
+        email_unverified: '账户邮箱未验证',
+      };
+      if (entry.outcome === 'smtp_accepted') return `${label} · 已提交 SMTP`;
+      if (entry.outcome === 'not_sent') return `${label} · 未发信（${reasons[entry.reason || ''] || '未满足发信条件'}）`;
+      if (entry.outcome === 'EMAIL_SEND_FAILED') return `${label} · 发送失败${entry.smtpCode ? `（${entry.smtpCode}${entry.smtpStatus ? ` / ${entry.smtpStatus}` : ''}）` : ''}`;
+      if (entry.outcome === 'accepted') {
+        return `${label} · ${entry.action === 'account_email_code_request' ? '已提交邮箱服务' : '已受理，未记录实际发信结果'}`;
+      }
+      return `${label} · ${entry.outcome || '未记录执行结果'}`;
+    }
     case 'login_ok': {
       if (entry.via === 'linuxdo') return `登录成功（Linux.do：${entry.linuxdoUsername || ''}）`;
       if (entry.via === 'github') return `登录成功（GitHub：${entry.githubUsername || ''}）`;

@@ -8,6 +8,7 @@ import { normalizeMusicApis } from './customMusicApi.js';
 import { buildPublicSiteSeo } from './seoFiles.js';
 import { normalizeMusicSourcesEnabled } from './musicSources.js';
 import { normalizeArtistFilterKeywords } from './songArtistFilter.js';
+import { normalizeAiThinkingAdapter, normalizeAiThinkingEffort, normalizeAiThinkingBudget } from './aiThinking.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_PATH = path.join(__dirname, 'runtimeConfig.json');
@@ -487,6 +488,10 @@ function normalizeAiProviderModels(value) {
       enabled: item?.enabled !== false,
       supportsVision: item?.supportsVision === true || item?.type === 'vision',
       enableThinking: item?.enableThinking === true,
+      thinkingAdapter: normalizeAiThinkingAdapter(item?.thinkingAdapter),
+      thinkingEffort: normalizeAiThinkingEffort(item?.thinkingEffort),
+      thinkingBudgetTokens: normalizeAiThinkingBudget(item?.thinkingBudgetTokens),
+      builtinWebSearch: item?.builtinWebSearch === true,
       contextWindowTokens: normalizeAiRateLimit(item?.contextWindowTokens, 256 * 1024, 4 * 1024, 2048 * 1024),
       sortOrder: normalizeAiRateLimit(item?.sortOrder ?? item?.priority ?? (out.length + 1) * 10, (out.length + 1) * 10, 1, 1000),
     });
@@ -526,6 +531,10 @@ function migratePoolsToAiProviders(pools) {
       if (pool.type === 'vision' || pool.supportsVision) existingModel.supportsVision = true;
       if (pool.enabled) existingModel.enabled = true;
       if (pool.enableThinking) existingModel.enableThinking = true;
+      if (pool.builtinWebSearch) existingModel.builtinWebSearch = true;
+      if (existingModel.thinkingAdapter === 'auto') existingModel.thinkingAdapter = normalizeAiThinkingAdapter(pool.thinkingAdapter);
+      if (existingModel.thinkingEffort === 'auto') existingModel.thinkingEffort = normalizeAiThinkingEffort(pool.thinkingEffort);
+      if (!existingModel.thinkingBudgetTokens) existingModel.thinkingBudgetTokens = normalizeAiThinkingBudget(pool.thinkingBudgetTokens);
       existingModel.sortOrder = Math.min(existingModel.sortOrder, pool.priority);
     } else if (pool.model) {
       group.models.push({
@@ -535,6 +544,10 @@ function migratePoolsToAiProviders(pools) {
         enabled: pool.enabled !== false,
         supportsVision: pool.type === 'vision' || pool.supportsVision === true,
         enableThinking: pool.enableThinking === true,
+        thinkingAdapter: normalizeAiThinkingAdapter(pool.thinkingAdapter),
+        thinkingEffort: normalizeAiThinkingEffort(pool.thinkingEffort),
+        thinkingBudgetTokens: normalizeAiThinkingBudget(pool.thinkingBudgetTokens),
+        builtinWebSearch: pool.builtinWebSearch === true,
         contextWindowTokens: pool.contextWindowTokens,
         sortOrder: pool.priority,
       });
@@ -590,6 +603,10 @@ function flattenAiProvidersToPools(providers, fallbackPools = []) {
         apiKey: provider.apiKey,
         model: modelItem.model,
         enableThinking: modelItem.enableThinking === true,
+        thinkingAdapter: normalizeAiThinkingAdapter(modelItem.thinkingAdapter),
+        thinkingEffort: normalizeAiThinkingEffort(modelItem.thinkingEffort),
+        thinkingBudgetTokens: normalizeAiThinkingBudget(modelItem.thinkingBudgetTokens),
+        builtinWebSearch: modelItem.builtinWebSearch === true,
         contextWindowTokens: modelItem.contextWindowTokens,
         maxRequestsPerMinute: provider.maxRequestsPerMinute,
         maxTokensPerMinute: provider.maxTokensPerMinute,
@@ -619,6 +636,10 @@ function normalizeAiModelPools(value) {
       // 否则后台新增模型后尚未填写模型 ID 即保存，会被错误变成 Qwen/Qwen3-8B。
       model: normalizeAiModelField(item?.model, ''),
       ...(type === 'text' ? { enableThinking: item?.enableThinking === true } : {}),
+      thinkingAdapter: normalizeAiThinkingAdapter(item?.thinkingAdapter),
+      thinkingEffort: normalizeAiThinkingEffort(item?.thinkingEffort),
+      thinkingBudgetTokens: normalizeAiThinkingBudget(item?.thinkingBudgetTokens),
+      builtinWebSearch: item?.builtinWebSearch === true,
       contextWindowTokens: normalizeAiRateLimit(item?.contextWindowTokens, 256 * 1024, 4 * 1024, 2048 * 1024),
       maxRequestsPerMinute: normalizeAiRateLimit(item?.maxRequestsPerMinute, 1000, 1, 10_000),
       maxTokensPerMinute: normalizeAiRateLimit(item?.maxTokensPerMinute, 50_000, 1_000, 2_000_000),
@@ -780,6 +801,17 @@ export function getRuntimeConfigForAdmin() {
 }
 
 export function setRuntimeConfig(raw = {}) {
+  try {
+    const models = Array.isArray(raw.aiProviders)
+      ? raw.aiProviders.flatMap((provider) => Array.isArray(provider?.models) ? provider.models : [])
+      : Array.isArray(raw.aiModelPools) ? raw.aiModelPools : [];
+    for (const model of models) {
+      normalizeAiThinkingEffort(model?.thinkingEffort);
+      normalizeAiThinkingBudget(model?.thinkingBudgetTokens);
+    }
+  } catch (error) {
+    return { success: false, error: error.message, code: error.code };
+  }
   if (Object.hasOwn(raw, 'blockedArtistKeywords')) {
     try {
       normalizeArtistFilterKeywords(raw.blockedArtistKeywords);

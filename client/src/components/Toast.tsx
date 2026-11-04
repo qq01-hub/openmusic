@@ -11,12 +11,17 @@ interface Props {
 
 export default function Toast({ message, type = 'success', onClose, duration = 3000 }: Props) {
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(onClose, duration);
+    timerRef.current = setTimeout(() => onCloseRef.current(), duration);
     return () => clearTimeout(timerRef.current);
-  }, [message, type, onClose, duration]);
+  }, [message, type, duration]);
 
   const isSuccess = type === 'success';
 

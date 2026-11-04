@@ -4,7 +4,6 @@ import {
   compactAiToolResultForModel,
   compactAssistantToolTurn,
   compactReplyContextForPrompt,
-  sanitizeAiUserFacingText,
 } from './roomAiAgent.js';
 
 test('工具结果发给模型前只保留可决策字段', () => {
@@ -36,9 +35,9 @@ test('工具结果发给模型前只保留可决策字段', () => {
   assert.deepEqual(status.queue, [{ index: 1, id: '2', server: 'tencent', name: '稻香', artist: '周杰伦' }]);
 });
 
-test('普通回复中的工具名不做无差别替换，只拦截明确泄漏写法', () => {
-  assert.equal(sanitizeAiUserFacingText('search_songs 是内部工具名吗？'), 'search_songs 是内部工具名吗？');
-  assert.equal(sanitizeAiUserFacingText('我会调用 `search_songs` 帮你找歌'), '我会调用搜歌功能帮你找歌');
+test('模型回复在上下文中保留原文，不用固定话术替换', () => {
+  const text = '我会调用 `search_songs` 帮你找歌';
+  assert.equal(compactAssistantToolTurn({ content: text }).content, text);
 });
 
 test('引用图片上下文不把原始图片地址重复注入文本模型', () => {

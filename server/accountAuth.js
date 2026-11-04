@@ -8,6 +8,10 @@ import { ACCOUNT_ACCESS_TTL_SEC, ACCOUNT_TOKEN_KEY_PREFIX, createAccountTokenSer
 import { riskChallengeChannel } from './riskChallengeBus.js';
 import { riskControl } from './riskControl.js';
 import { isReservedBotNickname } from './chatAiAuth.js';
+import { createLogger } from './logger.js';
+
+const emailLogger = createLogger('account-email');
+const authLogger = createLogger('account-auth');
 
 const scrypt = promisify(scryptCallback);
 
@@ -51,8 +55,8 @@ const REGISTRATION_EMAIL_DOMAINS = new Set([
 const EXTERNAL_IDENTITY_PROVIDERS = new Set(['linuxdo', 'github', 'wechat']);
 
 export class AccountAuthError extends Error {
-  constructor(code, message, status = 400) {
-    super(message);
+  constructor(code, message, status = 400, options) {
+    super(message, options);
     this.name = 'AccountAuthError';
     this.code = code;
     this.status = status;
@@ -179,8 +183,12 @@ export async function verifyPassword(password, record) {
       PASSWORD_SCRYPT_OPTIONS,
     );
     return safeEqualText(Buffer.from(derived).toString('hex'), record.hash);
-  } catch {
-    return false;
+  } catch (error) {
+    authLogger.error('邮箱密码校验计算失败', {
+      cryptoCode: ['ERR_CRYPTO_OPERATION_FAILED', 'ERR_CRYPTO_INVALID_SCRYPT_PARAMS', 'ERR_CRYPTO_SCRYPT_NOT_SUPPORTED'].includes(error?.code)
+        ? error.code : 'UNKNOWN',
+    });
+    throw new AccountAuthError('ACCOUNT_SERVICE_ERROR', '账户服务暂不可用，请稍后重试', 503, { cause: error });
   }
 }
 
@@ -242,12 +250,25 @@ async function sendRegistrationCodeBySmtp({ email, code, purpose = 'register' })
     await transporter.sendMail({
       from,
       to: email,
-      subject: purpose === 'password-reset' ? 'OpenMusic 找回密码验证码' : 'OpenMusic 注册验证码',
+      subject: purpose === 'password-reset'
+        ? 'OpenMusic 找回密码验证码'
+        : purpose === 'bind'
+          ? 'OpenMusic 绑定邮箱验证码'
+          : 'OpenMusic 注册验证码',
       text: purpose === 'password-reset'
         ? `你的 OpenMusic 找回密码验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人\n如果不是你本人操作，请忽略本邮件`
-        : `你的 OpenMusic 注册验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人`,
+        : purpose === 'bind'
+          ? `你的 OpenMusic 绑定邮箱验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人\n如果不是你本人操作，请忽略本邮件`
+          : `你的 OpenMusic 注册验证码是：${code}\n验证码 ${Math.floor(EMAIL_CODE_TTL_SEC / 60)} 分钟内有效，请勿泄露给他人`,
     });
+    emailLogger.info('验证码邮件已提交 SMTP', { purpose, emailHash: emailHash(email).slice(0, 16) });
   } catch (error) {
+    emailLogger.warn('验证码邮件提交 SMTP 失败', {
+      purpose,
+      emailHash: emailHash(email).slice(0, 16),
+      smtpCode: ['EAUTH', 'ECONNECTION', 'ETIMEDOUT', 'ESOCKET', 'EENVELOPE', 'EMESSAGE', 'EDNS'].includes(error?.code) ? error.code : 'UNKNOWN',
+      smtpStatus: Number.isInteger(error?.responseCode) ? error.responseCode : null,
+    });
     throw new AccountAuthError('EMAIL_SEND_FAILED', '验证码发送失败，请稍后重试', 502, { cause: error });
   }
 }
@@ -454,6 +475,16 @@ export function createAccountAuthService({
     if (!email) throw new AccountAuthError('INVALID_EMAIL', '请输入有效的邮箱地址', 400);
     const store = ensureStore(getStore, isStoreReady);
     if (sendCode === sendRegistrationCodeBySmtp) assertSmtpConfigured();
+    const id = await store.get(emailIndexKey(email));
+    const account = id ? await getAccountById(id) : null;
+    if (!account || account.email !== email || !account.password || !account.emailVerifiedAt) {
+      const reason = !account ? 'account_missing' : account.email !== email ? 'email_mismatch' : !account.password ? 'password_missing' : 'email_unverified';
+      emailLogger.info('找回密码请求未满足发信条件', {
+        emailHash: emailHash(email).slice(0, 16),
+        reason,
+      });
+      throw new AccountAuthError('EMAIL_NOT_REGISTERED', '该邮箱未注册', 404);
+    }
     const purpose = 'password-reset';
     const cooldownKey = emailCodeCooldownKey(email, purpose);
     const cooldown = await store.set(cooldownKey, '1', { NX: true, EX: EMAIL_CODE_RESEND_INTERVAL_SEC });
@@ -461,10 +492,6 @@ export function createAccountAuthService({
       throw new AccountAuthError('EMAIL_CODE_RATE_LIMITED', '验证码发送过于频繁，请稍后重试', 429);
     }
     const result = { expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC };
-    const id = await store.get(emailIndexKey(email));
-    const account = id ? await getAccountById(id) : null;
-    // 未注册邮箱同样返回受理结果，避免通过找回入口查询账户是否存在
-    if (!account || account.email !== email || !account.password || !account.emailVerifiedAt) return result;
     const codeKey = emailCodeKey(email, purpose);
     const attemptsKey = emailCodeAttemptsKey(email, purpose);
     const code = createCode();
@@ -475,11 +502,12 @@ export function createAccountAuthService({
       await store.set(attemptsKey, '0', { EX: EMAIL_CODE_TTL_SEC });
       await sendCode({ email, code, purpose });
     } catch (error) {
-      // 投递失败仍保留冷却，避免通过重试行为判断邮箱是否已注册
-      await store.del([codeKey, attemptsKey]);
+      await store.del(codeKey);
+      await store.del(attemptsKey);
+      await store.del(cooldownKey);
       throw error;
     }
-    return result;
+    return { ...result, deliveryOutcome: 'smtp_accepted' };
   }
 
   async function resetPasswordWithEmail({ email: rawEmail, password, code } = {}) {
@@ -577,6 +605,119 @@ export function createAccountAuthService({
     return account;
   }
 
+  async function requestEmailBindCode(userId, { email: rawEmail } = {}) {
+    const id = normalizeAccountId(userId);
+    if (!id) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+    const email = validateRegistrationEmail(rawEmail);
+    const store = ensureStore(getStore, isStoreReady);
+
+    const account = await getAccountById(id);
+    if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+    if (account.email || account.password) {
+      throw new AccountAuthError('EMAIL_ALREADY_BOUND', '当前账户已绑定邮箱与密码', 409);
+    }
+
+    const existing = await store.get(emailIndexKey(email));
+    if (existing) throw new AccountAuthError('EMAIL_ALREADY_REGISTERED', '该邮箱已被其他账户使用', 409);
+
+    const purpose = 'bind';
+    const cooldownKey = emailCodeCooldownKey(email, purpose);
+    const cooldown = await store.set(cooldownKey, '1', { NX: true, EX: EMAIL_CODE_RESEND_INTERVAL_SEC });
+    if (cooldown !== 'OK') {
+      throw new AccountAuthError('EMAIL_CODE_RATE_LIMITED', '验证码发送过于频繁，请稍后重试', 429);
+    }
+
+    const codeKey = emailCodeKey(email, purpose);
+    const attemptsKey = emailCodeAttemptsKey(email, purpose);
+    const code = createCode();
+    try {
+      await store.set(codeKey, JSON.stringify({
+        digest: hashVerificationCode(email, code, purpose),
+        createdAt: now(),
+        accountId: account.id,
+      }), { EX: EMAIL_CODE_TTL_SEC });
+      await store.set(attemptsKey, '0', { EX: EMAIL_CODE_TTL_SEC });
+      await sendCode({ email, code, purpose });
+    } catch (error) {
+      await store.del(codeKey);
+      await store.del(attemptsKey);
+      await store.del(cooldownKey);
+      throw error;
+    }
+
+    return { expiresInSec: EMAIL_CODE_TTL_SEC, resendAfterSec: EMAIL_CODE_RESEND_INTERVAL_SEC };
+  }
+
+  async function bindEmailWithPassword(userId, { email: rawEmail, password, code } = {}) {
+    const id = normalizeAccountId(userId);
+    if (!id) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+    const email = validateRegistrationEmail(rawEmail);
+    if (!validatePassword(password)) {
+      throw new AccountAuthError('INVALID_PASSWORD', '密码长度需为 8–128 位', 400);
+    }
+    const verificationCode = String(code ?? '').trim();
+    if (!/^\d{6}$/u.test(verificationCode)) {
+      throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
+    }
+
+    const store = ensureStore(getStore, isStoreReady);
+    const verified = await verifyEmailCode(store, email, verificationCode, 'bind');
+    if (verified.record.accountId && verified.record.accountId !== id) {
+      throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
+    }
+    const passwordRecord = await hashPassword(password);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const currentRaw = await store.get(accountKey(id));
+      const account = normalizeAccountRecord(parseStoredJson(currentRaw));
+      if (!account) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
+      if (account.email || account.password) {
+        throw new AccountAuthError('EMAIL_ALREADY_BOUND', '当前账户已绑定邮箱与密码', 409);
+      }
+      const existingOwner = await store.get(emailIndexKey(email));
+      if (existingOwner && existingOwner !== id) {
+        throw new AccountAuthError('EMAIL_ALREADY_REGISTERED', '该邮箱已被其他账户使用', 409);
+      }
+
+      const linkedAt = now();
+      const nextAccount = {
+        ...account,
+        email,
+        emailVerifiedAt: linkedAt,
+        password: passwordRecord,
+        identities: [
+          { provider: 'email', subject: email, linkedAt },
+          ...account.identities.filter((item) => item.provider !== 'email'),
+        ],
+        updatedAt: linkedAt,
+      };
+
+      const saved = Number(await evalRedisScript(store, `
+        local owner = redis.call('GET', KEYS[1])
+        if owner and owner ~= ARGV[1] then return -1 end
+        if redis.call('GET', KEYS[3]) ~= ARGV[3] then return -2 end
+        if tonumber(redis.call('GET', KEYS[4]) or '0') > 5 then return -2 end
+        if redis.call('GET', KEYS[2]) ~= ARGV[2] then return 0 end
+        redis.call('SET', KEYS[1], ARGV[1])
+        redis.call('SET', KEYS[2], ARGV[4])
+        redis.call('DEL', KEYS[3], KEYS[4])
+        return 1
+      `, {
+        keys: [emailIndexKey(email), accountKey(id), verified.codeKey, verified.attemptsKey],
+        arguments: [id, currentRaw, verified.recordRaw, JSON.stringify(nextAccount)],
+      }));
+      if (saved === -1) {
+        throw new AccountAuthError('EMAIL_ALREADY_REGISTERED', '该邮箱已被其他账户使用', 409);
+      }
+      if (saved === -2) {
+        throw new AccountAuthError('INVALID_EMAIL_CODE', '验证码无效或已过期', 400);
+      }
+      if (saved === 1) return nextAccount;
+    }
+
+    throw new AccountAuthError('ACCOUNT_UPDATE_CONFLICT', '账户状态已变化，请重试', 409);
+  }
+
   async function loginWithEmail({ email: rawEmail, password } = {}) {
     const email = normalizeEmail(rawEmail);
     if (!email || typeof password !== 'string' || password.length === 0) {
@@ -586,7 +727,13 @@ export function createAccountAuthService({
     const id = await store.get(emailIndexKey(email));
     const account = id ? parseStoredJson(await store.get(accountKey(id))) : null;
     const valid = Boolean(account) && await verifyPassword(password, account.password);
-    if (!valid) throw new AccountAuthError('AUTH_INVALID', '邮箱或密码错误', 401);
+    if (!valid) {
+      authLogger.info('邮箱登录校验未通过', {
+        emailHash: emailHash(email).slice(0, 16),
+        reason: !account ? 'account_missing' : !account.password ? 'password_missing' : 'password_mismatch',
+      });
+      throw new AccountAuthError('AUTH_INVALID', '邮箱或密码错误', 401);
+    }
     return account;
   }
 
@@ -820,6 +967,8 @@ export function createAccountAuthService({
     updateNickname,
     getRoomIdentityOwnerAccountId,
     requestEmailRegistrationCode,
+    requestEmailBindCode,
+    bindEmailWithPassword,
     requestPasswordResetCode,
     resetPasswordWithEmail,
     registerWithEmail,
@@ -844,6 +993,8 @@ export function createAccountAuthService({
 const defaultService = createAccountAuthService();
 
 export const requestEmailRegistrationCode = defaultService.requestEmailRegistrationCode;
+export const requestEmailBindCode = defaultService.requestEmailBindCode;
+export const bindEmailWithPassword = defaultService.bindEmailWithPassword;
 export const requestPasswordResetCode = defaultService.requestPasswordResetCode;
 export const resetPasswordWithEmail = defaultService.resetPasswordWithEmail;
 export const registerWithEmail = defaultService.registerWithEmail;

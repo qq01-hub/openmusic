@@ -20,7 +20,7 @@ function DailyTable({ days }: { days: Day[] }) {
       rowKey="date"
       dataSource={days.filter(hasDailyActivity)}
       pagination={false}
-      scroll={{ x: 760 }}
+      scroll={{ x: 960 }}
       locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="最近 14 天暂无活动记录" /> }}
       columns={[
         { title: '北京时间日期', dataIndex: 'date', width: 150, render: (val: string) => <Tag>{val}</Tag> },
@@ -28,6 +28,9 @@ function DailyTable({ days }: { days: Day[] }) {
           ['requests', '总请求', 'blue'],
           ['music', '音乐请求', 'purple'],
           ['socketRequests', '实时操作', 'geekblue'],
+          ['aiRequests', 'AI调用', 'cyan'],
+          ['aiTextRequests', 'AI文本', 'cyan'],
+          ['aiVisionRequests', 'AI识图', 'cyan'],
           ['denied', '拒绝', 'orange'],
           ['errors', '错误', 'red'],
           ['authFailures', '凭据失败', 'volcano'],

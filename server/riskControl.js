@@ -543,6 +543,26 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     return { allowed: !code, code, requestId, at: timestamp, status: ['ACCOUNT_RISK_BLOCKED', 'ACCOUNT_HUMAN_CHECK_REQUIRED'].includes(code) ? 403 : 429, limited: code !== 'ACCOUNT_HUMAN_CHECK_REQUIRED' && Number(result[5]) === 1, retryAfter, minute: Number(result[1]), daily: Number(result[2]), musicDaily: Number(result[3]), score: Number(result[4]) };
   }
 
+  async function recordAiCall(id, { taskType = 'text' } = {}) {
+    id = accountId(id);
+    if (!['text', 'vision'].includes(taskType)) throw new RiskControlError('RISK_AI_EVENT_INVALID', 'AI调用类型无效', 400);
+    const timestamp = now();
+    await ensureDaily(id, timestamp);
+    const result = await run(client => evalRedisScript(client, `
+      if redis.call('HEXISTS', KEYS[1], 'firstSeenAt') == 0 then return 0 end
+      local field = ARGV[2] == 'vision' and 'aiVisionRequests' or 'aiTextRequests'
+      for index = 1, 2 do
+        redis.call('HINCRBY', KEYS[index], 'aiRequests', 1)
+        redis.call('HINCRBY', KEYS[index], field, 1)
+        local previous = tonumber(redis.call('HGET', KEYS[index], 'lastAiRequestAt') or '0')
+        redis.call('HSET', KEYS[index], 'lastAiRequestAt', math.max(previous, tonumber(ARGV[1])))
+      end
+      redis.call('EXPIRE', KEYS[2], 3024000)
+      return 1
+    `, { keys: [profileKey(id), dailyKey(id, timestamp)], arguments: [String(timestamp), taskType] }));
+    if (result !== 1) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', 'AI调用记录暂不可用，请稍后重试');
+  }
+
   async function humanChallengeStatus(id) {
     const profile = await run(client => client.hGetAll(profileKey(id)));
     return humanChallengeSnapshot(profile, dateKey(now()));
@@ -741,6 +761,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         createdAt: Number(profile.createdAt || 0), firstSeenAt: Number(profile.firstSeenAt), lastSeenAt: Number(profile.lastSeenAt),
         registrationIp: profile.registrationIp || '', lastLoginIp: profile.lastLoginIp || '', lastRequestIp: profile.lastRequestIp || '', lastLoginAt: Number(profile.lastLoginAt || 0), loginCount: Number(profile.loginCount || 0),
         requests: Number(profile.requests || 0), musicRequests: Number(profile.musicRequests || 0), socketRequests: Number(profile.socketRequests || 0), denied: Number(profile.denied || 0), errors: Number(profile.errors || 0),
+        aiRequests: Number(profile.aiRequests || 0), aiTextRequests: Number(profile.aiTextRequests || 0), aiVisionRequests: Number(profile.aiVisionRequests || 0), lastAiRequestAt: Number(profile.lastAiRequestAt || 0),
         nickname: profile.nickname || '', networkIp: profile.lastNetworkIp || profile.lastRequestIp || profile.lastLoginIp || '', lastRoomId: profile.lastRoomId || '', lastRoomAt: Number(profile.lastRoomAt || 0),
         roomJoins: Number(profile.roomJoins || 0), roomCount, roomHistoryCount, clientCount,
         authFailures: Number(profile.authFailures || 0), lastAuthFailureAt: Number(profile.lastAuthFailureAt || 0),
@@ -1035,7 +1056,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
               for index = 4, #KEYS do redis.call('DEL', KEYS[index]) end
               redis.call('HDEL', KEYS[2], 'registrationIp', 'lastLoginIp', 'lastLoginAt', 'lastHumanVerifiedAt', 'lastNetworkRoute', 'lastRequestIp', 'lastNetworkIp', 'lastMusicIp', 'lastMusicAt', 'lastRoomId', 'lastRoomAt', 'lastAuthFailureAt', 'lastDeniedAt', 'lastDeniedCode')
               redis.call('HSET', KEYS[2], 'loginCount', 0)
-              for _, field in ipairs({'requests', 'musicRequests', 'socketRequests', 'imageRequests', 'apiRequests', 'denied', 'errors', 'authFailures', 'roomJoins'}) do
+              for _, field in ipairs({'requests', 'musicRequests', 'socketRequests', 'imageRequests', 'apiRequests', 'denied', 'errors', 'authFailures', 'roomJoins', 'aiRequests', 'aiTextRequests', 'aiVisionRequests', 'lastAiRequestAt'}) do
                 local dailyField = field == 'musicRequests' and 'music' or field
                 redis.call('HSET', KEYS[2], field, redis.call('HGET', KEYS[3], dailyField) or '0')
               end
@@ -1075,7 +1096,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     }
   }
 
-  return { humanChallengeStatus, completeHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
+  return { humanChallengeStatus, completeHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, recordAiCall, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
 }
 
 export const riskControl = createRiskControl();

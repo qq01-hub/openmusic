@@ -42,9 +42,8 @@ function compactSingleTurnForSummary(turn) {
   const actionRecords = turn?.role === 'assistant'
     ? content.split('\n').filter((line) => line.startsWith('【工具执行记录】'))
     : [];
-  const raw = (actionRecords.length ? actionRecords.join(' ｜ ') : content)
+  const raw = content
     .replace(/\r?\n+/g, ' ')
-    .replace(/\[(?:系统备注|识图结果|引用图片识图结果)[^\]]*\]/g, '')
     .trim();
   const speaker = turn?.role === 'assistant'
     ? `AI→成员(${turn?.userId || '旧记录未标注'})`

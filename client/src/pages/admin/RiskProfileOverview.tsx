@@ -32,7 +32,7 @@ export default function RiskProfileOverview({ detail, onInspect, onOpenRoom, onO
   const operationTotal = operations.reduce((sum, row) => sum + row.value, 0);
   const factors = [...(detail.factors || [])].filter(row => row.points > 0).sort((a, b) => b.points - a.points);
   const days = [...(detail.days || [])].sort((a, b) => a.date.localeCompare(b.date)).slice(-14);
-  const peak = Math.max(1, ...days.map(day => Number(day.requests || 0)));
+  const peak = Math.max(1, ...days.map(day => Math.max(Number(day.requests || 0), Number(day.aiRequests || 0))));
   const lastIp = detail.lastRequestIp || detail.lastLoginIp;
   const ip = lastIp === 'unknown' ? '' : lastIp;
 
@@ -93,6 +93,7 @@ export default function RiskProfileOverview({ detail, onInspect, onOpenRoom, onO
       { name: '总请求', type: 'line', smooth: true, showSymbol: false, data: days.map(day => Number(day.requests || 0)), lineStyle: { width: 3, color: '#2563eb' }, areaStyle: { color: 'rgba(96,165,250,.12)' } },
       { name: '音乐请求', type: 'line', smooth: true, showSymbol: false, data: days.map(day => Number(day.music || 0)), lineStyle: { width: 2, color: '#7c3aed' } },
       { name: '实时操作', type: 'line', smooth: true, showSymbol: false, data: days.map(day => Number(day.socketRequests || 0)), lineStyle: { width: 2, color: '#f59e0b' } },
+      { name: 'AI调用', type: 'line', smooth: true, showSymbol: false, data: days.map(day => Number(day.aiRequests || 0)), lineStyle: { width: 2, color: '#0891b2' } },
     ],
   };
 
@@ -117,6 +118,17 @@ export default function RiskProfileOverview({ detail, onInspect, onOpenRoom, onO
           </button>
         ))}
       </div>
+      <RiskSection title="AI调用" description="按触发成员统计实际发出的模型请求，多轮工具续调、识图和重试分别计次，失败请求也计次，与聊天消息数及总请求数独立">
+        <Space size={[8, 8]} wrap>
+          <Tag color="cyan">今日 {count(daily.aiRequests)}</Tag>
+          <Tag>今日文本 {count(daily.aiTextRequests)}</Tag>
+          <Tag>今日识图 {count(daily.aiVisionRequests)}</Tag>
+          <Tag color="cyan">累计 {count(detail.aiRequests)}</Tag>
+          <Tag>累计文本 {count(detail.aiTextRequests)}</Tag>
+          <Tag>累计识图 {count(detail.aiVisionRequests)}</Tag>
+          <span className="risk-secondary">最近调用 {time(detail.lastAiRequestAt || 0)}</span>
+        </Space>
+      </RiskSection>
       <div className="risk-detail-grid">
         <RiskSection
           title="风险证据摘要"
@@ -194,12 +206,12 @@ export default function RiskProfileOverview({ detail, onInspect, onOpenRoom, onO
       <RiskMusicResponses detail={detail} compact onInspect={() => onInspect('requests')} />
       <RiskSection
         title="近 14 天行为趋势"
-        description="总请求、音乐请求与实时业务操作使用相同纵轴，实时音乐请求同时包含在两者中，不应相加，详细计数在请求与配额页"
+        description="总请求、音乐请求、实时操作与 AI调用使用相同纵轴，AI调用独立计数，其余指标可能重叠，不应直接相加"
         actions={<Button onClick={() => onInspect('requests')}>查看每日明细</Button>}
       >
-        {days.some(day => Number(day.requests || 0) > 0) ? (
+        {days.some(day => Number(day.requests || 0) > 0 || Number(day.aiRequests || 0) > 0) ? (
           <button className="risk-chart-button" type="button" onClick={() => onInspect('requests')} aria-label={`查看最近 ${days.length} 天请求趋势`}>
-            <AdminChart option={trendOption} label={`最近 ${days.length} 天总请求、音乐请求和实时操作趋势，峰值 ${peak} 次`} />
+            <AdminChart option={trendOption} label={`最近 ${days.length} 天总请求、音乐请求、实时操作和 AI调用趋势，峰值 ${peak} 次`} />
           </button>
         ) : (
           <Empty image={false} description="暂无可展示的趋势数据" />

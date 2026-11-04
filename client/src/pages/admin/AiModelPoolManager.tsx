@@ -60,6 +60,8 @@ type Props = {
   providers: AiProvider[];
   onChange: (providers: AiProvider[]) => void;
   onTest: (pool: AiModelPool, mode?: 'text' | 'vision') => void;
+  onSave: (providers: AiProvider[]) => Promise<boolean>;
+  saving: boolean;
   testingId: string;
 };
 
@@ -91,6 +93,10 @@ function newProviderModel(nextOrder: number, partial?: Partial<AiProviderModel>)
     enabled: partial?.enabled ?? true,
     supportsVision: Boolean(partial?.supportsVision),
     enableThinking: Boolean(partial?.enableThinking),
+    thinkingAdapter: partial?.thinkingAdapter || 'auto',
+    thinkingEffort: partial?.thinkingEffort || 'auto',
+    thinkingBudgetTokens: partial?.thinkingBudgetTokens || 0,
+    builtinWebSearch: Boolean(partial?.builtinWebSearch),
     contextWindowTokens: Number(partial?.contextWindowTokens) || 256 * 1024,
     sortOrder: nextOrder,
   };
@@ -100,7 +106,7 @@ function reindexSortOrders<T extends { sortOrder: number }>(items: T[]): T[] {
   return items.map((item, idx) => ({ ...item, sortOrder: (idx + 1) * 10 }));
 }
 
-export default function AiModelPoolManager({ providers, onChange, onTest, testingId }: Props) {
+export default function AiModelPoolManager({ providers, onChange, onTest, onSave, saving, testingId }: Props) {
   const { message } = App.useApp();
   const [selectedProviderId, setSelectedProviderId] = useState<string>('');
   const [selectedModelId, setSelectedModelId] = useState<string>('');
@@ -424,6 +430,10 @@ export default function AiModelPoolManager({ providers, onChange, onTest, testin
     configuredApiKey: provider.configuredApiKey,
     model: modelItem.model,
     enableThinking: modelItem.enableThinking,
+    thinkingAdapter: modelItem.thinkingAdapter || 'auto',
+    thinkingEffort: modelItem.thinkingEffort || 'auto',
+    thinkingBudgetTokens: modelItem.thinkingBudgetTokens || 0,
+    builtinWebSearch: modelItem.builtinWebSearch === true,
     contextWindowTokens: modelItem.contextWindowTokens,
     maxRequestsPerMinute: provider.maxRequestsPerMinute,
     maxTokensPerMinute: provider.maxTokensPerMinute,
@@ -805,10 +815,23 @@ export default function AiModelPoolManager({ providers, onChange, onTest, testin
         width={680}
         centered
         onCancel={() => setModelOptionsOpen(false)}
-        footer={<Button type="primary" onClick={() => setModelOptionsOpen(false)}>完成</Button>}
+        footer={(
+          <Space>
+            <Button disabled={saving} onClick={() => setModelOptionsOpen(false)}>关闭</Button>
+            <Button
+              type="primary"
+              loading={saving}
+              onClick={async () => {
+                if (await onSave(providers)) setModelOptionsOpen(false);
+              }}
+            >
+              保存模型配置
+            </Button>
+          </Space>
+        )}
       >
           <Typography.Paragraph type="secondary">
-            修改会应用到当前草稿，请在页面底部点击「保存配置」生效
+            点击「保存模型配置」后立即生效，刷新页面也会保留
           </Typography.Paragraph>
             {activeProvider && activeModel ? (
               <div className="ai-model-option-card">
@@ -879,11 +902,90 @@ export default function AiModelPoolManager({ providers, onChange, onTest, testin
                   <label className="ai-model-switch-item">
                     <div>
                       <strong>深度思考（Thinking）</strong>
-                      <span>开启后在文字对话请求中启用推理思考模式（需模型支持）</span>
+                      <span>按供应商、模型与接口协议发送思考参数，未适配时测试会报错；部分模型始终思考，关闭开关也无法禁用</span>
                     </div>
                     <Switch
                       checked={Boolean(activeModel.enableThinking)}
                       onChange={(enableThinking) => updateActiveModel(activeModel.id, (m) => ({ ...m, enableThinking }))}
+                    />
+                  </label>
+                  <div className="ai-model-switch-item ai-model-thinking-protocol">
+                    <div>
+                      <strong>思考参数协议</strong>
+                      <span>中转服务或模型别名无法自动识别时，选择中转入口实际接受的协议，保存前先测试</span>
+                    </div>
+                    <div>
+                      <Select
+                        aria-label="思考参数协议"
+                        value={activeModel.thinkingAdapter || 'auto'}
+                        onChange={(thinkingAdapter) => updateActiveModel(activeModel.id, (m) => ({ ...m, thinkingAdapter }))}
+                        style={{ width: '100%' }}
+                        options={[
+                          { value: 'auto', label: '自动识别' },
+                          { value: 'gateway', label: '标准中转 · reasoning_effort' },
+                          { value: 'openai', label: 'OpenAI 推理模型' },
+                          { value: 'siliconflow', label: '硅基流动' },
+                          { value: 'qwen', label: '阿里云百炼 / Qwen' },
+                          { value: 'deepseek', label: 'DeepSeek' },
+                          { value: 'gemini', label: 'Gemini OpenAI 兼容' },
+                          { value: 'kimi', label: 'Moonshot / Kimi' },
+                          { value: 'glm', label: '智谱 / GLM' },
+                          { value: 'openrouter', label: 'OpenRouter' },
+                          { value: 'vllm', label: 'vLLM · 按已知模型模板' },
+                          { value: 'groq', label: 'Groq' },
+                          { value: 'minimax', label: 'MiniMax' },
+                          { value: 'mistral', label: 'Mistral' },
+                          { value: 'ark', label: '火山方舟 / Ark' },
+                        ]}
+                      />
+                    </div>
+                  </div>
+                  <div className="ai-model-switch-item ai-model-thinking-protocol">
+                    <div>
+                      <strong>思考强度</strong>
+                      <span>自动沿用当前协议的默认策略，其他档位按模型能力发送；不支持的配置会在测试中明确报错</span>
+                    </div>
+                    <Select
+                      aria-label="思考强度"
+                      disabled={!activeModel.enableThinking}
+                      value={activeModel.thinkingEffort || 'auto'}
+                      onChange={(thinkingEffort) => updateActiveModel(activeModel.id, (m) => ({ ...m, thinkingEffort }))}
+                      style={{ width: '100%' }}
+                      options={[
+                        { value: 'auto', label: '自动 · 保持协议默认' },
+                        { value: 'minimal', label: '最低 · minimal' },
+                        { value: 'low', label: '低 · low' },
+                        { value: 'medium', label: '中 · medium' },
+                        { value: 'high', label: '高 · high' },
+                        { value: 'xhigh', label: '极高 · xhigh' },
+                        { value: 'max', label: '最高 · max' },
+                      ]}
+                    />
+                  </div>
+                  <div className="ai-model-switch-item ai-model-thinking-protocol">
+                    <div>
+                      <strong>思考 Token 预算</strong>
+                      <span>0 表示沿用默认；仅百炼、硅基和 OpenRouter 的 Chat 接口支持，OpenRouter 使用预算时强度选自动，正文额度会另行预留</span>
+                    </div>
+                    <InputNumber
+                      aria-label="思考 Token 预算"
+                      disabled={!activeModel.enableThinking}
+                      min={0}
+                      max={32768}
+                      precision={0}
+                      value={activeModel.thinkingBudgetTokens || 0}
+                      onChange={(value) => updateActiveModel(activeModel.id, (m) => ({ ...m, thinkingBudgetTokens: Number(value) || 0 }))}
+                      style={{ width: '100%' }}
+                    />
+                  </div>
+                  <label className="ai-model-switch-item">
+                    <div>
+                      <strong>模型自带联网搜索</strong>
+                      <span>模型或中转入口本身会联网时开启，优先使用原生能力，不可用时仍可调用站内免费搜索</span>
+                    </div>
+                    <Switch
+                      checked={activeModel.builtinWebSearch === true}
+                      onChange={(builtinWebSearch) => updateActiveModel(activeModel.id, (m) => ({ ...m, builtinWebSearch }))}
                     />
                   </label>
                   <label className="ai-model-switch-item">

@@ -51,7 +51,7 @@ const FavoriteButtonView = memo(function FavoriteButtonView({
     setError('');
     const res = await onToggle(song);
     setLoading(false);
-    if (res.success) onToggleResult?.(favorited);
+    if (res.success) onToggleResult?.(!favorited);
     if (!res.success) {
       setError(res.error || '收藏失败');
     }

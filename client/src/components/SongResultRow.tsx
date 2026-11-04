@@ -53,7 +53,7 @@ function SongResultRow({
   const isThisPreview = preview.key === key;
   const previewLoading = isThisPreview && preview.status === 'loading';
   const previewPlaying = isThisPreview && preview.status === 'playing';
-  const previewActive = isThisPreview && (preview.status === 'playing' || preview.status === 'paused');
+  const previewActive = previewPlaying;
 
   const handlePreview = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -137,7 +137,7 @@ function SongResultRow({
         onDoubleClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}
       >
-        <Tooltip content={previewPlaying ? '暂停试听' : previewActive ? '继续试听' : '试听'}>
+        <Tooltip content={previewPlaying ? '暂停试听' : '试听'}>
           <button
             type="button"
             onClick={handlePreview}
@@ -147,7 +147,7 @@ function SongResultRow({
                 ? 'bg-white/10 text-white'
                 : 'bg-white/5 text-netease-muted hover:bg-white/10 hover:text-white'
             } ${alwaysShowActions || previewActive || previewLoading ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
-            aria-label={previewPlaying ? '暂停试听' : previewActive ? '继续试听' : '试听'}
+            aria-label={previewPlaying ? '暂停试听' : '试听'}
           >
             {previewLoading ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />

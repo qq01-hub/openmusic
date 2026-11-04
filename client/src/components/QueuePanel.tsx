@@ -464,6 +464,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
           onDragOver={handleContainerDragOver}
         >
           <FixedSizeList
+            className="queue-scroll-viewport"
+            style={{ willChange: 'auto' }}
             ref={listRef}
             height={fillHeight ? virtualListHeight : LIST_HEIGHT}
             width="100%"
@@ -478,7 +480,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
         </div>
       ) : (
         <div
-          className={`space-y-1.5 overflow-y-auto pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
+          className={`queue-scroll-viewport space-y-1.5 overflow-y-auto pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
           style={fillHeight ? undefined : { height: LIST_HEIGHT }}
         >
           {renderPlainRows()}

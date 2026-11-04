@@ -83,7 +83,7 @@ export default function RiskHumanVerificationGate() {
     finally { if (isCurrent()) { submitting.current = false; setBusy(false); setToken(''); setWidgetRevision(value => value + 1); } }
   };
   if (!state?.pending) return null;
-  return <div className="fixed inset-0 z-[250] flex items-center justify-center overflow-y-auto bg-black/80 p-5 backdrop-blur-sm">
+  return <div className="fixed inset-0 z-[250] flex items-start justify-center overflow-y-auto bg-black/80 p-5 backdrop-blur-sm">
     <section ref={dialog} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
       if (event.key !== 'Tab') return;
@@ -92,13 +92,12 @@ export default function RiskHumanVerificationGate() {
       if (!first) { event.preventDefault(); return; }
       if (event.shiftKey && (document.activeElement === first || document.activeElement?.tagName === 'H2')) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    }} role="dialog" aria-modal="true" aria-labelledby="risk-human-title" className="w-full max-w-md space-y-5 rounded-2xl border border-white/15 bg-netease-dark p-6 text-white shadow-2xl">
+    }} role="dialog" aria-modal="true" aria-labelledby="risk-human-title" className="my-auto w-full max-w-md shrink-0 space-y-5 rounded-2xl border border-white/15 bg-netease-dark p-6 text-white shadow-2xl">
       <h2 id="risk-human-title" className="text-xl font-semibold" tabIndex={-1}>请确认是你在访问</h2>
       <p className="text-sm leading-6 text-white/65">检测到异常访问，请先完成验证，未通过前无法继续获取资源</p>
-      <p className="text-xs leading-5 text-white/50">每天最多两轮，通过后进入冷却，当天两轮都通过后不再重复验证，不影响原有配额或账户封禁</p>
       {state.siteKey && <HumanVerification key={widgetRevision} siteKey={state.siteKey} action="risk_challenge" cdata={state.challengeId} onToken={setToken} />}
       {error && <p role="alert" className="text-sm text-amber-200">{error}</p>}
-      <div className="flex flex-wrap gap-3"><button type="button" disabled={!token || busy} onClick={() => { void submit(); }} className="min-h-11 rounded-lg bg-netease-red px-5 text-sm font-medium disabled:opacity-40">{busy ? '正在验证…' : '验证并继续'}</button><button type="button" disabled={busy} onClick={() => { void load(true); }} className="min-h-11 rounded-lg border border-white/20 px-4 text-sm">刷新验证状态</button></div>
+      <div className="flex flex-wrap gap-3"><button type="button" disabled={!token || busy} onClick={() => { void submit(); }} className="min-h-11 rounded-lg bg-netease-red px-5 text-sm font-medium disabled:opacity-40">{busy ? '正在验证…' : '验证并继续'}</button><button type="button" disabled={busy} onClick={() => { setToken(''); setWidgetRevision(value => value + 1); void load(true); }} className="min-h-11 rounded-lg border border-white/20 px-4 text-sm">重新加载验证</button></div>
       <p className="text-xs text-white/45">通过后请重新执行刚才的操作，系统不会自动重放点歌或其他修改请求</p>
     </section>
   </div>;

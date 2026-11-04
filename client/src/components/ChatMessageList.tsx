@@ -232,6 +232,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const initialScrollDoneRef = useRef(false);
   const allowLoadOlderRef = useRef(false);
   const [showLoadOlderHint, setShowLoadOlderHint] = useState(false);
+  const scrollbarHideTimerRef = useRef<number | null>(null);
 
   const useVirtualList = VIRTUAL_LIST_ENABLED && messages.length >= VIRTUAL_LIST_THRESHOLD;
 
@@ -245,6 +246,31 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
       return `${m.id}:${m.imageUrl || ''}:${reactions}`;
     }).join('|');
   }, [messages]);
+
+  const hideChatScrollbar = useCallback(() => {
+    const el = chatScrollRoot;
+    if (!el) return;
+    el.classList.remove('chat-scrollbar-active');
+  }, [chatScrollRoot]);
+
+  const showChatScrollbar = useCallback(() => {
+    const el = chatScrollRoot;
+    if (!el) return;
+    el.classList.add('chat-scrollbar-active');
+    if (scrollbarHideTimerRef.current !== null) window.clearTimeout(scrollbarHideTimerRef.current);
+    scrollbarHideTimerRef.current = window.setTimeout(() => {
+      scrollbarHideTimerRef.current = null;
+      hideChatScrollbar();
+    }, 700);
+  }, [chatScrollRoot, hideChatScrollbar]);
+
+  const handleChatPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    if (el.scrollHeight <= el.clientHeight) return;
+    const distanceFromRight = el.getBoundingClientRect().right - event.clientX;
+    if (distanceFromRight <= 20) showChatScrollbar();
+    else hideChatScrollbar();
+  }, [hideChatScrollbar, showChatScrollbar]);
 
   const bindScrollRoot = useCallback((el: HTMLDivElement | null) => {
     setChatScrollRoot(el);
@@ -573,6 +599,10 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     if (!props.scrollUpdateWasRequested) handleScroll();
   }, [handleScroll]);
 
+  useEffect(() => () => {
+    if (scrollbarHideTimerRef.current !== null) window.clearTimeout(scrollbarHideTimerRef.current);
+  }, []);
+
   useEffect(() => {
     const el = chatScrollRoot;
     if (!el || useVirtualList) return;
@@ -691,7 +721,9 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const renderPlainList = () => (
     <div
       ref={bindScrollRoot}
-      className="h-full space-y-2 overflow-x-hidden overflow-y-auto px-3 py-2 pb-3"
+      className="chat-scroll-root h-full space-y-2 overflow-x-hidden overflow-y-auto px-3 py-2 pb-3"
+      onPointerMove={handleChatPointerMove}
+      onPointerLeave={hideChatScrollbar}
     >
       {messages.map((msg) => {
         // 保留原生滚动容器和真实文档流，只让浏览器跳过视口外消息的布局与绘制

@@ -229,6 +229,12 @@
   flex-shrink: 0;
 }
 
+.ai-model-thinking-protocol {
+  align-items: stretch;
+  flex-direction: column;
+  cursor: default;
+}
+
 .ai-model-option-empty {
   padding: 20px 14px;
   border: 1px dashed #cbd5e1;

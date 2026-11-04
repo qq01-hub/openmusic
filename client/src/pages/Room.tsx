@@ -477,8 +477,8 @@ export default function Room() {
   const [deleteFavoriteCategoryTarget, setDeleteFavoriteCategoryTarget] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!favoritesOpen && cachedFavorites.length > 0) setFavorites(cachedFavorites);
-  }, [cachedFavorites, favoritesOpen]);
+    setFavorites(cachedFavorites);
+  }, [cachedFavorites]);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
   const [renameSaving, setRenameSaving] = useState(false);

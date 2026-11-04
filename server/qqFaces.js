@@ -16,10 +16,8 @@ function tokenizeSlashNames(value) {
   return String(value ?? '')
     .replace(/\uFFFC/g, '')
     .replace(/[\[［【]\s*(?:qqface\s*[:：]\s*([^\]\r\n］】]*)|([0-9０-９]+))\s*[\]］】]/gi,
-      (_, face, number) => resolveQqFaceToken(face ?? number) || '')
-    .replace(slashNamePattern, (_, space, name) => `${space}[qqface:${idsByName.get(name.toLowerCase())}]`)
-    .replace(/[\[［【]\s*(?:q|qq|qqf|qqfa|qqfac|qqface)(?:\s*[:：][^\]\r\n］】]*)?$/gi, '')
-    .replace(/[\[［【]\s*[0-9０-９]+\s*$/g, '');
+      (raw, face, number) => resolveQqFaceToken(face ?? number) || raw)
+    .replace(slashNamePattern, (_, space, name) => `${space}[qqface:${idsByName.get(name.toLowerCase())}]`);
 }
 
 export function resolveQqFaceToken(face) {
@@ -51,14 +49,10 @@ export function queryQqFaces(args = {}) {
   return { success: true, faces, total: matches.length, nextOffset: offset + faces.length < matches.length ? offset + faces.length : null };
 }
 
-export function normalizeAiQqFaceText(text, { excludedIds = new Set(), allow = true, maxLength = Infinity } = {}) {
-  let kept = false;
-  const normalized = tokenizeSlashNames(text).replace(/\[qqface:([^\]]+)\]/gi, (_, face) => {
+export function normalizeAiQqFaceText(text, { allow = true, maxLength = Infinity } = {}) {
+  const normalized = tokenizeSlashNames(text).replace(/\[qqface:([^\]]+)\]/gi, (raw, face) => {
     const token = resolveQqFaceToken(face);
-    const id = token?.slice(8, -1);
-    if (!allow || kept || !id || excludedIds.has(id)) return '';
-    kept = true;
-    return token;
+    return allow ? token || raw : '';
   }).trim();
   if (normalized.length <= maxLength) return normalized;
   // 长度边界落在表情内部时，整段移除，避免发送半截标记
@@ -70,6 +64,12 @@ export function normalizeAiQqFaceText(text, { excludedIds = new Set(), allow = t
     }
   }
   return normalized.slice(0, end).trimEnd();
+}
+
+/** 校验渲染协议，错误交回模型修正，不删除模型原文 */
+export function hasInvalidAiQqFaceTokens(text) {
+  return [...String(text || '').matchAll(/\[qqface[^\]]*(?:\]|$)/gi)]
+    .some(([token]) => !resolveQqFaceToken(token));
 }
 
 export function collectRecentBotQqFaceIds(messages, botUserId) {

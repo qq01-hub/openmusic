@@ -19,9 +19,10 @@ export type RiskAccount = Decision & {
   daily: Record<string, number>; dailyEstimated: boolean;
   lastHumanVerifiedAt?: number; lastNetworkRoute?: 'direct' | 'trusted_proxy' | '';
   musicIpCount?: number; musicIpChanges?: number;
+  aiRequests?: number; aiTextRequests?: number; aiVisionRequests?: number; lastAiRequestAt?: number;
 };
-export type Day = { date: string; requests?: string; music?: string; socketRequests?: string; denied?: string; errors?: string; authFailures?: string; roomJoins?: string };
-export const hasDailyActivity = (day: Day) => (['requests', 'music', 'socketRequests', 'denied', 'errors', 'authFailures', 'roomJoins'] as const).some(key => Number(day[key] || 0) > 0);
+export type Day = { date: string; requests?: string; music?: string; socketRequests?: string; denied?: string; errors?: string; authFailures?: string; roomJoins?: string; aiRequests?: string; aiTextRequests?: string; aiVisionRequests?: string };
+export const hasDailyActivity = (day: Day) => (['requests', 'music', 'socketRequests', 'denied', 'errors', 'authFailures', 'roomJoins', 'aiRequests'] as const).some(key => Number(day[key] || 0) > 0);
 export type AccountError = { groupId: string; status: number; code: string; category: string; label: string; operation: string; source: string; method: string };
 export type ErrorBreakdown = {
   trackedTotal: number; legacyUnclassified: number; sinceAt: number;

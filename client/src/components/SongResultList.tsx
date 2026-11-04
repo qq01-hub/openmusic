@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
+import { prioritizeMatchingFavorites } from '../api/music/merge';
 import PageSizeSelect from './PageSizeSelect';
 import { RESULT_BODY_HEIGHT } from './SearchSkeleton';
 import {
@@ -87,13 +88,8 @@ function SongResultList({
     ? (pagination.total > 0 ? pagination.total : results.length)
     : results.length;
   const sortedResults = useMemo(() => {
-    const favorites: SearchResult[] = [];
-    const others: SearchResult[] = [];
-    for (const song of results) {
-      (favoriteIds.has(songKey(song)) ? favorites : others).push(song);
-    }
-    return favorites.length ? [...favorites, ...others] : results;
-  }, [favoriteIds, results]);
+    return prioritizeMatchingFavorites(results, favoriteIds, keyword);
+  }, [favoriteIds, keyword, results]);
   const remotePagination = Boolean(pagination);
   const pageResults = useMemo(() => remotePagination
     ? sortedResults

@@ -9,6 +9,7 @@ import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
 import { useDeskPetStore } from '../stores/deskPetStore';
+import { AI_PERSONA_PRESETS as aiPersonaPresets } from '../lib/aiPersonaPresets';
 import DeskPetCharacterPicker from './DeskPetCharacterPicker';
 import { searchPlaylists, type PlaylistChannelFilter, type PlaylistSearchItem } from '../api/music/playlist';
 import {
@@ -1636,30 +1637,24 @@ export default function RoomSettingsModal({
                           <label htmlFor="settings-room-ai-persona" className="text-sm font-medium text-white">
                             助手性格与设定
                           </label>
-                          <span className="text-[11px] text-netease-muted">{draftRoomAiPersona.length}/300</span>
+                          <span className="text-[11px] text-netease-muted">{draftRoomAiPersona.length}/600</span>
                         </div>
                         <p className="mt-0.5 text-xs text-netease-muted">
-                          保留「大肥鱼」可爱基底，并将房主设定的性格融合到系统提示词中；留空使用默认呆萌大肥鱼性格
+                          房主可选择下方完整预设，也可直接填写自己的角色设定，留空使用蓝发小女仆，权限与隐私规则始终生效
                         </p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {[
-                            { label: '呆萌大肥鱼', value: '圆滚滚、呆萌治愈又有点小傲娇的大肥鱼，爱吐泡泡摇尾巴，说话软萌俏皮，常用「啵～」「本鱼来啦」，超级宠溺房间里的听友' },
-                            { label: '傲娇猫娘', value: '软萌傲娇的小猫娘属性，句尾喜欢带「喵～」，嘴上说哼真拿你没办法，身体却很诚实地马上帮大家搜歌点歌，被夸会害羞炸毛' },
-                            { label: '粘人小奶狗', value: '超级热情粘人的元气小汪属性，看见任何人说话都开心得疯狂摇尾巴，句尾常带「汪～」「好耶」，无条件捧场夸夸每个人' },
-                            { label: '毒舌雌小鬼', value: '古灵精怪、爱俏皮调侃的机灵鬼属性，喜欢用「杂鱼～不会连这首歌都没听过吧」小嘴欠逗大家开心，但点歌干活超麻利' },
-                            { label: '腹黑小恶魔', value: '带点调皮坏笑的小恶魔系萌物，喜欢捉弄熟人、接梗造梗，表面古灵精怪，遇到有人难过却会偷偷切温柔的歌安慰' },
-                            { label: '软糯兔兔酱', value: '胆小害羞又软乎乎的垂耳兔萌妹属性，说话轻声细语带点软糯叠词，最喜欢安静陪大家听温柔治愈的歌，受惊会竖起长耳朵' },
-                            { label: '迷糊贪吃仓鼠', value: '腮帮子总是塞满瓜子的呆萌小仓鼠属性，说话憨态可掬、偶尔迷迷糊糊，听到好听的歌会开心得原地转圈圈' },
-                            { label: '元气虚拟歌姬', value: '闪亮登场的二次元虚拟偶像属性，活力四射、甜度满分，把每次点歌都当成演唱会现场一样热情应援打 call' },
-                            { label: '困困咸鱼团子', value: '懒洋洋、软绵绵的佛系打瞌睡小团子，语气奶声奶气像刚睡醒，最适合陪大家摸鱼放空、听舒缓抓耳的好歌' },
-                            { label: '机甲赛博肥鱼', value: '搭载未来音乐芯片的酷萌机械大肥鱼，偶尔冒出「哔哔—声波锁定」的可爱机械拟声词，反差萌拉满' },
-                          ].map((preset) => (
+                          {aiPersonaPresets.map((preset) => (
                             <button
                               key={preset.label}
                               type="button"
+                              aria-pressed={draftRoomAiPersona === preset.value}
                               disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
                               onClick={() => setDraftRoomAiPersona(preset.value)}
-                              className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-[11px] text-white/75 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                              className={`rounded-lg border px-2 py-1 text-[11px] transition-colors disabled:opacity-40 ${
+                                draftRoomAiPersona === preset.value
+                                  ? 'border-netease-red/50 bg-netease-red/10 text-white'
+                                  : 'border-white/10 bg-white/5 text-white/75 hover:bg-white/10 hover:text-white'
+                              }`}
                             >
                               {preset.label}
                             </button>
@@ -1667,12 +1662,12 @@ export default function RoomSettingsModal({
                         </div>
                         <textarea
                           id="settings-room-ai-persona"
-                          rows={3}
-                          maxLength={300}
+                          rows={5}
+                          maxLength={600}
                           value={draftRoomAiPersona}
                           disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
-                          onChange={(e) => setDraftRoomAiPersona(e.target.value.slice(0, 300))}
-                          placeholder="例如：软萌傲娇的猫娘风大肥鱼，句尾喜欢带喵～，嘴硬心软，被夸奖会害羞吐泡泡"
+                          onChange={(e) => setDraftRoomAiPersona(e.target.value.slice(0, 600))}
+                          placeholder="留空使用原版蓝发小女仆，也可以选择上方预设或填写自己的角色设定"
                           className="mt-2 w-full resize-none rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
                         />
                       </div>

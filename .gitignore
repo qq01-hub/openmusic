@@ -96,8 +96,3 @@ desktop-build.local.json
 
 electron/desktop-runtime-config.json
 
-# 桌宠上游许可文档（仅保留本地）
-/client/public/desk-pet/LICENSE-dsh-pet.txt
-/client/public/desk-pet/LICENSE-dsh-whale-widget-plus.txt
-/client/public/desk-pet/LICENSE-DeepSeek-Balance-Whale-Widget.txt
-/client/public/desk-pet/LICENSE-gpt-pet.txt

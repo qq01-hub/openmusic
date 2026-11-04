@@ -191,18 +191,16 @@ export function normalizeAiQqFaceText(value: string, { allowFaces = true } = {})
   return String(value || '')
     .replace(/\uFFFC/g, '')
     .replace(/[\[［【]\s*(?:qqface\s*[:：]\s*([^\]\r\n］】]*)|([0-9０-９]+))\s*[\]］】]/gi,
-      (_raw: string, face: string | undefined, number: string | undefined) => {
-        if (!allowFaces) return '';
+      (raw: string, face: string | undefined, number: string | undefined) => {
         const nameOrId = String(face ?? number ?? '').trim()
           .replace(/[０-９]/g, (digit) => String(digit.charCodeAt(0) - 0xFF10));
         const known = fullFacesCache?.find((item) => item.id === nameOrId
           || item.text.replace(/^\//, '').toLowerCase() === nameOrId.replace(/^\//, '').toLowerCase());
-        if (known) return qqFaceToken(known.id);
+        if (known) return allowFaces ? qqFaceToken(known.id) : '';
+        if (!allowFaces && face !== undefined) return '';
         // 清单加载前仍可使用服务端已规范化的编号，不额外请求整份清单
-        return !fullFacesCache && /^\d{1,4}$/.test(nameOrId) ? qqFaceToken(nameOrId) : '';
+        return !fullFacesCache && face !== undefined && /^\d{1,4}$/.test(nameOrId) ? qqFaceToken(nameOrId) : raw;
       })
-    .replace(/[\[［【]\s*(?:q|qq|qqf|qqfa|qqfac|qqface)(?:\s*[:：][^\]\r\n］】]*)?$/gi, '')
-    .replace(/[\[［【]\s*[0-9０-９]+\s*$/g, '')
     .trim();
 }
 

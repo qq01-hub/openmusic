@@ -58,7 +58,7 @@ import {
 } from "./permanentApplication.js";
 import { buildUserRoundRobinOrder, selectNextUserRoundRobinSong } from "./playbackOrder.js";
 import { sanitizeChatSongCards } from "./chatSongCard.js";
-import { normalizeAiQqFaceText } from "./qqFaces.js";
+import { normalizeAiQqFaceText, hasInvalidAiQqFaceTokens } from "./qqFaces.js";
 import { isSongArtistBlocked, filterSongPayloadByArtist } from "./songArtistFilter.js";
 import { incrementMetric } from "./logger.js";
 import { resolveAdminOwnerLastJoinedAt } from "./adminRoomUtils.js";
@@ -897,7 +897,7 @@ function restoreRoomFromStorage(data) {
   );
   room.bannedUserIds = new Set(data.bannedUserIds || []);
   room.bannedDeviceIds = new Set(data.bannedDeviceIds || []);
-  room.isLocked = Boolean(data.isLocked);
+  room.isLocked = Boolean(data.isLocked || room.passwordHash);
   room.muteAll = Boolean(data.muteAll);
   room.mutedUserIds = new Set(data.mutedUserIds || []);
   room.adminIds = new Set(Array.isArray(data.adminIds) ? data.adminIds : []);
@@ -1271,7 +1271,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     passwordHash,
     /** 仅用于管理员按需恢复的 AES-256-GCM 密文；永不保存明文。 */
     passwordEncrypted: null,
-    isLocked: false,
+    isLocked: Boolean(passwordHash),
     muteAll: false,
     mutedUserIds: new Set(),
     creatorId: null,
@@ -2251,6 +2251,7 @@ export function reuseIdleOwnedRoom(roomId, { name, password } = {}) {
       return { error: '房间密码加密服务未就绪，请稍后重试' };
     }
     applyRoomPassword(room, trimmed);
+    room.isLocked = Boolean(trimmed);
   }
 
   // 当作新建：清掉上次残留的曲目/播放状态，避免「空房却无法复用」
@@ -6179,6 +6180,7 @@ export function postBotChatMessage(roomId, options = {}) {
   const songs = sanitizeChatSongCards(options.songs);
   const content = normalizeAiQqFaceText(options.text);
 
+  if (hasInvalidAiQqFaceTokens(content)) return { error: "QQ表情标记无效，请从目录选择真实编号并使用完整的[qqface:id]格式" };
   if (!content && !imageUrl && songs.length === 0) return { error: "消息不能为空" };
   if (content.length > 500) return { error: "消息过长" };
 

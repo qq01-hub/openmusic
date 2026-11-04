@@ -859,7 +859,7 @@ export function useSocket() {
           error: String(payload.error || '').trim() || undefined,
           stepText: String(payload.stepText || '').trim() || undefined,
           thoughtSteps: Array.isArray(payload.thoughtSteps)
-            ? payload.thoughtSteps.map((s) => String(s || '').trim()).filter(Boolean).slice(0, 10)
+            ? payload.thoughtSteps.map((s) => String(s || '').trim()).filter(Boolean).slice(-30)
             : undefined,
         });
       } else if (payload.status === 'end') {

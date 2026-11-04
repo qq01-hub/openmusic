@@ -107,7 +107,7 @@ export async function fetchWithTimeout(
       const oauthLogin = ['/api/auth/github/start', '/api/auth/linuxdo/start'].includes(pathname)
         && new URL(url, window.location.origin).searchParams.get('purpose') === 'account-login';
       const login = oauthLogin || (['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account', '/api/auth/device-login', '/api/auth/device-migrate'].includes(pathname) && !wechatBinding);
-      const authenticatedAuth = pathname === '/api/auth/human-challenge' || wechatBinding || pathname === '/api/auth/nickname' || pathname.includes('/unbind') || pathname.startsWith('/api/auth/wechat-uin/') && method === 'POST' || (pathname.endsWith('/start') && new URL(url, window.location.origin).searchParams.get('purpose') === 'account-bind');
+      const authenticatedAuth = pathname === '/api/auth/human-challenge' || wechatBinding || pathname === '/api/auth/nickname' || pathname.startsWith('/api/auth/email/bind') || pathname.includes('/unbind') || pathname.startsWith('/api/auth/wechat-uin/') && method === 'POST' || (pathname.endsWith('/start') && new URL(url, window.location.origin).searchParams.get('purpose') === 'account-bind');
       if ((!hasAnonymousAccess() && ((businessRequest && pathname !== '/api/media-proxy') || authenticatedAuth)) || login) {
         const body = typeof initFinal.body === 'string' ? initFinal.body : input instanceof Request ? await input.clone().text() : '';
         const target = new URL(url, window.location.origin);
