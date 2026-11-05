@@ -118,7 +118,7 @@ export const GUIDE_STEPS: GuideStep[] = [
     id: 'room-queue',
     scope: 'room',
     title: '播放队列',
-    body: '点的歌会排在这里，按顺序播放',
+    body: '单曲循环会重复当前歌曲，其他模式先播房主或管理员设为优先的歌曲\n开启点赞排序后，用户轮播会在轮到该用户时优先播放他高赞的待播歌曲',
     side: 'top',
   },
   {

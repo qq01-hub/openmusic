@@ -49,6 +49,9 @@ function SongResultRow({
 }: Props) {
   const key = songKey(song);
   const artistLine = `${song.artist}${song.album ? ` · ${song.album}` : ''}`;
+  const durationLabel = typeof song.duration === 'number' && Number.isFinite(song.duration) && song.duration > 0
+    ? formatDuration(song.duration / 1000)
+    : null;
   const preview = useSongPreviewState(key);
   const isThisPreview = preview.key === key;
   const previewLoading = isThisPreview && preview.status === 'loading';
@@ -80,7 +83,7 @@ function SongResultRow({
 
   return (
     <div
-      className={`group flex ${previewActive ? 'flex-wrap sm:flex-nowrap' : ''} cursor-pointer items-center gap-2 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
+      className={`group flex ${previewActive ? 'flex-wrap sm:flex-nowrap' : ''} cursor-pointer items-center gap-1 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
         glassRow ? immersiveGlassListRow : 'hover:bg-netease-card/80 active:bg-netease-card/80'
       }`}
       onDoubleClick={() => { if (!inQueue && addingId !== key) handleAdd(); }}
@@ -91,7 +94,15 @@ function SongResultRow({
       />
       <div className="min-w-0 flex-1 space-y-0.5">
         <TruncateTip text={song.name} as="p" className="truncate text-sm font-medium" />
-        <TruncateTip text={artistLine} as="p" className="truncate text-xs text-netease-muted" />
+        <div className="flex min-w-0 items-center gap-2 text-xs text-netease-muted">
+          <TruncateTip text={artistLine} as="p" className="min-w-0 truncate" />
+          <span
+            className="flex-shrink-0 tabular-nums"
+            aria-label={`歌曲时长 ${durationLabel ?? '未知'}`}
+          >
+            {durationLabel ?? '--:--'}
+          </span>
+        </div>
         {isThisPreview && preview.status === 'error' && preview.error && (
           <p className="truncate text-[10px] text-amber-400/90">{preview.error}</p>
         )}
@@ -191,7 +202,7 @@ function SongResultRow({
             }}
             disabled={addingId === key}
             aria-label="点歌并插队"
-            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-amber-400 transition-colors hover:bg-amber-400/10 disabled:opacity-50 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-amber-400 transition-colors hover:bg-amber-400/10 disabled:opacity-50 sm:h-8 sm:w-8 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
           >
             <Zap className="h-4 w-4" />
           </button>
@@ -233,4 +244,5 @@ export default memo(SongResultRow, (prev, next) => (
   && prev.song.artist === next.song.artist
   && prev.song.album === next.song.album
   && prev.song.pic === next.song.pic
+  && prev.song.duration === next.song.duration
 ));

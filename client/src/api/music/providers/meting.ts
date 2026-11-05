@@ -131,6 +131,7 @@ function normalizeSong(raw: Record<string, unknown>, source: MusicSource): Searc
   const urlStr = raw.url ? String(raw.url) : '';
   const lrcStr = raw.lrc ? String(raw.lrc) : '';
   const id = extractSongId(raw, urlStr);
+  const duration = Number(raw.duration ?? raw.dt);
 
   return {
     id,
@@ -139,7 +140,9 @@ function normalizeSong(raw: Record<string, unknown>, source: MusicSource): Searc
     artist: artistStr,
     album: String(raw.album || raw.album_name || ''),
     pic: String(raw.pic || raw.cover || raw.album_pic || ''),
-    duration: normalizeDurationMs(raw.duration || raw.dt),
+    duration: Number.isFinite(duration) && duration > 0
+      ? Math.round(source === 'netease' || source === 'tencent' ? duration : duration * 1000)
+      : undefined,
     url: isDirectPlayableUrl(urlStr) ? urlStr : undefined,
     lrc: lrcStr.startsWith('[') ? lrcStr : undefined,
   };

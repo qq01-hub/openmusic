@@ -100,6 +100,7 @@ function normalizeMetingPlaylistSong(raw, source) {
 
   const id = extractIdFromApiUrl(raw.url) || String(raw.id || raw.mid || '').trim();
   if (!id) return null;
+  const duration = Number(raw.duration ?? raw.dt);
 
   return {
     id,
@@ -108,6 +109,9 @@ function normalizeMetingPlaylistSong(raw, source) {
     artist: String(raw.author || raw.artist || '未知歌手'),
     album: String(raw.album || ''),
     pic: String(raw.pic || raw.cover || ''),
+    duration: Number.isFinite(duration) && duration > 0
+      ? Math.round(source === 'netease' || source === 'tencent' ? duration : duration * 1000)
+      : undefined,
     lrc: raw.lrc ? String(raw.lrc) : undefined,
   };
 }

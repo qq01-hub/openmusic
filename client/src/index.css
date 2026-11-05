@@ -3,8 +3,13 @@
 @tailwind utilities;
 
 .home-room-grid-item {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 244px;
+  /* 保留布局隔离，避免绘制隔离裁切卡片放大、倾斜后的边缘和阴影 */
+  contain: layout style;
+}
+
+.home-room-grid-item:hover,
+.home-room-grid-item:focus-within {
+  z-index: 1;
 }
 
 .chat-message-render-boundary {
@@ -4027,12 +4032,6 @@ body.immersive-mode #hand-canvas {
   min-width: 0;
 }
 
-@media (min-width: 1024px) {
-  .room-middle-column {
-    clip-path: inset(0 round 1rem);
-  }
-}
-
 .room-main-panel {
   isolation: isolate;
   clip-path: inset(0 round 1rem);
@@ -4043,20 +4042,53 @@ body.immersive-mode #hand-canvas {
   -webkit-backdrop-filter: var(--room-panel-filter);
 }
 
-/* 队列列表会在播放器交互时频繁重绘。单独隔离其绘制层，避免 Chromium
-   将带 backdrop-filter 的队列面板短暂合成为黑色，同时不改变播放器外观。 */
+/* 队列列表在歌曲超过一屏及播放器交互时会高频滚动与重绘
+   将静态毛玻璃背景剥离到独立的 ::before 伪元素合成层，避免 Chromium
+   在局部重绘或跨 512px 瓦片边界时将队列底部合成为黑色闪动条 */
 .room-main-panel--queue {
+  position: relative;
   isolation: isolate;
-  contain: paint;
-  transform: translateZ(0);
+  clip-path: none;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
-/* 队列虚拟列表快速滚动时，避免贵宾边框逐行提升独立 GPU 层及贵宾角标逐帧触发 backdrop-filter 重采样 */
+.room-main-panel--queue::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--room-panel-bg);
+  backdrop-filter: var(--room-panel-filter);
+  -webkit-backdrop-filter: var(--room-panel-filter);
+  pointer-events: none;
+  z-index: 0;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+.room-main-panel--queue > * {
+  position: relative;
+  z-index: 1;
+}
+
+.room-player-bar {
+  isolation: isolate;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* 队列滚动容器保持独立稳定的 GPU 滚动层，避免贵宾边框逐行提升图层及贵宾角标触发重采样 */
 .queue-scroll-viewport {
   isolation: isolate;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  overscroll-behavior: contain;
 }
 
 .queue-scroll-viewport .member-queue-shell {
+  contain: layout style;
   will-change: auto;
 }
 
@@ -4069,7 +4101,8 @@ body.immersive-mode #hand-canvas {
   border-color: var(--room-panel-divider);
 }
 
-.room-ambient-root--transparent .room-main-panel {
+.room-ambient-root--transparent .room-main-panel,
+.room-ambient-root--transparent .room-main-panel--queue::before {
   background: transparent;
   box-shadow: none;
   backdrop-filter: none;

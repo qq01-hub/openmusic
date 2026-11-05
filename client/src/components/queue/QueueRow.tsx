@@ -29,8 +29,8 @@ interface Props {
   dislikeSkipThreshold?: number;
   /** 房主/管理员可拖拽排序 */
   canReorder?: boolean;
-  /** 房间关闭点赞排序或队列已拖拽锁定时，点赞仅计数 */
-  likeRaisesOrder?: boolean;
+  /** 用户轮播仅比较同一点歌人的点赞数，其他模式遵守手动排序锁定 */
+  likeOrderScope?: 'queue' | 'requester' | 'none';
   isDragOver?: boolean;
   rowRef?: React.MutableRefObject<HTMLDivElement | null>;
   onLike: (queueId: string) => void;
@@ -80,7 +80,7 @@ function QueueRow({
   memberJumpEnabled = false,
   dislikeSkipThreshold = 5,
   canReorder = false,
-  likeRaisesOrder = true,
+  likeOrderScope = 'queue',
   isDragOver = false,
   rowRef,
   onLike,
@@ -317,7 +317,11 @@ function QueueRow({
           {!song.isCurrent && (
             <div className="flex flex-shrink-0 items-center gap-0.5">
               {canLike && (
-                <QueueTip content={likedByMe ? '取消点赞' : (likeRaisesOrder ? '点赞提高排序' : '点赞（仅计数，房间设置或手动排序优先）')}>
+                <QueueTip content={likedByMe ? '取消点赞' : (
+                  likeOrderScope === 'requester' ? '点赞提高该用户轮次内的播放顺序'
+                    : likeOrderScope === 'queue' ? '点赞提高排序'
+                      : '点赞（仅计数，房间设置或手动排序优先）'
+                )}>
                   <button
                     type="button"
                     onClick={() => onLike(song.queueId)}
@@ -493,7 +497,7 @@ export default memo(QueueRow, (prev, next) => (
   && prev.memberJumpEnabled === next.memberJumpEnabled
   && prev.dislikeSkipThreshold === next.dislikeSkipThreshold
   && prev.canReorder === next.canReorder
-  && prev.likeRaisesOrder === next.likeRaisesOrder
+  && prev.likeOrderScope === next.likeOrderScope
   && prev.isDragOver === next.isDragOver
   && prev.hasSourceError === next.hasSourceError
   && prev.hasCrossSource === next.hasCrossSource

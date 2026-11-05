@@ -14,7 +14,7 @@ import { useChatSystemToastStore } from '../stores/chatSystemToastStore';
 
 const VISIBLE_ROWS = 3;
 const LIST_HEIGHT = VISIBLE_ROWS * QUEUE_ROW_HEIGHT + (VISIBLE_ROWS - 1) * QUEUE_ROW_GAP;
-const VIRTUAL_THRESHOLD = 5;
+const VIRTUAL_THRESHOLD = 80;
 const VIRTUAL_OVERSCAN_COUNT = 8;
 
 type QueueRowSong = QueueItem & { isCurrent: boolean };
@@ -30,7 +30,7 @@ type RowData = {
   memberJumpEnabled: boolean;
   dislikeSkipThreshold: number;
   canReorder: boolean;
-  likeRaisesOrder: boolean;
+  likeOrderScope: 'queue' | 'requester' | 'none';
   dragOverQueueId: string | null;
   sourceStatusMap: Map<string, SourceStatus>;
   favoriteIds: Set<string>;
@@ -71,7 +71,7 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
           memberJumpEnabled={data.memberJumpEnabled}
           dislikeSkipThreshold={data.dislikeSkipThreshold}
           canReorder={data.canReorder}
-          likeRaisesOrder={data.likeRaisesOrder}
+          likeOrderScope={data.likeOrderScope}
           isDragOver={Boolean(
             data.dragOverQueueId
             && data.dragOverQueueId === song.queueId
@@ -121,7 +121,10 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   const dislikeSkipThreshold = useRoomStore((s) => resolveDislikeSkipThreshold(s.room));
   const hasManualOrder = useRoomStore((s) => (s.room?.queue || []).some((song) => Number.isFinite(song.manualOrder)));
   const queueLikeSortEnabled = useRoomStore((s) => s.room?.queueLikeSortEnabled !== false);
-  const likeRaisesOrder = queueLikeSortEnabled && !hasManualOrder;
+  const isUserRoundRobin = useRoomStore((s) => s.room?.playMode === 'user-round-robin');
+  const likeOrderScope = !queueLikeSortEnabled ? 'none'
+    : isUserRoundRobin ? 'requester'
+      : hasManualOrder ? 'none' : 'queue';
   const { removeSong, requestJump, reorderQueue, toggleQueueLike, toggleCurrentDislike, banRoomSong } = useSocket();
   const {
     favoriteIds,
@@ -228,6 +231,10 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
       if (idx >= 0) listRef.current?.scrollToItem(idx, 'smart');
       return;
     }
+    if (listContainerRef.current) {
+      listContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     currentRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [currentKey, allSongs, useVirtualList]);
 
@@ -304,7 +311,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     const rect = container.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const edgeZone = 50;
-    const scrollEl = container.querySelector('[style*="overflow"]') as HTMLElement | null;
+    const scrollEl = (container.querySelector('[style*="overflow"]') as HTMLElement | null) || container;
     if (!scrollEl) return;
 
     cancelAnimationFrame(autoScrollRef.current);
@@ -348,7 +355,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     memberJumpEnabled,
     dislikeSkipThreshold,
     canReorder: canControlPlayback,
-    likeRaisesOrder,
+    likeOrderScope,
     dragOverQueueId,
     sourceStatusMap,
     favoriteIds,
@@ -376,7 +383,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     canControlPlayback,
     memberJumpEnabled,
     dislikeSkipThreshold,
-    likeRaisesOrder,
+    likeOrderScope,
     dragOverQueueId,
     sourceStatusMap,
     favoriteIds,
@@ -428,7 +435,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
         memberJumpEnabled={memberJumpEnabled}
         dislikeSkipThreshold={dislikeSkipThreshold}
         canReorder={canControlPlayback}
-        likeRaisesOrder={likeRaisesOrder}
+        likeOrderScope={likeOrderScope}
         isDragOver={Boolean(dragOverQueueId && dragOverQueueId === song.queueId && dragFromId !== song.queueId)}
         rowRef={song.isCurrent ? currentRef : undefined}
         onLike={handleLike}
@@ -465,7 +472,6 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
         >
           <FixedSizeList
             className="queue-scroll-viewport"
-            style={{ willChange: 'auto' }}
             ref={listRef}
             height={fillHeight ? virtualListHeight : LIST_HEIGHT}
             width="100%"
@@ -480,8 +486,10 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
         </div>
       ) : (
         <div
+          ref={listContainerRef}
           className={`queue-scroll-viewport space-y-1.5 overflow-y-auto pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
           style={fillHeight ? undefined : { height: LIST_HEIGHT }}
+          onDragOver={handleContainerDragOver}
         >
           {renderPlainRows()}
         </div>

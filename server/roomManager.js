@@ -4954,14 +4954,13 @@ function restartCurrentSong(room) {
 
 function takeNextFromQueue(room) {
   if (!room.queue.length) return null;
+  // 选下一首时先消费房主/管理员优先歌曲，保留它们的队列顺序
+  const pinnedIndex = room.queue.findIndex((item) => Number(item.ownerPriority || 0) > 0);
+  if (pinnedIndex >= 0) {
+    return room.queue.splice(pinnedIndex, 1)[0] || null;
+  }
   const mode = normalizePlayMode(room.playMode);
   if (mode === "user-round-robin") {
-    // 房主/管理员置顶是明确的人工指令，仍高于用户轮转和在线状态。
-    const pinnedIndex = room.queue.findIndex((item) => Number(item.ownerPriority || 0) > 0);
-    if (pinnedIndex >= 0) {
-      return room.queue.splice(pinnedIndex, 1)[0] || null;
-    }
-
     const queuedUserIds = [];
     const seen = new Set();
     for (const item of room.queue) {
@@ -4980,6 +4979,7 @@ function takeNextFromQueue(room) {
       lastRequesterId: room.lastPlaybackRequesterId,
       onlineUserIds: new Set(room.users.keys()),
       deferOfflineRequesters: room.deferOfflineRequesterSongs !== false,
+      queueLikeSortEnabled: room.queueLikeSortEnabled !== false,
     });
     if (!next) return null;
     const index = room.queue.findIndex((item) => item.queueId === next.queueId);
@@ -4993,10 +4993,8 @@ function takeNextFromQueue(room) {
     const pool = excludeId
       ? room.queue.map((item, index) => index).filter((index) => room.queue[index]?.queueId !== excludeId)
       : room.queue.map((_, index) => index);
-    // 插队优先于随机模式，按队列位置消费，确保新插到队首的歌曲就是下一首
-    const prioritized = pool.filter((index) => Number(room.queue[index]?.ownerPriority || 0) > 0);
-    const candidates = prioritized.length ? prioritized : (pool.length ? pool : room.queue.map((_, index) => index));
-    const idx = prioritized.length ? candidates[0] : candidates[Math.floor(Math.random() * candidates.length)];
+    const candidates = pool.length ? pool : room.queue.map((_, index) => index);
+    const idx = candidates[Math.floor(Math.random() * candidates.length)];
     return room.queue.splice(idx, 1)[0] || null;
   }
   return room.queue.shift() || null;
@@ -5038,6 +5036,7 @@ async function playNextUnlocked(room, options = {}) {
     recordSongPlay(finishedSong);
   }
   room.skipRequests = [];
+  const hasPrioritySong = room.queue.some((item) => Number(item.ownerPriority || 0) > 0);
 
   // 单曲循环：自然播完时重播当前曲；手动切歌 forceAdvance 仍前进
   if (!forceAdvance && !isSongArtistBlocked(finishedSong || room.current, keywords)
@@ -5050,8 +5049,8 @@ async function playNextUnlocked(room, options = {}) {
     recycleFinishedSongToQueue(room, finishedSong || room.current);
   }
 
-  // 点歌并插队是一次明确的下一首请求，优先于循环或收藏随机，但不改变房间播放模式
-  if (room.queue.some((item) => item.jumpNext === true)) {
+  // 单曲循环已在上方处理，其他模式先消费优先歌曲或点歌并插队，不改变房间播放模式
+  if (hasPrioritySong || room.queue.some((item) => item.jumpNext === true)) {
     clearNextRandom(room);
     setCurrentSong(room, takeNextFromQueue(room));
     return;

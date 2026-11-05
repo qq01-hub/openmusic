@@ -39,6 +39,7 @@ export function buildUserRoundRobinOrder(songs, options = {}) {
 /**
  * Pick the next requester in a fair rotation. By default, queued songs from
  * members who left are deferred while another requester remains online.
+ * Likes prioritize songs within the selected requester without changing turns.
  */
 export function selectNextUserRoundRobinSong(songs, options = {}) {
   const queue = Array.isArray(songs) ? songs : [];
@@ -66,6 +67,13 @@ export function selectNextUserRoundRobinSong(songs, options = {}) {
   const userOrder = rotatedAll.filter((userId) => eligibleUserIds.includes(userId));
   return buildUserRoundRobinOrder(
     queue.filter((item) => eligibleUserIds.includes(item.requestedById)),
-    { userOrder },
+    {
+      userOrder,
+      pickSong: options.queueLikeSortEnabled === false ? undefined : (userSongs) => userSongs.reduce((best, song) => {
+        const likes = Array.isArray(song.likedByIds) ? song.likedByIds.length : 0;
+        const bestLikes = Array.isArray(best.likedByIds) ? best.likedByIds.length : 0;
+        return likes > bestLikes ? song : best;
+      }),
+    },
   )[0] || null;
 }
