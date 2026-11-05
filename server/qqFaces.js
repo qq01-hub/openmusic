@@ -73,10 +73,12 @@ export function hasInvalidAiQqFaceTokens(text) {
 }
 
 export function collectRecentBotQqFaceIds(messages, botUserId) {
-  const recent = messages.filter((message) => message.userId === botUserId).slice(-3);
+  const recent = (Array.isArray(messages) ? messages : [])
+    .filter((message) => message?.userId === botUserId)
+    .slice(-6);
   const ids = new Set();
   for (const message of recent) {
-    for (const match of tokenizeSlashNames(message.text).matchAll(/\[qqface:([^\]]+)\]/gi)) {
+    for (const match of tokenizeSlashNames(message?.text).matchAll(/\[qqface:([^\]]+)\]/gi)) {
       const token = resolveQqFaceToken(match[1]);
       if (token) ids.add(token.slice(8, -1));
     }

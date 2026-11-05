@@ -238,14 +238,19 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
   reactionPickerOpenRef.current = reactionPickerMessageId !== null;
 
+  const aiProcessingSignature = useMemo(
+    () => aiProcessing.map((t) => `${t.sourceMessageId}:${t.status}:${t.stepText || ''}:${t.thoughtSteps?.length || 0}`).join('|'),
+    [aiProcessing],
+  );
+
   const messagesTailKey = useMemo(() => {
     if (messages.length === 0) return '';
     const tail = messages.slice(-3);
     return tail.map((m) => {
       const reactions = (m.reactions || []).map((r) => `${r.emoji}:${r.users.length}`).join(',');
       return `${m.id}:${m.imageUrl || ''}:${reactions}`;
-    }).join('|');
-  }, [messages]);
+    }).join('|') + `||${aiProcessingSignature}`;
+  }, [messages, aiProcessingSignature]);
 
   const hideChatScrollbar = useCallback(() => {
     const el = chatScrollRoot;
@@ -531,7 +536,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
       return;
     }
 
-    if (grew) {
+    if (grew || aiProcessing.length > 0) {
       const lastMessage = messages[messages.length - 1];
       if (lastMessage?.kind === 'welcome') {
         return pinToBottomWhileSticky();

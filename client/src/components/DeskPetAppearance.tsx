@@ -19,6 +19,7 @@ export default function DeskPetAppearance({ character, animation = 'idle', facin
   const config = getDeskPetCharacter(character);
   const [failedAsset, setFailedAsset] = useState('');
   const reduceMotion = useMediaQuery('(prefers-reduced-motion: reduce)');
+  // 朝向变化只更新镜像，不重新随机动作素材，避免漫游或拖拽转向时频繁重载视频产生闪烁
   const random = useMemo(() => Math.random(), [character, animation, playKey]);
   const action = useMemo(() => resolveDeskPetAction(character, animation, {
     random: () => preview ? 0 : random, baseIdle: !preview, facingLeft,
@@ -89,18 +90,49 @@ function VideoCharacter({ src, videoRef, loop, onError, label }: {
   loop: boolean; onError: () => void; label: string;
 }) {
   const [displayedSrc, setDisplayedSrc] = useState(src);
-  // 新视频开始播放前保留旧画面，避免切换素材时出现透明的解码空档
+  const [readySrc, setReadySrc] = useState('');
+  // 新视频真正绘出首帧前保留旧画面（若首次加载尚未就绪则用透明静态帧垫底），并隐藏解码中的 video，彻底消除透明 WebM 解码瞬间的黑色矩形边框闪现
   const sources = displayedSrc === src ? [src] : [displayedSrc, src];
-  return <>{sources.map(source => (
-    <video key={source} ref={node => { if (source === src) videoRef.current = node; }}
-      className="room-pet-animation__video" src={source}
-      style={{ visibility: source === displayedSrc ? 'visible' : 'hidden' }}
-      poster="/desk-pet/idle.png" autoPlay muted loop={source === src && loop} playsInline preload="auto"
-      disablePictureInPicture draggable={false}
-      onPlaying={event => { if (source === src && event.currentTarget.readyState >= 2) setDisplayedSrc(source); }}
-      onError={source === src ? onError : undefined}
-      aria-hidden={source !== displayedSrc} aria-label={label} />
-  ))}</>;
+  const markReady = (source: string) => {
+    setReadySrc(source);
+    if (source === src) {
+      setDisplayedSrc(source);
+    }
+  };
+  return (
+    <>
+      {readySrc !== displayedSrc && (
+        <img
+          className="room-pet-animation__video"
+          src="/desk-pet/idle.png"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+        />
+      )}
+      {sources.map(source => {
+        const isCurrentVisible = source === displayedSrc && readySrc === source;
+        return (
+          <video key={source} ref={node => { if (source === src) videoRef.current = node; }}
+            className="room-pet-animation__video" src={source}
+            style={{
+              opacity: isCurrentVisible ? 1 : 0,
+              visibility: isCurrentVisible ? 'visible' : 'hidden',
+            }}
+            autoPlay muted loop={source === src && loop} playsInline preload="auto"
+            disablePictureInPicture disableRemotePlayback tabIndex={-1} draggable={false}
+            onLoadedData={event => {
+              if (event.currentTarget.readyState >= 2) markReady(source);
+            }}
+            onPlaying={event => {
+              if (event.currentTarget.readyState >= 2) markReady(source);
+            }}
+            onError={source === src ? onError : undefined}
+            aria-hidden={!isCurrentVisible} aria-label={label} />
+        );
+      })}
+    </>
+  );
 }
 
 interface SpriteSequence { row: number; count: number; times: readonly number[]; frame?: number }

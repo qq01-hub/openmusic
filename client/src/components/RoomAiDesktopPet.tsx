@@ -1490,7 +1490,7 @@ export default function RoomAiDesktopPet({
             setMenuPos({ x: Math.max(12, e.clientX), y: Math.max(12, e.clientY) });
             setShowActSubmenu(false);
           }}
-          className="relative flex h-full w-full cursor-grab items-center justify-center touch-none transition-transform duration-150 active:cursor-grabbing"
+          className="relative flex h-full w-full cursor-grab items-center justify-center touch-none outline-none focus:outline-none focus-visible:outline-none transition-transform duration-150 active:cursor-grabbing"
         >
           <div
             style={{

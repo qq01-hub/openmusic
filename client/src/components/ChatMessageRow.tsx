@@ -390,6 +390,10 @@ function ChatMessageRow({
 }: ChatMessageRowProps) {
   const [menuPos, setMenuPos] = useState<ChatMessageMenuPos | null>(null);
   const [expandProcessingSteps, setExpandProcessingSteps] = useState(false);
+  useLayoutEffect(() => {
+    if (!aiProcessing) return;
+    onContentResize?.();
+  }, [aiProcessing?.status, aiProcessing?.stepText, aiProcessing?.thoughtSteps?.length, onContentResize]);
   const myAvatarUrl = useRoomStore((s) => s.avatar_url);
   const { userMap, nicknames } = getRoomUserIndex(room.users);
   const canRecall = canRecallChatMessage(msg, myUserId, {
