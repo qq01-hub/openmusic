@@ -48,11 +48,12 @@ function DailyTable({ days }: { days: Day[] }) {
   );
 }
 
-export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpenRoom, onOpenIp, onSaveDecision, onResetRisk, onHumanChallengeChange }: {
+export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpenRoom, onOpenIp, onSaveDecision, onResetRisk, onHumanChallengeChange, onDeleteAccount }: {
   detail: AccountDetail; saving: boolean;
   onOpenRoom: (id: string) => void; onOpenIp: (ip: string) => void;
   onOpenAccount: (id: string) => void; onSaveDecision: (values: Decision) => Promise<void>; onResetRisk: (id: string, reason: string) => Promise<void>;
   onHumanChallengeChange: (id: string, state: HumanChallengeState) => void;
+  onDeleteAccount: (id: string, confirmation: string, reason: string) => Promise<void>;
 }) {
   const { modal, message } = App.useApp();
   const [showHelp, setShowHelp] = useState(false);
@@ -62,6 +63,8 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   const [matchedOnly, setMatchedOnly] = useState(true);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetReason, setResetReason] = useState('');
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteForm] = Form.useForm<{ confirmation: string; reason: string }>();
   const [operationFilter, setOperationFilter] = useState('');
   const [requestPage, setRequestPage] = useState(1);
   const [requestPageSize, setRequestPageSize] = useState(10);
@@ -330,10 +333,10 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           ]}
         />
       </RiskSection>
-      <RiskSection title="歌曲请求的 IP 变化" description="近 10 分钟至少 3 个歌曲请求 IP 且切换 6 次加 20 分，切换 12 次加 30 分，稳定共享出口或两个出口之间切换不命中此因子，仅供人工复核">
+      <RiskSection title="歌曲请求的 IP 变化" description="近 10 分钟至少 4 个歌曲请求 IP 且切换 10 次加 20 分，切换 20 次加 30 分（15 秒内合并突发切换），稳定共享出口、双栈并发或正常网络切换不命中此因子，仅供人工复核">
         <div className="risk-tag-bar">
           <Tag color="cyan">歌曲请求 IP {count(detail.musicIpCount)} 个</Tag>
-          <Tag color={(detail.musicIpChanges || 0) >= 6 ? 'orange' : 'blue'}>切换 {count(detail.musicIpChanges)} 次</Tag>
+          <Tag color={(detail.musicIpChanges || 0) >= 10 ? 'orange' : 'blue'}>切换 {count(detail.musicIpChanges)} 次</Tag>
         </div>
       </RiskSection>
       <RiskSection title="最近重要请求" description="保留近 24 小时最近 200 条歌曲和 WebSocket 请求，包含被拒绝的尝试，封面仅保留分组计数">
@@ -485,13 +488,33 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   );
 
   const decisionTab = (
-    <div className="risk-tab-content">
+    <div className="risk-tab-content risk-decision-tab">
+      <div className="risk-decision-grid">
+      <RiskSection title="账户标记与处置" description="所有变更需要填写原因并确认，风险分只排序和提示，不自动封禁">
+        <div className="risk-decision-current">
+          <span>当前账户状态</span>
+          <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
+        </div>
+        <Form<Decision> initialValues={{ status: detail.status, tags: detail.tags, note: detail.note, reason: '' }} layout="vertical" onFinish={confirmDecision} disabled={saving || humanSaving || Boolean(detail.deletedAt)}>
+          <Form.Item name="status" label="处置后状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
+          <Form.Item name="tags" label="风险标签" extra="最多 10 个，每个最多 24 字" rules={[{ validator: (_, values: string[]) => values?.length > 10 || values?.some(value => value.length > 24) ? Promise.reject(new Error('标签最多 10 个，每个最多 24 字')) : Promise.resolve() }]}>
+            <Select mode="tags" tokenSeparators={['，', ',']} maxCount={10} placeholder="输入标签后按回车" />
+          </Form.Item>
+          <Form.Item name="note" label="内部备注" rules={[{ max: 500 }]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="记录核查线索和后续处理建议" /></Form.Item>
+          <Form.Item name="reason" label="本次处置原因" rules={[{ required: true, whitespace: true, message: '请填写可追溯的处置原因' }, { max: 200 }]}><Input.TextArea rows={2} maxLength={200} showCount placeholder="说明此次状态或标记调整的依据" /></Form.Item>
+          <div className="risk-decision-actions">
+            <span className="risk-muted">保存前需再次确认</span>
+            <Button type="primary" htmlType="submit" loading={saving}>复核并保存处置</Button>
+          </div>
+        </Form>
+      </RiskSection>
       <RiskSection title="异常访问人机验证" description="管理员放行长期有效，直至撤销，仅跳过异常访问验证码，不解除账户封禁、登录验证或请求额度限制">
+        <p className="risk-decision-explanation">验证码放行独立于账户状态，封禁与请求额度限制仍然生效</p>
         {human && (
           <Descriptions
             className="risk-kv-grid"
             size="small"
-            column={{ xs: 1, sm: 2 }}
+            column={1}
             colon={false}
             items={[
               {
@@ -531,9 +554,11 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
             ]}
           />
         )}
+        {!human && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无人机验证记录" />}
         <Form<{ reason: string }>
           layout="vertical"
-          style={{ marginTop: 16 }}
+          className="risk-human-decision-form"
+          disabled={saving || humanSaving || Boolean(detail.deletedAt)}
           onFinish={values => {
             modal.confirm({
               title: human?.bypass ? '确认撤销验证码放行？' : '确认长期放行此账户的异常访问验证码？',
@@ -558,26 +583,61 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
             });
           }}
         >
-          <Form.Item name="reason" label="放行或撤销原因" rules={[{ required: true, whitespace: true }, { max: 200 }]}>
-            <Input.TextArea rows={2} maxLength={200} showCount />
+          <Form.Item name="reason" label="放行或撤销原因" rules={[{ required: true, whitespace: true, message: '请填写放行或撤销的原因' }, { max: 200 }]}>
+            <Input.TextArea rows={2} maxLength={200} showCount placeholder="说明本次验证码处置的依据" />
           </Form.Item>
-          <Button htmlType="submit" loading={humanSaving} disabled={saving}>{human?.bypass ? '撤销长期放行' : '长期放行验证码'}</Button>
+          <div className="risk-decision-actions">
+            <Button htmlType="submit" loading={humanSaving} disabled={saving || Boolean(detail.deletedAt)}>{human?.bypass ? '撤销长期放行' : '长期放行验证码'}</Button>
+          </div>
         </Form>
       </RiskSection>
-
-      <RiskSection title="账户标记与处置" description="所有变更需要填写原因并确认，风险分只排序和提示，不自动封禁">
-        <Form<Decision> initialValues={{ status: detail.status, tags: detail.tags, note: detail.note, reason: '' }} layout="vertical" onFinish={confirmDecision} disabled={saving}>
-          <div className="risk-detail-grid">
-            <Form.Item name="status" label="账户状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
-            <Form.Item name="tags" label="风险标签" extra="最多 10 个，每个最多 24 字" rules={[{ validator: (_, values: string[]) => values?.length > 10 || values?.some(value => value.length > 24) ? Promise.reject(new Error('标签最多 10 个，每个最多 24 字')) : Promise.resolve() }]}>
-              <Select mode="tags" tokenSeparators={['，', ',']} maxCount={10} placeholder="输入标签后按回车" />
-            </Form.Item>
+      </div>
+      <RiskSection title="高影响操作" description="与日常标记分开处理，操作前请核对当前账户和处置原因">
+        <div className="risk-sensitive-action">
+          <div>
+            <h4>重置风险状态和分数</h4>
+            <p>账户恢复正常，风险分数归零，已有统计、历史 IP 和最近使用的 IP 继续保留</p>
           </div>
-          <Form.Item name="note" label="内部备注" rules={[{ max: 500 }]}><Input.TextArea rows={3} maxLength={500} showCount placeholder="记录核查线索和后续处理建议" /></Form.Item>
-          <Form.Item name="reason" label="本次处置原因" rules={[{ required: true, whitespace: true, message: '请填写可追溯的处置原因' }, { max: 200 }]}><Input.TextArea rows={2} maxLength={200} showCount /></Form.Item>
-          <Button type="primary" htmlType="submit" loading={saving}>复核并保存处置</Button>
-        </Form>
-        <Button style={{ marginTop: 12 }} danger disabled={saving} onClick={() => { setResetReason(''); setResetOpen(true); }}>重置风险状态和分数</Button>
+          <Button danger disabled={saving || humanSaving || Boolean(detail.deletedAt)} onClick={() => { setResetReason(''); setResetOpen(true); }}>重置风险</Button>
+        </div>
+        <div className="risk-sensitive-action">
+          <div>
+            <h4>永久注销账户</h4>
+            <p>立即撤销所有登录，解绑登录身份，删除收藏、分享和音乐凭证及个人 AI 记忆，公共聊天与风控审计保留</p>
+            <p>须先解散或转让该账户创建的房间，注销后无法恢复，原登录方式可注册全新账户</p>
+          </div>
+          <Button danger disabled={saving || humanSaving || Boolean(detail.deletedAt && !detail.deletionPending) || (!detail.identityAvailable && !detail.deletionPending)} onClick={() => { deleteForm.resetFields(); setDeleteOpen(true); }}>
+            {detail.deletionPending ? '重试注销清理' : detail.deletedAt ? '账户已注销' : '注销账户'}
+          </Button>
+        </div>
+        <Modal
+          title={detail.deletionPending ? '重试账户注销清理' : '永久注销此账户'}
+          open={deleteOpen}
+          onCancel={() => { if (!saving) setDeleteOpen(false); }}
+          onOk={() => deleteForm.submit()}
+          confirmLoading={saving}
+          okText="确认永久注销"
+          cancelText="取消"
+          okButtonProps={{ danger: true }}
+          cancelButtonProps={{ disabled: saving }}
+          closable={!saving}
+          maskClosable={!saving}
+        >
+          <Alert type="warning" showIcon title="账户与个人数据注销后无法恢复" description={`当前账户：${detail.displayName || detail.id}（${detail.id}）`} style={{ marginBottom: 20 }} />
+          <Form form={deleteForm} layout="vertical" disabled={saving} onFinish={async values => {
+            try {
+              await onDeleteAccount(detail.id, values.confirmation, values.reason);
+              setDeleteOpen(false);
+            } catch { /* 保留表单，具体错误由调用方展示 */ }
+          }}>
+            <Form.Item name="reason" label="注销原因" rules={[{ required: true, whitespace: true, message: '请填写可追溯的注销原因' }, { max: 200 }]}>
+              <Input.TextArea rows={3} showCount maxLength={200} placeholder="填写核查依据或用户申请原因" />
+            </Form.Item>
+            <Form.Item name="confirmation" label="输入“注销账户”确认" rules={[{ required: true, message: '请输入“注销账户”' }, { pattern: /^注销账户$/, message: '请完整输入“注销账户”' }]}>
+              <Input autoComplete="off" />
+            </Form.Item>
+          </Form>
+        </Modal>
         <Modal
           title="重置账户风险状态和分数"
           open={resetOpen}
@@ -644,6 +704,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         </Space>
       </div>
       {detail.dailyEstimated && <Alert type="warning" showIcon title="升级日统计为保守估算" description="为防止升级后额度被重复使用，首次切换日合并相交的旧 UTC 日计数，可能高于真实当日值，下一北京时间自然日恢复新口径" />}
+      {Boolean(detail.deletedAt) && <Alert type={detail.deletionPending ? 'warning' : 'info'} showIcon title={detail.deletionPending ? '账户已停用，关联数据清理待完成' : '账户已永久注销'} description={detail.deletionPending ? '所有会话已撤销，服务端会自动重试，也可在“高影响操作”中手动重试清理' : `注销时间：${time(detail.deletedAt!)}，此页仅保留风控追溯记录`} />}
       <Tabs
         className="risk-detail-tabs"
         tabBarGutter={24}

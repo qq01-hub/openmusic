@@ -1,4 +1,5 @@
 import { evalRedisScript } from './redisScripts.js';
+import { FAVORITE_OWNER_ACTIVE_LUA } from './accountDataGuard.js';
 import { createLatestWriteQueue } from './coalescedRoomWrites.js';
 import { decryptRoomSecrets, encryptRoomSecrets } from './roomCredentialCrypto.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
@@ -292,7 +293,7 @@ const FAVORITE_SHARE_OWNER_PREFIX = 'openmusic:favorite-share-owner:';
 const FAVORITE_SHARE_TOKEN_BYTES = 6;
 const FAVORITE_SHARE_TOKEN_LENGTH = 8;
 const FAVORITE_SHARE_VERSION = 3;
-const FAVORITES_CAS_SCRIPT = `
+const FAVORITES_CAS_SCRIPT = `${FAVORITE_OWNER_ACTIVE_LUA}
 local current = redis.call('GET', KEYS[1])
 if ARGV[1] == '0' then
   if current then return 0 end
@@ -302,7 +303,7 @@ end
 if current ~= ARGV[3] then redis.call('SET', KEYS[1], ARGV[3]) end
 return 1
 `;
-const FAVORITE_COLLECTION_CAS_SCRIPT = `
+const FAVORITE_COLLECTION_CAS_SCRIPT = `${FAVORITE_OWNER_ACTIVE_LUA}
 for i = 1, #KEYS do
   local offset = (i - 1) * 3
   local current = redis.call('GET', KEYS[i])
@@ -696,14 +697,13 @@ export async function createFavoriteShare(userId) {
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const code = createFavoriteShareCode();
-    const created = await redisClient.set(favoriteShareKey(code), reference, { NX: true, EX: ttl });
-    if (created !== 'OK') continue;
-
-    const ownerSet = await redisClient.set(favoriteShareOwnerKey(id), code, { NX: true, EX: ttl });
-    if (ownerSet === 'OK') return { code, count: songs.length, expiresAt };
-
-    // 另一个并发请求先完成了该用户的创建；删除本次未被引用的随机码。
-    await redisClient.del(favoriteShareKey(code));
+    const created = await evalRedisScript(redisClient, `${FAVORITE_OWNER_ACTIVE_LUA}
+      if redis.call('EXISTS', KEYS[3]) == 1 then return 0 end
+      if not redis.call('SET', KEYS[2], ARGV[1], 'NX', 'EX', ARGV[3]) then return 0 end
+      redis.call('SET', KEYS[3], ARGV[2], 'EX', ARGV[3])
+      return 1
+    `, { keys: [favoriteKey(id), favoriteShareKey(code), favoriteShareOwnerKey(id)], arguments: [reference, code, String(ttl)] });
+    if (Number(created) === 1) return { code, count: songs.length, expiresAt };
     const winner = await getExistingFavoriteShare(id);
     if (winner) {
       return { code: winner.code, count: winner.reference.songs.length, expiresAt: winner.reference.expiresAt };

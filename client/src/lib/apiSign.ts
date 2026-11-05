@@ -1,7 +1,7 @@
 const PUBLIC_API_PATHS = new Set([
   '/api/health', '/api/app-version', '/api/site-announcement', '/api/site-seo',
   '/api/session/bootstrap', '/api/auth/email/code', '/api/auth/email/register',
-  '/api/auth/email/login', '/api/auth/logout', '/api/auth/session',
+  '/api/auth/email/login', '/api/auth/logout', '/api/auth/delete', '/api/auth/session',
   '/api/auth/email/password-reset/code', '/api/auth/email/password-reset',
   '/api/auth/providers', '/api/auth/wechat/account', '/api/auth/refresh',
   '/api/auth/device-login', '/api/auth/device-migrate', '/api/auth/wechat/start', '/api/auth/wechat/qr', '/api/auth/wechat/poll',

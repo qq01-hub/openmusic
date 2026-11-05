@@ -1,6 +1,7 @@
 import { randomBytes } from 'crypto';
 import qiniu from 'qiniu';
 import { getRuntimeConfig } from './runtimeConfig.js';
+import { isBuiltinStickerUrl } from './builtinStickers.js';
 
 const UPLOAD_URLS = {
   z0: 'https://upload.qiniup.com',
@@ -100,6 +101,7 @@ const EXTERNAL_CHAT_IMAGE_HOST_RE = /^img[\w.-]*\.baidu\.com$/i;
 export function validateExternalChatImage(imageUrl) {
   const url = String(imageUrl || '').trim();
   if (!url || url.length > 2048) return { error: '图片地址无效' };
+  if (isBuiltinStickerUrl(url)) return { ok: true };
 
   let parsed;
   try {

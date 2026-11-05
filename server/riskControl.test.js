@@ -45,3 +45,50 @@ test('resetRisk resets one account and returns the retained latest IP', async ()
   assert.equal(evaluated.keys[8], 'openmusic:risk:v1:scores');
   assert.equal(scriptText.includes("redis.call('ZADD', KEYS[9], 0, ARGV[2])"), true);
 });
+
+test('mobile network switching across 4G/Wi-Fi and dual-stack IPs does not reach high risk threshold', () => {
+  const mobileSwitch = evaluateRisk({
+    ipCount: 6,
+    musicIpCount: 3,
+    musicIpChanges: 8,
+    errors: 24,
+    requests: 60,
+    musicRequests: 30,
+    roomJoins: 2,
+  });
+  assert.equal(mobileSwitch.score, 0);
+  assert.equal(mobileSwitch.level, 'low');
+
+  const severeRotatingProxy = evaluateRisk({
+    ipCount: 16,
+    musicIpCount: 5,
+    musicIpChanges: 20,
+    errors: 60,
+    requests: 150,
+    musicRequests: 120,
+    roomJoins: 0,
+  });
+  assert.equal(severeRotatingProxy.score >= 60, true);
+  assert.equal(severeRotatingProxy.level, 'high');
+});
+
+test('human check challenge rejections do not increment denied counters in consume script', async () => {
+  let scriptText = '';
+  const client = {
+    async get() { return null; },
+    async eval(script) {
+      if (script.includes('ACCOUNT_HUMAN_CHECK_REQUIRED')) {
+        scriptText = script;
+        return ['ACCOUNT_HUMAN_CHECK_REQUIRED', 1, 1, 0, 60, 0];
+      }
+      return 1;
+    },
+  };
+  const control = createRiskControl({ getStore: () => client, now: () => 1_700_000_000_000 });
+  const result = await control.consume({ id: 'acct_1234567890abcdef' }, { ip: '198.51.100.8', kind: 'api' });
+  assert.equal(result.code, 'ACCOUNT_HUMAN_CHECK_REQUIRED');
+  assert.equal(result.allowed, false);
+  const humanGateBlock = scriptText.slice(scriptText.indexOf('humanGate(KEYS[1]'));
+  assert.equal(humanGateBlock.includes("HINCRBY', KEYS[1], 'denied'"), false);
+  assert.equal(humanGateBlock.includes("HINCRBY', KEYS[4], 'denied'"), false);
+});

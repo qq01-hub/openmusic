@@ -1,4 +1,4 @@
-import { listAccountSessions, revokeAccountSessionById } from './accountAuth.js';
+import { AccountAuthError, listAccountSessions, revokeAccountSessionById } from './accountAuth.js';
 import { trimExpiredListTail } from './redisListRetention.js';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'crypto';
 import {
@@ -263,8 +263,8 @@ function audit(action, detail = {}, ip = '') {
 const AUDIT_ACTION_GROUPS = {
   auth: ['login_ok', 'login_fail', 'logout'],
   oauth: ['linuxdo_bind', 'linuxdo_unbind', 'github_bind', 'github_unbind', 'oauth_callback_failed', 'social_bind', 'social_unbind', 'social_fail'],
-  account: ['set_credentials', 'set_credentials_fail', 'set_entry_path'],
-  risk: ['risk_session_revoke', 'risk_account_update', 'risk_policy_update', 'risk_history_clear', 'risk_history_clear_failed', 'risk_human_challenge_bypass'],
+  account: ['set_credentials', 'set_credentials_fail', 'set_entry_path', 'account_self_delete', 'account_self_delete_failed'],
+  risk: ['risk_session_revoke', 'risk_account_update', 'risk_account_delete', 'risk_account_delete_failed', 'risk_policy_update', 'risk_history_clear', 'risk_history_clear_failed', 'risk_human_challenge_bypass'],
   config: [
     'set_runtime_config',
     'system_upgrade_start',
@@ -597,6 +597,7 @@ export function mountAdminApi(app, {
   broadcastRoomUpdate = null,
   clearRoomOwnerBindings = null,
   issueOAuthState,
+  deleteAccount,
 }) {
   const requireAdminOrigin = createRequireAdminOrigin(allowedOrigins);
 
@@ -886,9 +887,9 @@ export function mountAdminApi(app, {
     res.setHeader('Cache-Control', 'no-store, private');
     try { await handler(req, res); }
     catch (error) {
-      res.status(error instanceof RiskControlError ? error.status : 503).json({
-        error: error instanceof RiskControlError ? error.message : '风控服务暂不可用',
-        code: error instanceof RiskControlError ? error.code : 'RISK_STORAGE_UNAVAILABLE',
+      res.status(error instanceof RiskControlError || error instanceof AccountAuthError ? error.status : 503).json({
+        error: error instanceof RiskControlError || error instanceof AccountAuthError ? error.message : '风控服务暂不可用',
+        code: error instanceof RiskControlError || error instanceof AccountAuthError ? error.code : 'RISK_STORAGE_UNAVAILABLE',
       });
     }
   };
@@ -898,6 +899,21 @@ export function mountAdminApi(app, {
   }));
   app.get('/api/admin/risk/accounts/:id', requireAdmin, riskHandler(async (req, res) => {
     res.json(await riskControl.detail(req.params.id));
+  }));
+  app.post('/api/admin/risk/accounts/:id/delete', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const ip = getClientIp?.(req) || req.ip || '';
+    try {
+      const result = await deleteAccount(req.params.id, req.body, ip);
+      appendAdminAudit('risk_account_delete', {
+        accountId: req.params.id, reason: req.body.reason.trim(), pending: result.pending,
+      }, ip);
+      res.json(result);
+    } catch (error) {
+      appendAdminAudit('risk_account_delete_failed', {
+        accountId: req.params.id, code: error instanceof AccountAuthError ? error.code : 'service_error',
+      }, ip);
+      throw error;
+    }
   }));
   app.get('/api/admin/risk/accounts/:id/sessions', requireAdmin, riskHandler(async (req, res) => {
     res.json({ items: await listAccountSessions(req.params.id) });

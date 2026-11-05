@@ -1,5 +1,7 @@
 import { decryptSensitiveValue, encryptSensitiveValue } from './roomCredentialCrypto.js';
 import { anonymousAccountId } from './anonymousAccess.js';
+import { randomBytes } from 'node:crypto';
+import { evalRedisScript } from './redisScripts.js';
 
 const PLATFORM_SET = new Set(['netease', 'tencent', 'kugou', 'qishui']);
 const ACCOUNT_ID_PATTERN = /^acct_[A-Za-z0-9_-]{16,64}$/u;
@@ -115,6 +117,16 @@ export function createAccountMusicService({
   share = async () => ({ ok: false, error: '共享服务不可用' }),
   unshare = async () => ({ ok: true }),
 } = {}) {
+  async function writeRecord(store, id, plat, record, onlyIfAbsent = false) {
+    const result = await evalRedisScript(store, `
+      -- ACCOUNT_MUSIC_WRITE
+      local raw = redis.call('GET', KEYS[1])
+      if raw and cjson.decode(raw).deletedAt then return -1 end
+      return redis.call(ARGV[3], KEYS[2], ARGV[1], ARGV[2])
+    `, { keys: [`openmusic:account:${id}`, key(id)], arguments: [plat, JSON.stringify(record), onlyIfAbsent ? 'HSETNX' : 'HSET'] });
+    if (Number(result) === -1) throw fail('ACCOUNT_DELETED', '账户已注销，无法保存音乐凭证', 401);
+  }
+
   async function list(rawAccountId) {
     const id = requireAccount(rawAccountId);
     const store = requireStore(getStore);
@@ -141,7 +153,7 @@ export function createAccountMusicService({
     const encrypted = encryptSensitiveValue(secret, `account-music:${id}:${plat}`);
     if (!encrypted) throw fail('MUSIC_CREDENTIAL_ENCRYPTION_UNAVAILABLE', '服务端未配置凭证加密密钥', 503);
     const store = requireStore(getStore);
-    await store.hSet(key(id), plat, JSON.stringify({ metadata: { ...metadata, shared: false }, cookie: encrypted }));
+    await writeRecord(store, id, plat, { metadata: { ...metadata, shared: false }, cookie: encrypted });
     return publicMetadata({ ...metadata, shared: false });
   }
 
@@ -159,7 +171,7 @@ export function createAccountMusicService({
     return list(id);
   }
 
-  async function setShared(rawAccountId, rawPlatform, shared) {
+  async function setSharedInternal(rawAccountId, rawPlatform, shared) {
     const id = requireAccount(rawAccountId);
     const plat = requirePlatform(rawPlatform);
     const current = await readRecord(requireStore(getStore), id, plat);
@@ -168,7 +180,7 @@ export function createAccountMusicService({
       const result = await unshare(id, plat, current.cookie, current.metadata);
       if (result?.ok === false) throw fail(result.code || 'MUSIC_UNSHARE_FAILED', result.error || '取消共享失败', result.status || 502);
       const store = requireStore(getStore);
-      await store.hSet(key(id), plat, JSON.stringify({ metadata: { ...current.metadata, shared: false, updatedAt: Date.now() }, cookie: encryptSensitiveValue(current.cookie, `account-music:${id}:${plat}`) }));
+      await writeRecord(store, id, plat, { metadata: { ...current.metadata, shared: false, updatedAt: Date.now() }, cookie: encryptSensitiveValue(current.cookie, `account-music:${id}:${plat}`) });
       return publicMetadata({ ...current.metadata, shared: false });
     }
     const config = getConfig() || {};
@@ -178,8 +190,31 @@ export function createAccountMusicService({
     if (!result?.ok) throw fail(result?.code || 'MUSIC_SHARE_FAILED', result?.error || '共享会员失败', result?.status || 502);
     const metadata = normalizeMetadata({ ...(result.data || {}), ...current.metadata, shared: true, revokeToken: result.revokeToken || result.data?.revokeToken }, plat) || { ...current.metadata, shared: true, revokeToken: result.revokeToken || '' };
     const store = requireStore(getStore);
-    await store.hSet(key(id), plat, JSON.stringify({ metadata: { ...metadata, shared: true, updatedAt: Date.now() }, cookie: encryptSensitiveValue(current.cookie, `account-music:${id}:${plat}`) }));
+    await writeRecord(store, id, plat, { metadata: { ...metadata, shared: true, updatedAt: Date.now() }, cookie: encryptSensitiveValue(current.cookie, `account-music:${id}:${plat}`) });
     return publicMetadata({ ...metadata, shared: true });
+  }
+
+  async function setShared(rawAccountId, rawPlatform, shared) {
+    const id = requireAccount(rawAccountId);
+    const store = requireStore(getStore);
+    const lockKey = `openmusic:account:music-lock:${id}`;
+    const token = randomBytes(24).toString('hex');
+    if (await store.set(lockKey, token, { NX: true, EX: 120 }) !== 'OK') {
+      throw fail('ACCOUNT_MUSIC_BUSY', '音乐账号正在处理中，请稍后重试', 409);
+    }
+    try {
+      const active = await evalRedisScript(store, `
+        -- ACCOUNT_MUSIC_ACTIVE
+        local raw = redis.call('GET', KEYS[1])
+        if raw and cjson.decode(raw).deletedAt then return 0 end
+        return 1
+      `, { keys: [`openmusic:account:${id}`], arguments: [] });
+      if (Number(active) !== 1) throw fail('ACCOUNT_DELETED', '账户已注销', 401);
+      return await setSharedInternal(id, rawPlatform, shared);
+    } finally {
+      await evalRedisScript(store, `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`,
+        { keys: [lockKey], arguments: [token] });
+    }
   }
 
   async function rememberRoom(rawAccountId, room, { ownerUserId } = {}) {
@@ -195,7 +230,7 @@ export function createAccountMusicService({
       const encrypted = encryptSensitiveValue(cookie, `account-music:${id}:${plat}`);
       if (!encrypted) throw fail('MUSIC_CREDENTIAL_ENCRYPTION_UNAVAILABLE', '服务端未配置凭证加密密钥', 503);
       // 补存只填空，不覆盖主动绑定、共享状态或删除标记
-      await store.hSetNX(key(id), plat, JSON.stringify({ metadata: { ...metadata, shared: false }, cookie: encrypted }));
+      await writeRecord(store, id, plat, { metadata: { ...metadata, shared: false }, cookie: encrypted }, true);
     }
     return true;
   }
@@ -232,9 +267,9 @@ export function createAccountMusicService({
       if (!record.cookie) throw fail('MUSIC_CREDENTIAL_UNAVAILABLE', '旧设备音乐凭证无法读取，请检查加密配置', 503);
       const encrypted = encryptSensitiveValue(record.cookie, `account-music:${id}:${plat}`);
       if (!encrypted) throw fail('MUSIC_CREDENTIAL_ENCRYPTION_UNAVAILABLE', '服务端未配置凭证加密密钥', 503);
-      await store.hSetNX(key(id), plat, JSON.stringify({
+      await writeRecord(store, id, plat, {
         metadata: { ...record.metadata, shared: false, revokeToken: '' }, cookie: encrypted,
-      }));
+      }, true);
     }
   }
 

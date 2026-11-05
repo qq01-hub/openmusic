@@ -175,13 +175,16 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
     const accessToken = await signedAccess(account.id, sid, expiresAt);
     const record = { version: 2, deviceKey, userId: account.id, createdAt: timestamp(), expiresAt: refreshExpiresAt, refreshHash: hash(refreshToken) };
     const saved = await run(client => evalRedisScript(client, `
+      local account = redis.call('GET', KEYS[3])
+      if not account or cjson.decode(account).deletedAt then return -2 end
       redis.call('ZREMRANGEBYSCORE', KEYS[2], '-inf', ARGV[1])
       if redis.call('ZCARD', KEYS[2]) >= 32 then return -1 end
       if not redis.call('SET', KEYS[1], ARGV[2], 'NX', 'EX', ARGV[3]) then return 0 end
       redis.call('ZADD', KEYS[2], ARGV[4], ARGV[5])
       redis.call('EXPIRE', KEYS[2], ARGV[3])
       return 1
-    `, { keys: [familyKey(sid), sessionsKey(account.id)], arguments: [String(timestamp()), JSON.stringify(record), String(ACCOUNT_REFRESH_TTL_SEC), String(refreshExpiresAt), sid] }));
+    `, { keys: [familyKey(sid), sessionsKey(account.id), `openmusic:account:${account.id}`], arguments: [String(timestamp()), JSON.stringify(record), String(ACCOUNT_REFRESH_TTL_SEC), String(refreshExpiresAt), sid] }));
+    if (Number(saved) === -2) throw new AccountTokenError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
     if (Number(saved) === -1) throw new AccountTokenError('ACCOUNT_SESSION_LIMIT', '登录设备过多，请联系管理员撤销闲置会话', 429);
     if (Number(saved) !== 1) throw new AccountTokenError('ACCOUNT_SESSION_UNAVAILABLE', '账户会话建立失败，请重试');
     return { deviceKeyId: deviceKey ? hash(JSON.stringify(deviceKey)) : null, deviceMigrationRequired: !deviceKey, sessionId: sid, accessToken, refreshToken, expiresAt: expiresAt * 1000, refreshExpiresAt: refreshExpiresAt * 1000 };
@@ -197,7 +200,7 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
       if (record.version !== 2 || record.userId !== claims.sub || record.expiresAt <= timestamp() || claims.exp > record.expiresAt) return null;
       const account = await getAccount(record.userId);
       if (!account) return null;
-      return { account, expiresAt: claims.exp * 1000, refreshExpiresAt: record.expiresAt * 1000, sessionId: claims.sid, deviceMigrationRequired: !record.deviceKey, deviceKeyId: record.deviceKey ? hash(JSON.stringify(normalizeDeviceKey(record.deviceKey))) : null, deviceKey: record.deviceKey };
+      return { account, createdAt: record.createdAt * 1000, expiresAt: claims.exp * 1000, refreshExpiresAt: record.expiresAt * 1000, sessionId: claims.sid, deviceMigrationRequired: !record.deviceKey, deviceKeyId: record.deviceKey ? hash(JSON.stringify(normalizeDeviceKey(record.deviceKey))) : null, deviceKey: record.deviceKey };
     });
   }
 

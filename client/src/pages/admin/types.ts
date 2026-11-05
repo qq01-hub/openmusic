@@ -33,6 +33,7 @@ export interface AdminAuditEntry {
   smtpCode?: string;
   smtpStatus?: number;
   accountId?: string;
+  pending?: boolean;
   at: number;
   action: string;
   ip: string;

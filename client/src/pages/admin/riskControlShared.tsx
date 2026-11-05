@@ -9,6 +9,7 @@ export type Identity = { provider: string; username: string; subjectHint: string
 export type Factor = { id: string; label: string; value: number; points: number; threshold?: number; maxPoints?: number; matched?: boolean; window?: string; category?: string };
 export type HumanChallengeState = { pending: boolean; day: string; triggers: number; passes: number; triggerTotal: number; passTotal: number; bypass: boolean; bypassReason: string; lastTriggeredAt: number; lastVerifiedAt: number; cooldownUntil: number; dailyLimit: number };
 export type RiskAccount = Decision & {
+  deletedAt?: number; deletionPending?: boolean;
   humanChallenge?: HumanChallengeState;
   id: string; email: string; displayName: string; nickname: string; emailVerified: boolean; hasPassword: boolean; identityAvailable: boolean;
   identities: Identity[]; identityCount: number; roomUserId: string; createdAt: number; firstSeenAt: number; lastSeenAt: number; lastLoginAt: number;

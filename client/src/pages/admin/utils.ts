@@ -114,6 +114,13 @@ export function formatAuditAction(entry: AdminAuditEntry) {
       return '系统升级请求被拒绝';
     case 'risk_account_update':
       return `更新账户风控 ${entry.accountId || ''}（${entry.status === 'blocked' ? '限制访问' : entry.status === 'watch' ? '关注' : '正常'}）`;
+    case 'risk_account_delete':
+      return `永久注销账户 ${entry.accountId || ''}${entry.pending ? '（关联数据清理待完成）' : ''}${entry.reason ? ` · ${entry.reason}` : ''}`;
+    case 'account_self_delete':
+      return `用户自行注销 ${entry.accountId || ''}${entry.pending ? '（关联数据清理待完成）' : ''}`;
+    case 'risk_account_delete_failed':
+    case 'account_self_delete_failed':
+      return `账户注销未完成 ${entry.accountId || ''}${entry.code ? `（${entry.code}）` : ''}`;
     case 'risk_policy_update':
       return '更新全局请求额度';
     case 'risk_session_revoke':

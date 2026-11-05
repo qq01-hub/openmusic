@@ -71,10 +71,10 @@ const MUSIC_OPERATIONS = ['url', 'search', 'lrc', 'song', 'playlist', 'search_pl
 
 const RULES = [
   { id: 'denied', label: '当日多次触发额度或封禁', threshold: 10, points: 30, highThreshold: 100, highPoints: 50 },
-  { id: 'ipCount', label: '近 24 小时使用多个访问 IP', threshold: 5, points: 20, highThreshold: 10, highPoints: 30 },
+  { id: 'ipCount', label: '近 24 小时使用多个访问 IP', threshold: 8, points: 15, highThreshold: 15, highPoints: 25 },
   { id: 'minutePeak', label: '当日请求存在突发高峰', threshold: 600, points: 30 },
   { id: 'sharedAccounts', label: '同 IP 关联账户，仅供共享网络复核', threshold: 5, points: 0 },
-  { id: 'musicIpChanges', label: '近 10 分钟歌曲请求使用至少 3 个 IP 且频繁切换', threshold: 6, points: 20, highThreshold: 12, highPoints: 30 },
+  { id: 'musicIpChanges', label: '近 10 分钟歌曲请求使用至少 4 个 IP 且频繁切换', threshold: 10, points: 20, highThreshold: 20, highPoints: 30 },
   { id: 'authFailures', label: '当日账户凭据多次验证失败，可能正在被攻击', threshold: 10, points: 15, highThreshold: 50, highPoints: 25 },
   { id: 'clientCount', label: '近 24 小时登录客户端特征较多，可被伪造需复核', threshold: 5, points: 10 },
   { id: 'roomHopping', label: '当日高频进入多个不同房间', threshold: 1, points: 15 },
@@ -99,9 +99,9 @@ export function evaluateRisk(input = {}) {
     emptyResponseRate: input.responseTotal >= 100 ? Math.floor((input.responseEmpty || 0) / input.responseTotal * 100) : 0,
     operationConcentration: input.dailyEstimated ? 0 : concentration,
     musicWithoutContext: !input.dailyEstimated && input.musicRequests >= 500 && input.roomJoins === 0 && input.socketRequests >= 0 && input.socketRequests / input.musicRequests <= 0.005 ? 1 : 0,
-    musicIpChanges: input.musicIpCount >= 3 ? input.musicIpChanges : 0,
+    musicIpChanges: input.musicIpCount >= 4 ? input.musicIpChanges : 0,
     roomHopping: input.roomCount >= 10 && input.roomJoins >= 30 ? 1 : 0,
-    highErrorRate: input.errors >= 20 && input.errors / Math.max(1, input.requests || 0) >= 0.3 ? 1 : 0,
+    highErrorRate: input.errors >= 50 && (input.requests || 0) >= 100 && input.errors / Math.max(1, input.requests || 0) >= 0.3 ? 1 : 0,
     musicOnlyBurst: input.requests >= 1000 && input.musicRequests / input.requests > 0.9 ? 1 : 0,
   };
   const factors = RULES.map(rule => {
@@ -136,10 +136,10 @@ local function scoreRisk(profile, daily, ips, shared, clients, rooms, now, rules
   local requests = count('requests')
   local music = count('music')
   local values = {denied=count('denied'), ipCount=ipCount, minutePeak=count('minutePeak'), sharedAccounts=shared,
-    musicIpChanges=redis.call('ZCOUNT', musicIps, now - 600000, '+inf') >= 3 and redis.call('ZCOUNT', musicChanges, now - 600000, '+inf') or 0,
+    musicIpChanges=redis.call('ZCOUNT', musicIps, now - 600000, '+inf') >= 4 and redis.call('ZCOUNT', musicChanges, now - 600000, '+inf') or 0,
     authFailures=count('authFailures'), clientCount=redis.call('ZCOUNT', clients, now - 86400000, '+inf'),
     roomHopping=redis.call('ZCARD', rooms) >= 10 and count('roomJoins') >= 30 and 1 or 0,
-    highErrorRate=count('errors') >= 20 and count('errors') / math.max(1, requests) >= 0.3 and 1 or 0,
+    highErrorRate=count('errors') >= 50 and requests >= 100 and count('errors') / math.max(1, requests) >= 0.3 and 1 or 0,
     operationConcentration=not estimated and music >= 200 and operationTotal >= 200 and math.floor(operationMax / operationTotal * 100) or 0,
     musicWithoutContext=not estimated and music >= 500 and count('roomJoins') == 0 and count('socketRequests') / music <= 0.005 and 1 or 0,
     musicMinutePeak=count('musicMinutePeak'), untrustedForwarded=count('untrustedForwarded'),
@@ -174,14 +174,26 @@ function clientSignal(agent) {
 }
 
 function safeIdentity(account, fallback = {}) {
+  if (account?.deletedAt) return {
+    displayName: '已注销账户', email: '', emailVerified: false, hasPassword: false,
+    identities: [], identityCount: 0, identityAvailable: false, roomUserId: '',
+    deletedAt: account.deletedAt, deletionPending: Boolean(account.deletionPending),
+  };
   const email = String(account ? account.email || '' : fallback.email || '');
   const identities = (Array.isArray(account?.identities) ? account.identities : []).filter(entry => ['email', 'github', 'linuxdo', 'wechat'].includes(entry.provider)).map(entry => ({
     provider: entry.provider, username: String(entry.username || '').slice(0, 128), linkedAt: Number(entry.linkedAt || 0),
     subjectHint: entry.provider === 'email' ? '' : entry.subject ? (String(entry.subject).length > 6 ? `${String(entry.subject).slice(0, 2)}***${String(entry.subject).slice(-2)}` : '***') : '',
   }));
-  return { displayName: identities.find(entry => entry.username)?.username || fallback.nickname || email.split('@')[0] || '',
+  return { displayName: account?.nickname || identities.find(entry => entry.username)?.username || fallback.nickname || email.split('@')[0] || '',
     email, emailVerified: Boolean(account?.emailVerifiedAt), hasPassword: Boolean(account?.password),
     identities, identityCount: identities.length, identityAvailable: Boolean(account), roomUserId: String(account?.roomUserId || '') };
+}
+
+export function matchesRiskAccountName(query, account = {}, nicknames = []) {
+  const normalized = query.normalize('NFKC').toLowerCase();
+  const names = [account.nickname, account.displayName, ...nicknames,
+    ...(account.identities || []).map(identity => identity.username)];
+  return names.some(value => typeof value === 'string' && value.normalize('NFKC').toLowerCase().includes(normalized));
 }
 
 const CONSUME_SCRIPT = `${SCORE_LUA}
@@ -261,9 +273,10 @@ if ip == 'unknown' then shared = 0 end
 local sequence = redis.call('HGET', KEYS[1], 'requests')
 local isMusic = kind == 'music' or ARGV[13] == '1'
 if isMusic and ip ~= 'unknown' then
-  local previous = redis.call('HMGET', KEYS[1], 'lastMusicIp', 'lastMusicAt')
-  if previous[1] and previous[1] ~= ip and tonumber(previous[2] or '0') >= now - 600000 then
+  local previous = redis.call('HMGET', KEYS[1], 'lastMusicIp', 'lastMusicAt', 'lastMusicChangeAt')
+  if previous[1] and previous[1] ~= ip and tonumber(previous[2] or '0') >= now - 600000 and now - tonumber(previous[3] or '0') >= 15000 then
     redis.call('ZADD', KEYS[16], now, ARGV[1] .. ':' .. sequence)
+    redis.call('HSET', KEYS[1], 'lastMusicChangeAt', now)
   end
   redis.call('HSET', KEYS[1], 'lastMusicIp', ip, 'lastMusicAt', now)
   redis.call('ZADD', KEYS[15], now, ip)
@@ -300,12 +313,7 @@ if isMusic or kind == 'socket' then
 end
 local score = scoreRisk(KEYS[1], KEYS[4], KEYS[6], shared, KEYS[13], KEYS[12], now, ARGV[14], KEYS[15], KEYS[16])
 if ARGV[21] == '1' and ARGV[12] ~= 'refresh' and humanGate(KEYS[1], now, ARGV[22], ARGV[23], code == '' and score >= 60 and kind ~= 'image', ARGV[24], id) == 1 then
-  if code == '' then
-    redis.call('HINCRBY', KEYS[1], 'denied', 1)
-    redis.call('HINCRBY', KEYS[4], 'denied', 1)
-  end
   code = 'ACCOUNT_HUMAN_CHECK_REQUIRED'
-  redis.call('HSET', KEYS[1], 'lastDeniedAt', now, 'lastDeniedCode', code)
 end
 redis.call('HSET', KEYS[1], 'score', score, 'scoreAt', now)
 redis.call('ZADD', KEYS[8], score, id)
@@ -825,13 +833,10 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         if (!fields[5]) return null;
         const account = rawAccount ? JSON.parse(rawAccount) : null;
         const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
-        const aliases = { email: '邮箱', wechat: '微信文件传输助手 weixin', github: 'GitHub', linuxdo: 'Linux.do' };
-        const values = [id, identity.displayName, identity.email, identity.roomUserId, account?.displayName,
-          ...fields.slice(0, 5), ...nicknames, ...JSON.parse(fields[6] || '[]'),
-          ...identity.identities.flatMap(entry => [entry.username, entry.provider, aliases[entry.provider], entry.subjectHint])];
-        const matched = values.some(value => typeof value === 'string' && value.normalize('NFKC').toLowerCase().includes(normalized));
+        const matched = !account?.deletedAt && matchesRiskAccountName(normalized, account || {}, [fields[0], ...nicknames]);
+        const exactIdentity = id === query || identity.roomUserId === query;
         const subjectMatched = Array.isArray(account?.identities) && account.identities.some(entry => typeof entry.subject === 'string' && entry.subject === query);
-        return matched || subjectMatched ? id : null;
+        return matched || exactIdentity || (!account?.deletedAt && subjectMatched) ? id : null;
       })));
       matches.push(...found.filter(Boolean));
     }
@@ -1054,7 +1059,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
             accounts += await run(() => evalRedisScript(client, `${checkLock}
               if redis.call('HEXISTS', KEYS[2], 'firstSeenAt') == 0 then return 0 end
               for index = 4, #KEYS do redis.call('DEL', KEYS[index]) end
-              redis.call('HDEL', KEYS[2], 'registrationIp', 'lastLoginIp', 'lastLoginAt', 'lastHumanVerifiedAt', 'lastNetworkRoute', 'lastRequestIp', 'lastNetworkIp', 'lastMusicIp', 'lastMusicAt', 'lastRoomId', 'lastRoomAt', 'lastAuthFailureAt', 'lastDeniedAt', 'lastDeniedCode')
+              redis.call('HDEL', KEYS[2], 'registrationIp', 'lastLoginIp', 'lastLoginAt', 'lastHumanVerifiedAt', 'lastNetworkRoute', 'lastRequestIp', 'lastNetworkIp', 'lastMusicIp', 'lastMusicAt', 'lastMusicChangeAt', 'lastRoomId', 'lastRoomAt', 'lastAuthFailureAt', 'lastDeniedAt', 'lastDeniedCode')
               redis.call('HSET', KEYS[2], 'loginCount', 0)
               for _, field in ipairs({'requests', 'musicRequests', 'socketRequests', 'imageRequests', 'apiRequests', 'denied', 'errors', 'authFailures', 'roomJoins', 'aiRequests', 'aiTextRequests', 'aiVisionRequests', 'lastAiRequestAt'}) do
                 local dailyField = field == 'musicRequests' and 'music' or field

@@ -11,7 +11,7 @@ const PUBLIC_GET = new Set([
 const PUBLIC_POST = new Set([
   '/api/session/bootstrap', '/api/auth/email/code', '/api/auth/email/register', '/api/auth/email/login',
   '/api/auth/email/password-reset/code', '/api/auth/email/password-reset',
-  '/api/auth/logout', '/api/auth/human-challenge',
+  '/api/auth/logout', '/api/auth/delete', '/api/auth/human-challenge',
   '/api/auth/refresh', '/api/auth/device-login', '/api/auth/device-migrate',
   '/api/auth/wechat/start', '/api/auth/wechat/poll', '/api/auth/wechat/account',
 ]);

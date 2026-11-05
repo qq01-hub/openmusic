@@ -46,6 +46,7 @@ import {
   verifyAiBotMessage,
 } from "./chatAiAuth.js";
 import { getPublicRoomAiConfig, normalizeRoomAiBotName, normalizeRoomAiPersona, resolveRoomAiBotName } from "./aiModelService.js";
+import { isRoomAiPersonaAllowed } from "./aiPersonaPresets.js";
 import {
   applyPermanentResidence,
   cancelPermanentApplication,
@@ -3438,6 +3439,11 @@ export function setRoomAiSettings(roomId, actorId, settings = {}, connectionId =
   if (!room) return { error: "房间不存在" };
   if (!isOwnerConnection(room, actorId, connectionId)) return { error: "仅房主可调整 AI 设置" };
 
+  const persona = settings.persona !== undefined ? normalizeRoomAiPersona(settings.persona) : undefined;
+  if (persona !== undefined && !isRoomAiPersonaAllowed(persona)) {
+    return { error: "房主自定义角色设定不能超过 500 字" };
+  }
+
   if (settings.enabled !== undefined) {
     room.roomAiEnabled = Boolean(settings.enabled);
   }
@@ -3448,7 +3454,7 @@ export function setRoomAiSettings(roomId, actorId, settings = {}, connectionId =
     room.roomAiBotName = normalizeRoomAiBotName(settings.botName);
   }
   if (settings.persona !== undefined) {
-    room.roomAiPersona = normalizeRoomAiPersona(settings.persona);
+    room.roomAiPersona = persona;
   }
   persistRoom(room);
   return { room: serializeRoom(room) };

@@ -9,7 +9,7 @@ import { useTrackLyrics } from '../hooks/useTrackLyrics';
 import { readLocalPlaybackTime } from '../hooks/useSmoothPlaybackTime';
 import { getActiveLyricLine } from '../lib/lyricLookup';
 import { sampleLyricReaction, type LyricReactionMemory } from '../lib/deskPetLyrics';
-import { AI_BOT_USER_ID } from '../lib/chatAi';
+import { getDeskPetReply, getDeskPetThinkingTask } from '../lib/deskPetChat';
 import { normalizeAiQqFaceText } from '../lib/qface';
 import Tooltip from './Tooltip';
 import OriginalPetActionPicker from './OriginalPetActionPicker';
@@ -69,6 +69,8 @@ interface RippleFx {
 
 const PET_W = 116;
 const PET_H = 132;
+const MOBILE_PET_SCALE = 0.72;
+const LONG_PRESS_MENU_MS = 480;
 const ONE_SHOT_STATES = new Set<PetState>(['original_action', 'eat', 'happy']);
 
 const MUSIC_FOODS = [
@@ -104,7 +106,7 @@ export default function RoomAiDesktopPet({
   onQuickWake,
   onOpenPetSettings,
 }: Props) {
-  // 手机端/窄屏不渲染桌宠，节省屏幕空间
+  // 手机端/窄屏默认按紧凑比例渲染桌宠，并适配触屏拖拽与长按菜单
   const isMobileViewport = useMediaQuery('(max-width: 1023px)');
 
   const currentSong = useRoomStore((s) => s.room?.current ?? null);
@@ -113,6 +115,8 @@ export default function RoomAiDesktopPet({
   const isPlaying = useRoomStore((s) => Boolean(s.room?.isPlaying && s.room?.current));
   const aiProcessing = useChatStore((s) => s.aiProcessing);
   const messages = useChatStore((s) => s.messages);
+  const chatRoomId = useChatStore((s) => s.roomId);
+  const myUserId = useRoomStore((s) => s.mySocketId);
 
   // 个人桌宠偏好设置（仅对当前成员自己生效）
   const petEnabled = useDeskPetStore((s) => s.enabled);
@@ -125,8 +129,9 @@ export default function RoomAiDesktopPet({
   const physicsEnabled = useDeskPetStore((s) => s.physicsEnabled);
   const uiInteractEnabled = useDeskPetStore((s) => s.uiInteractEnabled);
   const sizeScale = useDeskPetStore((s) => s.sizeScale);
+  const effectiveScale = Number((sizeScale * (isMobileViewport ? MOBILE_PET_SCALE : 1)).toFixed(3));
   const updatePref = useDeskPetStore((s) => s.updatePref);
-  const lyricInteractionEnabled = !isMobileViewport && deskPetEnabled && petEnabled && dialogEnabled;
+  const lyricInteractionEnabled = deskPetEnabled && petEnabled && dialogEnabled;
   const lyrics = useTrackLyrics(lyricInteractionEnabled ? currentSong : null);
   const lyricReactionRef = useRef<LyricReactionMemory>({
     songKey: '', seen: new Set(), nextAt: Date.now() + 15000,
@@ -201,7 +206,12 @@ export default function RoomAiDesktopPet({
   const lastSongKeyRef = useRef('');
   const clickTimestampsRef = useRef<number[]>([]);
 
-  const isAiThinking = aiEnabled && aiProcessing.some((item) => item.status === 'queued' || item.status === 'processing');
+  // 桌宠只响应当前成员发起的对话，聊天室仍保留全房间任务
+  const ownThinkingTask = useMemo(
+    () => getDeskPetThinkingTask(aiProcessing, myUserId),
+    [aiProcessing, myUserId],
+  );
+  const isAiThinking = aiEnabled && Boolean(ownThinkingTask);
   const baseStateRef = useRef<PetState>('idle');
   baseStateRef.current = (isAiThinking && workEnabled) || pomodoroEndAt ? 'work' : 'idle';
   const finishOneShot = useCallback(() => {
@@ -227,7 +237,7 @@ export default function RoomAiDesktopPet({
     setPetState(baseStateRef.current);
   }, [roamEnabled]);
   const activeThinkingStep = useMemo(() => {
-    const active = aiProcessing.find((item) => item.status === 'queued' || item.status === 'processing');
+    const active = ownThinkingTask;
     if (!active) return '';
     if (active.stepText) {
       return active.stepText;
@@ -236,27 +246,27 @@ export default function RoomAiDesktopPet({
       return active.thoughtSteps[active.thoughtSteps.length - 1];
     }
     return `${botName}正在认真思考与搜歌…`;
-  }, [aiProcessing, botName]);
+  }, [ownThinkingTask, botName]);
 
   const clampViewportPos = useCallback((x: number, y: number) => {
     const w = typeof window !== 'undefined' ? window.innerWidth : 1280;
     const h = typeof window !== 'undefined' ? window.innerHeight : 800;
     const bottomBar = typeof document !== 'undefined' ? document.getElementById('bottom-bar') : null;
     const bottomReserve = bottomBar ? Math.max(76, h - bottomBar.getBoundingClientRect().top + 6) : 84;
+    const edgePad = isMobileViewport ? 8 : 12;
     return {
-      x: Math.min(Math.max(12 + PET_W * (sizeScale - 1) / 2, x),
-        Math.max(12, w - PET_W - 12 - PET_W * (sizeScale - 1) / 2)),
-      y: Math.min(Math.max(52 + PET_H * Math.max(0, sizeScale - 1), y), Math.max(52, h - PET_H - bottomReserve)),
+      x: Math.min(Math.max(edgePad + PET_W * (effectiveScale - 1) / 2, x),
+        Math.max(edgePad, w - PET_W - edgePad - PET_W * (effectiveScale - 1) / 2)),
+      y: Math.min(Math.max(52 + PET_H * Math.max(0, effectiveScale - 1), y), Math.max(52, h - PET_H - bottomReserve)),
     };
-  }, [sizeScale]);
+  }, [effectiveScale, isMobileViewport]);
 
   const hasAlignedQueuePosRef = useRef(false);
   const hasUserMovedRef = useRef(false);
 
-  // 初始化位置放到播放队列 div ([data-guide="room-queue"]) 内部的右下角
+  // 初始化位置放到播放队列 div ([data-guide="room-queue"]) 内部的右下角，窄屏回退到视口右下角
   useEffect(() => {
     if (
-      isMobileViewport ||
       !deskPetEnabled ||
       !petEnabled ||
       hasAlignedQueuePosRef.current ||
@@ -271,7 +281,7 @@ export default function RoomAiDesktopPet({
       const queueEl = document.querySelector<HTMLElement>('[data-guide="room-queue"]');
       if (queueEl) {
         const rect = queueEl.getBoundingClientRect();
-        if (rect.width > PET_W && rect.height > PET_H) {
+        if (rect.width > PET_W && rect.height > PET_H && rect.bottom <= window.innerHeight) {
           hasAlignedQueuePosRef.current = true;
           setPos(
             clampViewportPos(
@@ -281,6 +291,16 @@ export default function RoomAiDesktopPet({
           );
           return;
         }
+      }
+      if (isMobileViewport) {
+        hasAlignedQueuePosRef.current = true;
+        setPos(
+          clampViewportPos(
+            window.innerWidth - PET_W - 8,
+            window.innerHeight - PET_H - 96,
+          ),
+        );
+        return;
       }
       attempts += 1;
       if (attempts < 30) {
@@ -702,14 +722,15 @@ export default function RoomAiDesktopPet({
     };
   }, [aiEnabled, botName, clampViewportPos, say, spawnParticle]);
 
-  // 监听 AI 最新回复：同步弹出迷你气泡
-  const latestBotMessage = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const msg = messages[i];
-      if (msg.userId === AI_BOT_USER_ID && msg.text) return msg;
-    }
-    return null;
-  }, [messages]);
+  // 只联动回复当前成员的 AI 消息，不按昵称判断归属
+  const latestBotMessage = useMemo(
+    () => getDeskPetReply(messages, myUserId),
+    [messages, myUserId],
+  );
+
+  useEffect(() => {
+    setBubble((current) => current?.aiOnly ? null : current);
+  }, [chatRoomId, myUserId]);
 
   useEffect(() => {
     if (!aiEnabled) {
@@ -795,7 +816,7 @@ export default function RoomAiDesktopPet({
 
   // 听歌时长累计 & 番茄钟倒计时 & 放歌音符飘动 & 能量微循环
   useEffect(() => {
-    if (!deskPetEnabled || !petEnabled || isMobileViewport) return;
+    if (!deskPetEnabled || !petEnabled) return;
     let tickCount = 0;
     const timer = window.setInterval(() => {
       tickCount += 1;
@@ -832,11 +853,11 @@ export default function RoomAiDesktopPet({
       }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [deskPetEnabled, isMobileViewport, isPlaying, petEnabled, playOriginalAction, pomodoroEndAt, say, spawnParticle]);
+  }, [deskPetEnabled, isPlaying, petEnabled, playOriginalAction, pomodoroEndAt, say, spawnParticle]);
 
   // 核心动画循环：走动漫游 (roam) + 物理引擎抛投/弹射/重力反弹 (physics)
   useEffect(() => {
-    if (!deskPetEnabled || !petEnabled || isMobileViewport) return;
+    if (!deskPetEnabled || !petEnabled) return;
     let rafId = 0;
     let lastTime = performance.now();
 
@@ -906,11 +927,11 @@ export default function RoomAiDesktopPet({
     return () => {
       if (rafId) window.cancelAnimationFrame(rafId);
     };
-  }, [clampViewportPos, deskPetEnabled, isMobileViewport, petEnabled, physicsEnabled, triggerSquash]);
+  }, [clampViewportPos, deskPetEnabled, petEnabled, physicsEnabled, triggerSquash]);
 
   // AI 自主行为调度器：根据用户个人开关自动在 待机 / 走动漫游 / 玩耍 / 组件互动 / 音乐碎碎念 之间切换
   useEffect(() => {
-    if (!deskPetEnabled || !petEnabled || isMobileViewport) return;
+    if (!deskPetEnabled || !petEnabled) return;
     const timer = window.setInterval(() => {
       const cur = stateRef.current;
       if (cur !== 'idle') return;
@@ -1084,9 +1105,9 @@ export default function RoomAiDesktopPet({
     return () => window.removeEventListener('pointerdown', onPointerDown);
   }, [menuPos]);
 
-  // 鼠标拖拽 / 抛投 / Shift 蓄力弹弓弹射
+  // 鼠标/触摸拖拽 / 抛投 / Shift 蓄力弹弓弹射 / 触屏长按展开菜单
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.stopPropagation();
     dragCleanupRef.current?.();
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
@@ -1107,6 +1128,22 @@ export default function RoomAiDesktopPet({
     dragSamplesRef.current = [{ x: e.clientX, y: e.clientY, t: performance.now() }];
     const pointerId = e.pointerId;
     const startPointer = { x: e.clientX, y: e.clientY };
+    let longPressTriggered = false;
+    let longPressTimer: number | null = e.pointerType !== 'mouse' && !useSlingshot
+      ? window.setTimeout(() => {
+          if (dragMovedRef.current) return;
+          longPressTriggered = true;
+          setMenuPos({ x: Math.max(12, startPointer.x), y: Math.max(12, startPointer.y) });
+          setShowActSubmenu(false);
+        }, LONG_PRESS_MENU_MS)
+      : null;
+
+    const clearLongPress = () => {
+      if (longPressTimer !== null) {
+        window.clearTimeout(longPressTimer);
+        longPressTimer = null;
+      }
+    };
 
     const onPointerMove = (moveEvent: PointerEvent) => {
       if (moveEvent.pointerId !== pointerId) return;
@@ -1115,6 +1152,8 @@ export default function RoomAiDesktopPet({
         moveEvent.clientY - startPointer.y,
       );
       if (distMoved > 5) {
+        clearLongPress();
+        if (longPressTriggered) return;
         dragMovedRef.current = true;
         hasUserMovedRef.current = true;
       }
@@ -1143,6 +1182,7 @@ export default function RoomAiDesktopPet({
       if (upEvent.pointerId !== pointerId) return;
       cleanup();
       dragTargetRef.current = null;
+      if (longPressTriggered) return;
 
       if (isSlingshotDragRef.current && dragMovedRef.current) {
         const anchorX = posRef.current.x + PET_W / 2;
@@ -1151,7 +1191,7 @@ export default function RoomAiDesktopPet({
         const pullDy = anchorY - upEvent.clientY;
         setSlingshotPull(null);
         velRef.current = slingshotVelocity(
-          pullAngle(-pullDx, -pullDy), slingshotPower(Math.hypot(pullDx, pullDy), PET_W * sizeScale),
+          pullAngle(-pullDx, -pullDy), slingshotPower(Math.hypot(pullDx, pullDy), PET_W * effectiveScale),
         );
         triggerSquash(0.75, 1.28, 220);
         spawnParticle('spark', '🚀', 0, 0);
@@ -1208,6 +1248,7 @@ export default function RoomAiDesktopPet({
       setPetState(baseStateRef.current);
     };
     const cleanup = () => {
+      clearLongPress();
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerCancel);
@@ -1219,17 +1260,17 @@ export default function RoomAiDesktopPet({
     window.addEventListener('pointercancel', onPointerCancel);
   };
 
-  if (isMobileViewport || !deskPetEnabled) {
+  if (!deskPetEnabled) {
     return null;
   }
 
-  // 收起后把召唤胶囊放在底栏右下角，避开聊天发送区域
+  // 收起后把召唤胶囊放在右下角，窄屏避让底部播放栏，桌面避开聊天发送区域
   if (!petEnabled) {
     return createPortal(
       <div
         data-desk-pet-root="true"
         data-desk-pet-collapsed="true"
-        className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] right-3 z-[46]"
+        className="pointer-events-auto fixed bottom-[calc(env(safe-area-inset-bottom,0px)+4.5rem)] lg:bottom-[calc(env(safe-area-inset-bottom,0px)+0.75rem)] right-3 z-[46]"
       >
         <Tooltip side="left" content={`召唤我的桌宠「${botName}」`}>
           <button
@@ -1289,12 +1330,12 @@ export default function RoomAiDesktopPet({
       {/* 桌宠主体容器 */}
       <div
         style={{
-          transform: `translate3d(${Math.round(pos.x)}px, ${Math.round(pos.y)}px, 0) scale(${sizeScale})`,
+          transform: `translate3d(${Math.round(pos.x)}px, ${Math.round(pos.y)}px, 0) scale(${effectiveScale})`,
           transformOrigin: 'center bottom',
           width: PET_W,
           height: PET_H,
         }}
-        className="pointer-events-auto absolute top-0 left-0"
+        className="pointer-events-auto absolute top-0 left-0 touch-none"
       >
         {/* dafeiyu-pet 同款纯白圆角对话气泡 (#bubble) */}
         {displayBubbleText && (
@@ -1412,6 +1453,25 @@ export default function RoomAiDesktopPet({
           ))}
         </div>
 
+        {isMobileViewport && (
+          <button
+            type="button"
+            aria-label="打开桌宠菜单"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuPos({
+                x: Math.max(12, Math.round(pos.x + PET_W / 2)),
+                y: Math.max(12, Math.round(pos.y + PET_H / 2)),
+              });
+              setShowActSubmenu(false);
+            }}
+            className="pointer-events-auto absolute top-0 left-0 z-20 flex h-6 w-6 items-center justify-center rounded-full border border-[#7896ff]/40 bg-white/92 text-xs font-bold text-[#1e2a52] shadow"
+          >
+            ⋯
+          </button>
+        )}
+
         {/* 桌宠多层动画骨架：#lean -> #flip -> #tilt -> #squash */}
         <div
           onPointerDown={handlePointerDown}
@@ -1430,7 +1490,7 @@ export default function RoomAiDesktopPet({
             setMenuPos({ x: Math.max(12, e.clientX), y: Math.max(12, e.clientY) });
             setShowActSubmenu(false);
           }}
-          className="relative flex h-full w-full cursor-grab items-center justify-center transition-transform duration-150 active:cursor-grabbing"
+          className="relative flex h-full w-full cursor-grab items-center justify-center touch-none transition-transform duration-150 active:cursor-grabbing"
         >
           <div
             style={{

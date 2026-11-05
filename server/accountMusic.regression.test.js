@@ -38,6 +38,11 @@ function setup(options = {}) {
       return 'OK';
     },
     async eval(_script, { keys, arguments: args }) {
+      if (_script.includes('ACCOUNT_MUSIC_ACTIVE')) return 1;
+      if (_script.includes('ACCOUNT_MUSIC_WRITE')) {
+        if (args[2] === 'HSETNX') return Number(await this.hSetNX(keys[1], args[0], args[1]));
+        return this.hSet(keys[1], args[0], args[1]);
+      }
       if (locks.get(keys[0]) !== args[0]) return 0;
       locks.delete(keys[0]);
       return 1;

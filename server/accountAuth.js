@@ -319,7 +319,7 @@ function normalizeIdentityRecord(identity) {
 }
 
 function normalizeAccountRecord(account) {
-  if (!account || typeof account !== 'object') return null;
+  if (!account || typeof account !== 'object' || account.deletedAt) return null;
   const identities = Array.isArray(account.identities)
     ? account.identities.map(normalizeIdentityRecord).filter(Boolean)
     : [];

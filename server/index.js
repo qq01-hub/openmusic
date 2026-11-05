@@ -308,8 +308,12 @@ import {
   publicAccount,
   AccountAuthError,
   normalizeEmail,
+  verifyPassword,
 } from './accountAuth.js';
 import { createAccountMusicService } from './accountMusic.js';
+import { createAccountDeletionService, validateAccountDeletion } from './accountDeletion.js';
+import { removeMemberAiContext } from './roomAiContext.js';
+import { removeMemberAiUserState } from './roomAiUserState.js';
 
 // 由 mountAdminApi() 返回赋值：房主 OAuth 回调路由与后台 OAuth 回调共用同一个
 // 已在第三方平台注册的 redirect_uri，只能在这一个路由里按 state.purpose 分发，
@@ -330,6 +334,27 @@ const accountMusic = createAccountMusicService({
     if (!metadata?.revokeToken) return { ok: true };
     return revokeMusicContribution(metadata.revokeToken);
   },
+});
+
+const accountDeletion = createAccountDeletionService({
+  getStore: getRedisClient,
+  beforeDelete: async (id) => {
+    if (listRoomIds().some(roomId => getRoomInternal(roomId)?.ownerAccountId === id)) {
+      throw new AccountAuthError('ACCOUNT_HAS_OWNED_ROOMS', '请先解散或转让自己创建的房间，再注销账户', 409);
+    }
+    await flushAllPendingRoomPersists();
+  },
+  onDisabled: (id) => {
+    io.to(`account:${id}`).emit('account_session_invalidated', { reason: 'account_deleted', stopReconnect: true });
+    io.in(`account:${id}`).disconnectSockets(true);
+  },
+  cleanup: async (id, roomUserId) => {
+    await Promise.all(['netease', 'tencent', 'kugou', 'qishui'].map(platform => accountMusic.remove(id, platform)));
+    removeMemberAiContext(roomUserId);
+    removeMemberAiUserState(roomUserId);
+    await flushAllPendingRoomPersists();
+  },
+  onResult: outcome => incrementMetric('account_deletion_total', { outcome }),
 });
 
 async function restoreAccountMusicToRoom(accountId, room, { ownerUserId } = {}) {
@@ -789,6 +814,7 @@ const limitNewSessionBootstrap = createRateLimiter({ windowMs: 60_000, max: 45 }
 const limitAccountEmailCodeIp = createRateLimiter({ windowMs: 10 * 60_000, max: 5 });
 const limitAccountEmailCodeEmail = createRateLimiter({ windowMs: 10 * 60_000, max: 3 });
 const limitAccountLogin = createRateLimiter({ windowMs: 60_000, max: 10 });
+const limitAccountDeletion = createRateLimiter({ windowMs: 60_000, max: 5 });
 const limitAccountLoginEmail = createRateLimiter({ windowMs: 15 * 60_000, max: 12 });
 const limitAccountLoginEmailIp = createRateLimiter({ windowMs: 5 * 60_000, max: 6 });
 const limitAccountRefresh = createRateLimiter({ windowMs: 60_000, max: 60 });
@@ -3114,6 +3140,57 @@ app.post('/api/auth/logout', async (req, res) => {
   return res.json({ ok: true });
 });
 
+app.post('/api/auth/delete', async (req, res) => {
+  const ip = getRequestIp(req);
+  let accountId = '';
+  try {
+    const account = await resolveAccountFromRequest(req);
+    if (!account || account.anonymous) throw new AccountAuthError('ACCOUNT_AUTH_REQUIRED', '请先登录账户', 401);
+    accountId = account.id;
+    if (!limitAccountDeletion(`self:${account.id}:${ip}`)) {
+      throw new AccountAuthError('ACCOUNT_DELETION_RATE_LIMITED', '注销尝试过于频繁，请稍后重试', 429);
+    }
+    validateAccountDeletion(req.body);
+    if (req.body?.accountId !== account.id) throw new AccountAuthError('ACCOUNT_CHANGED', '账户已变化，请重新打开账户页后操作', 409);
+    await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip });
+    if (account.password) {
+      if (typeof req.body?.password !== 'string' || req.body.password.length > 256 || !await verifyPassword(req.body.password, account.password)) {
+        throw new AccountAuthError('AUTH_INVALID', '当前账户密码不正确', 401);
+      }
+    } else {
+      const session = await inspectAccountSession(resolveAccountSessionToken(req));
+      if (!session?.createdAt || Date.now() - session.createdAt > 10 * 60_000) {
+        throw new AccountAuthError('ACCOUNT_REAUTH_REQUIRED', '请退出并重新登录，在登录后 10 分钟内完成注销', 403);
+      }
+    }
+    const result = await accountDeletion.remove(account.id);
+    clearAccountSessionCookie(res, true);
+    appendSetCookieHeaders(res, [`${GUEST_HANDOFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure) ? '; Secure' : ''}`]);
+    const userId = createServerClientId();
+    const deviceId = createServerClientId();
+    let guestBound = false;
+    try {
+      guestBound = await linkDeviceToUser(deviceId, userId);
+    } catch {
+      guestBound = false;
+    }
+    if (guestBound) {
+      setIdentityCookieHeaders(res, userId, signClientId(userId, Math.floor(Date.now() / 1000)), deviceId);
+    } else {
+      incrementMetric('account_deletion_total', { outcome: 'guest_binding_failed' });
+      appendSetCookieHeaders(res, [IDENTITY_UID_COOKIE, IDENTITY_TOKEN_COOKIE, DEVICE_ID_COOKIE].map(name =>
+        `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure) ? '; Secure' : ''}`));
+    }
+    appendAdminAudit('account_self_delete', { accountId: account.id, pending: result.pending }, ip);
+    recordAccountAuthMetric('delete', result.pending ? 'pending' : 'success');
+    return res.json(result);
+  } catch (error) {
+    appendAdminAudit('account_self_delete_failed', { accountId, code: error instanceof AccountAuthError ? error.code : 'service_error' }, ip);
+    recordAccountAuthMetric('delete', error instanceof AccountAuthError ? error.code : 'error');
+    return sendAccountAuthError(res, error);
+  }
+});
+
 app.get('/api/auth/providers', (_req, res) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, private, max-age=0');
   res.setHeader('CDN-Cache-Control', 'no-store');
@@ -4517,6 +4594,11 @@ function monitorSocketAccountSession(socket) {
   broadcastRoomUpdate,
   clearRoomOwnerBindings,
   issueOAuthState: issueAccountOAuthState,
+  deleteAccount: async (id, input, ip) => {
+    validateAccountDeletion(input, { admin: true });
+    if (!limitAccountDeletion(`admin:${ip}`)) throw new AccountAuthError('ACCOUNT_DELETION_RATE_LIMITED', '注销操作过于频繁，请稍后重试', 429);
+    return accountDeletion.remove(id);
+  },
 }));
 
 function isPrivateHostname(hostname) {
@@ -7005,8 +7087,16 @@ io.on('connection', (socket) => {
       });
       if (!aiRate.allowed) {
         incrementMetric('socket_rate_limit_rejected_total', { event: 'room_ai' });
+        const rateLimitLines = [
+          '慢点喊，我手还没停呢',
+          '别急别急，上一句还没喘口气',
+          '你连珠炮啊，等我两秒',
+          '耳朵要忙不过来了，缓一下再叫',
+          '一个个来，别催这么急嘛',
+          '打字太快啦，让我歇半口气',
+        ];
         const posted = postBotChatMessage(roomId, {
-          text: '问得太快啦，稍等一下再叫我～',
+          text: rateLimitLines[Math.floor(Math.random() * rateLimitLines.length)],
           replyTo: result.message,
         });
         if (posted.message) io.to(roomId).emit('chat_message', posted.message);
@@ -7465,13 +7555,18 @@ httpServer.listen(PORT, () => {
   console.log(`🔌 自定义音源接口: ${customMusic.configured ? `${customMusic.routes.length} 条路由` : '未配置'}`);
   console.log(`💾 持久化存储: ${isRedisEnabled() ? 'Redis' : '未连接（仅安装向导）'}`);
   startMetingHealthProbe();
+  void accountDeletion.resumePending();
 });
+
+const accountDeletionRetryTimer = setInterval(() => { void accountDeletion.resumePending(); }, 60_000);
+accountDeletionRetryTimer.unref();
 
 let shuttingDown = false;
 
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  clearInterval(accountDeletionRetryTimer);
   riskChallengeBus?.stop();
   console.log(`${signal}: 正在优雅退出，通知客户端重连并刷写房间…`);
 

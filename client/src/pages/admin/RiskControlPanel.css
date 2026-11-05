@@ -53,6 +53,26 @@
 .risk-section-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-top: 1px solid #edf0f5; padding-top: 16px; margin-top: 16px; color: #52637c; }
 .risk-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .risk-tab-content { display: flex; flex-direction: column; gap: 16px; }
+.risk-decision-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); align-items: stretch; gap: 20px; }
+.risk-decision-grid > .risk-section { display: flex; flex-direction: column; }
+.risk-decision-grid .ant-form { display: flex; flex: 1; flex-direction: column; }
+.risk-decision-grid .ant-form-item { margin-bottom: 20px; }
+.risk-decision-current { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--risk-border); color: var(--risk-muted); }
+.risk-decision-explanation { margin: 0 0 20px; color: var(--risk-muted); line-height: 1.8; }
+.risk-decision-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; margin-top: auto; padding-top: 4px; }
+.risk-decision-actions > .risk-muted { margin-right: auto; font-size: 13px; }
+.risk-human-decision-form { margin-top: 24px; }
+.risk-sensitive-action { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.risk-sensitive-action > div { min-width: 0; }
+.risk-sensitive-action h4 { margin: 0 0 6px; color: #172b4d; font-size: 14px; font-weight: 600; }
+.risk-sensitive-action p { margin: 0; color: var(--risk-muted); line-height: 1.8; overflow-wrap: anywhere; }
+.risk-sensitive-action > .ant-btn { flex-shrink: 0; }
+.risk-sensitive-action + .risk-sensitive-action { margin-top: 24px; padding-top: 24px; border-top: 1px solid var(--risk-border); }
+@media (max-width: 760px) {
+  .risk-decision-grid { gap: 16px; }
+  .risk-sensitive-action { flex-direction: column; align-items: stretch; gap: 16px; }
+  .risk-sensitive-action > .ant-btn { align-self: flex-start; }
+}
 .risk-panel .ant-tabs-nav { margin-bottom: 20px; }
 .risk-wrap { overflow-wrap: anywhere; white-space: normal; }
 .risk-related { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }

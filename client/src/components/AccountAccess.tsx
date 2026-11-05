@@ -32,6 +32,7 @@ import {
   fetchAccountSession,
   loginAccountWithEmail,
   logoutAccount,
+  deleteMyAccount,
   registerAccountWithEmail,
   requestAccountEmailCode,
   resetAccountPasswordWithEmail,
@@ -54,7 +55,7 @@ import type { AccountRoomSummary, RoomMusicAccounts } from '../types';
 
 const EMPTY_PROVIDERS: AccountProviderStatus = { linuxdo: false, github: false, wechat: false };
 
-type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'email-reset' | 'email-bind' | 'wechat-login' | 'wechat-bind' | 'manage';
+type View = 'welcome' | 'methods' | 'email-login' | 'email-register' | 'email-reset' | 'email-bind' | 'wechat-login' | 'wechat-bind' | 'manage' | 'delete';
 
 const providerMeta: Record<Exclude<AccountIdentityProvider, 'email'>, { label: string; description: string }> = {
   linuxdo: { label: 'Linux Do', description: '社区身份' },
@@ -207,6 +208,8 @@ export default function AccountAccess({
   const [musicAccounts, setMusicAccounts] = useState<RoomMusicAccounts>({ netease: null, tencent: null, kugou: null, qishui: null });
   const [accountRooms, setAccountRooms] = useState<AccountRoomSummary[]>([]);
   const [accountDataLoading, setAccountDataLoading] = useState(false);
+  const [deletionConfirmation, setDeletionConfirmation] = useState('');
+  const [deletionPassword, setDeletionPassword] = useState('');
 
   const setPanelOpen = useCallback((next: boolean) => {
     setOpen(next);
@@ -492,6 +495,38 @@ export default function AccountAccess({
     }
   };
 
+  const permanentlyDelete = async () => {
+    if (!account || submitting) return;
+    setSubmitting(true);
+    setError('');
+    try {
+      const result = await deleteMyAccount(account.id, deletionPassword, deletionConfirmation);
+      setDeletionPassword('');
+      setDeletionConfirmation('');
+      setAccount(null);
+      setMusicAccounts({ netease: null, tencent: null, kugou: null, qishui: null });
+      setAccountRooms([]);
+      setView('methods');
+      announceAccountSessionChanged();
+      void refreshSocketSession().catch(() => setToast({ message: '账户已注销，连接清理未完成，请刷新页面', type: 'error' }));
+      setToast({
+        message: result.pending ? '账户已停用，关联数据清理将自动重试' : '账户已永久注销',
+        type: 'success',
+      });
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '注销失败，请稍后重试');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (view !== 'delete' || !open) {
+      setDeletionPassword('');
+      setDeletionConfirmation('');
+    }
+  }, [view, open]);
+
   const musicPlatformLabels: Record<keyof RoomMusicAccounts, string> = {
     netease: '网易云',
     tencent: 'QQ 音乐',
@@ -527,7 +562,7 @@ export default function AccountAccess({
     }
   };
 
-  const title = view === 'manage'
+  const title = view === 'delete' ? '永久注销账户' : view === 'manage'
     ? '账户与安全'
     : view.startsWith('wechat')
       ? '微信文件传输助手登录'
@@ -741,7 +776,46 @@ export default function AccountAccess({
             </div>
             {error && <p className="mt-4 rounded-2xl border border-amber-300/15 bg-amber-300/[0.07] px-4 py-3 text-sm text-amber-100">{error}</p>}
             <button type="button" disabled={submitting} onClick={() => void logout()} className="account-logout-button mt-6 flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm transition"><LogOut className="h-4 w-4" />退出账户</button>
+            <div className="mt-6 flex items-start justify-between gap-4 border-t border-white/10 pt-5">
+              <div>
+                <h3 className="text-sm font-medium text-white">永久注销账户</h3>
+                <p className="mt-1 text-xs leading-5 text-netease-muted">删除个人账户与关联数据，注销后无法恢复</p>
+              </div>
+              <button type="button" disabled={submitting} onClick={() => { setError(''); setView('delete'); }} className="shrink-0 rounded-xl border border-red-400/30 px-3 py-2 text-sm text-red-300 transition hover:bg-red-400/10 disabled:opacity-50">注销账户</button>
+            </div>
           </div>
+        )}
+        {view === 'delete' && account && (
+          <form onSubmit={event => { event.preventDefault(); void permanentlyDelete(); }} className="mx-auto max-w-lg space-y-5">
+            <div className="rounded-2xl border border-red-400/25 bg-red-400/[0.06] p-4">
+              <h3 className="font-medium text-red-200">注销后无法恢复</h3>
+              <p className="mt-2 break-words text-sm leading-6 text-white/80">当前账户：{account.nickname || account.email || account.identities[0]?.username || '我的账户'}</p>
+              <ul className="mt-3 list-disc space-y-2 pl-5 text-sm leading-6 text-white/70">
+                <li>所有设备立即退出，邮箱和第三方登录身份解除绑定</li>
+                <li>删除收藏与分享、音乐凭证及共享、个人 AI 记忆</li>
+                <li>公共聊天和风控审计记录保留，原登录方式可注册全新账户</li>
+                <li>请先解散或转让自己创建的房间</li>
+              </ul>
+            </div>
+            {accountRooms.length > 0 && <p role="alert" className="text-sm leading-6 text-amber-200">你还有 {accountRooms.length} 个自建房间，请返回账户页处理房间后再注销</p>}
+            {account.hasPassword ? (
+              <label className="block text-sm text-white/80">
+                当前账户密码
+                <input type="password" required maxLength={256} autoComplete="current-password" value={deletionPassword} onChange={event => setDeletionPassword(event.target.value)} disabled={submitting} className="mt-2 w-full rounded-xl border border-white/15 bg-black/20 px-3 py-3 text-white outline-none focus:border-red-300/70" />
+              </label>
+            ) : <p className="text-sm leading-6 text-netease-muted">仅使用第三方登录的账户，请退出并重新登录，在登录后 10 分钟内完成注销</p>}
+            <label className="block text-sm text-white/80">
+              输入“注销账户”确认
+              <input required pattern="注销账户" maxLength={4} autoComplete="off" value={deletionConfirmation} onChange={event => setDeletionConfirmation(event.target.value)} disabled={submitting} className="mt-2 w-full rounded-xl border border-white/15 bg-black/20 px-3 py-3 text-white outline-none focus:border-red-300/70" />
+            </label>
+            {error && <p role="alert" className="text-sm leading-6 text-amber-200">{error}</p>}
+            <div className="flex flex-wrap justify-end gap-3 border-t border-white/10 pt-5">
+              <button type="button" disabled={submitting} onClick={() => { setError(''); setView('manage'); }} className="rounded-xl border border-white/15 px-4 py-3 text-sm text-white/80 disabled:opacity-50">返回账户页</button>
+              <button type="submit" disabled={submitting || accountDataLoading || accountRooms.length > 0 || deletionConfirmation !== '注销账户'} className="flex items-center justify-center gap-2 rounded-xl bg-red-700 px-4 py-3 text-sm font-medium text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50">
+                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}确认永久注销
+              </button>
+            </div>
+          </form>
         )}
         {error && error !== '本机设备密钥已变化，请重新登录' && (view === 'welcome' || view === 'methods') && (
           <p role="alert" className="account-status-note mt-4 text-center text-[11px] leading-5">{error}</p>

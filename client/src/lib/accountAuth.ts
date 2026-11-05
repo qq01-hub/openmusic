@@ -289,6 +289,19 @@ export async function logoutAccount(): Promise<void> {
   useRoomStore.getState().bindAccountNickname(null, '');
 }
 
+export async function deleteMyAccount(accountId: string, password: string, confirmation: string): Promise<{ pending: boolean }> {
+  const response = await fetchWithTimeout('/api/auth/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ accountId, password, confirmation }),
+  }, 30000);
+  const data = await response.json().catch(() => ({})) as { ok?: boolean; pending?: boolean; error?: string };
+  if (!response.ok || data.ok !== true) throw new Error(data.error || '注销失败，请稍后重试');
+  forgetAccountAccess();
+  useRoomStore.getState().bindAccountNickname(null, '');
+  return { pending: Boolean(data.pending) };
+}
+
 export async function unbindAccountIdentity(provider: Exclude<AccountIdentityProvider, 'email'>): Promise<AccountProfile> {
   const response = await fetchWithTimeout(`/api/auth/identities/${provider}/unbind`, {
     method: 'POST',

@@ -9,7 +9,11 @@ import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
 import { useDeskPetStore } from '../stores/deskPetStore';
-import { AI_PERSONA_PRESETS as aiPersonaPresets } from '../lib/aiPersonaPresets';
+import {
+  AI_PERSONA_PRESETS as aiPersonaPresets,
+  MAX_CUSTOM_ROOM_AI_PERSONA_LENGTH,
+  isRoomAiPersonaAllowed,
+} from '../lib/aiPersonaPresets';
 import DeskPetCharacterPicker from './DeskPetCharacterPicker';
 import { searchPlaylists, type PlaylistChannelFilter, type PlaylistSearchItem } from '../api/music/playlist';
 import {
@@ -1637,10 +1641,14 @@ export default function RoomSettingsModal({
                           <label htmlFor="settings-room-ai-persona" className="text-sm font-medium text-white">
                             助手性格与设定
                           </label>
-                          <span className="text-[11px] text-netease-muted">{draftRoomAiPersona.length}/600</span>
+                          <span className="text-[11px] text-netease-muted">
+                            {aiPersonaPresets.some((preset) => preset.value === draftRoomAiPersona)
+                              ? '完整预设'
+                              : `${draftRoomAiPersona.length} / ${MAX_CUSTOM_ROOM_AI_PERSONA_LENGTH} 字`}
+                          </span>
                         </div>
                         <p className="mt-0.5 text-xs text-netease-muted">
-                          房主可选择下方完整预设，也可直接填写自己的角色设定，留空使用蓝发小女仆，权限与隐私规则始终生效
+                          房主可选择下方完整预设，自行编写或修改后的角色设定最多 500 字，留空使用小肥鱼预设，权限与隐私规则始终生效
                         </p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           {aiPersonaPresets.map((preset) => (
@@ -1663,20 +1671,25 @@ export default function RoomSettingsModal({
                         <textarea
                           id="settings-room-ai-persona"
                           rows={5}
-                          maxLength={600}
+                          maxLength={MAX_CUSTOM_ROOM_AI_PERSONA_LENGTH}
                           value={draftRoomAiPersona}
                           disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
-                          onChange={(e) => setDraftRoomAiPersona(e.target.value.slice(0, 600))}
-                          placeholder="留空使用原版蓝发小女仆，也可以选择上方预设或填写自己的角色设定"
+                          onChange={(e) => setDraftRoomAiPersona(e.target.value)}
+                          placeholder="留空使用小肥鱼默认预设，也可以选择上方预设或填写自己的角色设定"
                           className="mt-2 w-full resize-none rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
                         />
+                        {!isRoomAiPersonaAllowed(draftRoomAiPersona.trim()) && (
+                          <p className="mt-1 text-xs text-red-400">
+                            自定义角色设定不能超过 500 字，请精简内容或重新选择完整预设
+                          </p>
+                        )}
                       </div>
                     </div>
                     {roomAiDirty && (
                       <div className="flex justify-end">
                         <button
                           type="button"
-                          disabled={roomAiSaving}
+                          disabled={roomAiSaving || !isRoomAiPersonaAllowed(draftRoomAiPersona.trim())}
                           onClick={() => onSaveRoomAi({
                             botName: draftRoomAiBotName.trim(),
                             persona: draftRoomAiPersona.trim(),
@@ -1695,7 +1708,7 @@ export default function RoomSettingsModal({
                     <div>
                       <h3 className="text-sm font-medium text-white">我的大肥鱼桌宠设置（仅对自己生效）</h3>
                       <p className="mt-0.5 text-xs text-netease-muted">
-                        自定义你屏幕上的桌面端桌宠行为，不会影响房间内其他成员；手机端窄屏将自动隐藏桌宠
+                        自定义你屏幕上的桌宠行为，不会影响房间内其他成员；手机端窄屏将自动按紧凑比例显示
                       </p>
                     </div>
                     <button
@@ -1717,7 +1730,7 @@ export default function RoomSettingsModal({
                     checked={deskPetEnabled}
                     onChange={(next) => updateDeskPetPref('enabled', next)}
                     label="显示我的桌宠"
-                    description="默认关闭，开启后仅在自己桌面端显示互动桌宠；关闭后收起为底栏右下角的迷你召唤胶囊，不遮挡聊天发送"
+                    description="默认关闭，开启后仅在自己屏幕上显示互动桌宠（手机端自动缩小比例，支持触屏拖拽与长按/点 ⋯ 展开菜单）；关闭后收起为右下角的迷你召唤胶囊"
                   />
 
                   <DeskPetCharacterPicker />
