@@ -7,26 +7,32 @@ const PUBLIC_API_PATHS = new Set([
   '/api/auth/device-login', '/api/auth/device-migrate', '/api/auth/wechat/start', '/api/auth/wechat/qr', '/api/auth/wechat/poll',
 ]);
 
+function isPublicCoverParsedUrl(parsed: URL, origin: string, method = 'GET'): boolean {
+  return method.toUpperCase() === 'GET' && parsed.origin === origin && parsed.pathname === '/api/meting'
+    && parsed.searchParams.getAll('type').length === 1 && parsed.searchParams.get('type') === 'pic'
+    && ['netease', 'tencent', 'kugou', 'qishui'].includes(parsed.searchParams.get('server') || '')
+    && /^[A-Za-z0-9_-]{1,200}$/u.test(parsed.searchParams.get('id') || '')
+    && [...parsed.searchParams.keys()].every(key => ['server', 'type', 'id', 'size'].includes(key));
+}
+
 export function isPublicCoverUrl(url: string, method = 'GET'): boolean {
+  if (!url || !url.includes('/api/meting')) return false;
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
     const parsed = new URL(url, origin);
-    return method.toUpperCase() === 'GET' && parsed.origin === origin && parsed.pathname === '/api/meting'
-      && parsed.searchParams.getAll('type').length === 1 && parsed.searchParams.get('type') === 'pic'
-      && ['netease', 'tencent', 'kugou', 'qishui'].includes(parsed.searchParams.get('server') || '')
-      && /^[A-Za-z0-9_-]{1,200}$/u.test(parsed.searchParams.get('id') || '')
-      && [...parsed.searchParams.keys()].every(key => ['server', 'type', 'id', 'size'].includes(key));
+    return isPublicCoverParsedUrl(parsed, origin, method);
   } catch { return false; }
 }
 
 export function needsApiSign(url: string, method = 'GET'): boolean {
+  if (!url || !url.includes('/api/')) return false;
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
     const parsed = new URL(url, origin);
     const pathname = parsed.pathname.toLowerCase();
     if (parsed.origin !== origin || !pathname.startsWith('/api/')) return false;
     if (PUBLIC_API_PATHS.has(pathname)) return false;
-    if (isPublicCoverUrl(url, method)) return false;
+    if (isPublicCoverParsedUrl(parsed, origin, method)) return false;
     if (pathname.startsWith('/api/admin/') || pathname.startsWith('/api/setup/')) return false;
     if (pathname === '/api/rooms' && method.toUpperCase() === 'GET') return false;
     return true;

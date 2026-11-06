@@ -8,6 +8,8 @@ export {
   getSourceLabel,
   parseLrc,
   listRooms,
+  prefetchRooms,
+  consumePrefetchedRooms,
   randomMatchRoom,
   createRoom,
   checkRoom,

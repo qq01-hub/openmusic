@@ -22,6 +22,8 @@ interface TooltipProps {
   side?: TooltipSide;
   delay?: number;
   disabled?: boolean;
+  /** 按需在触发时判定是否展示（如截断检测），避免挂载或滚动时强制测量布局 */
+  shouldShow?: (anchor: HTMLElement) => boolean;
   /** 触屏设备点击切换显示（用于截断文本等） */
   tapToShow?: boolean;
   children: ReactElement;
@@ -139,42 +141,38 @@ function getClampedTooltipStyle(
   };
 }
 
+let hoverMediaQuery: MediaQueryList | null = null;
+let cachedPrefersHover = true;
+
 function getPrefersHover(): boolean {
-  if (typeof window === 'undefined') return true;
-  return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return true;
+  if (!hoverMediaQuery) {
+    hoverMediaQuery = window.matchMedia('(hover: hover) and (pointer: fine)');
+    cachedPrefersHover = hoverMediaQuery.matches;
+    hoverMediaQuery.addEventListener?.('change', (event) => {
+      cachedPrefersHover = event.matches;
+    });
+  }
+  return cachedPrefersHover;
 }
 
-function usePrefersHover() {
-  const [prefersHover, setPrefersHover] = useState(getPrefersHover);
-
-  useEffect(() => {
-    const mq = window.matchMedia('(hover: hover) and (pointer: fine)');
-    const update = () => setPrefersHover(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-
-  return prefersHover;
-}
-
-export default function Tooltip({
+function TooltipOverlay({
+  anchorRef,
+  side,
   content,
-  side = 'top',
-  delay = 320,
-  disabled = false,
-  tapToShow = false,
-  children,
-}: TooltipProps) {
+  onClose,
+}: {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  side: TooltipSide;
+  content: ReactNode;
+  onClose: () => void;
+}) {
   const tipId = useId();
-  const anchorRef = useRef<HTMLElement | null>(null);
   const tipRef = useRef<HTMLDivElement | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout>>();
-  const [open, setOpen] = useState(false);
-  const [style, setStyle] = useState<CSSProperties>({ position: 'fixed', top: 0, left: 0 });
-  const prefersHover = usePrefersHover();
-
-  const enabled = !disabled && hasTooltipContent(content);
+  const [style, setStyle] = useState<CSSProperties>(() => {
+    const el = anchorRef.current;
+    return el ? getTooltipStyle(el.getBoundingClientRect(), side) : { position: 'fixed', top: 0, left: 0 };
+  });
 
   const updatePosition = useCallback(() => {
     const el = anchorRef.current;
@@ -187,65 +185,91 @@ export default function Tooltip({
       return;
     }
     setStyle(getTooltipStyle(anchorRect, side));
-  }, [side]);
+  }, [anchorRef, side]);
 
   useLayoutEffect(() => {
-    if (!open) return;
     updatePosition();
-  }, [open, content, updatePosition]);
-
-  const show = useCallback((immediate = false) => {
-    if (!enabled) return;
-    clearTimeout(timerRef.current);
-    if (immediate) {
-      updatePosition();
-      setOpen(true);
-      return;
-    }
-    timerRef.current = setTimeout(() => {
-      updatePosition();
-      setOpen(true);
-    }, delay);
-  }, [delay, enabled, updatePosition]);
-
-  const hide = useCallback(() => {
-    clearTimeout(timerRef.current);
-    setOpen(false);
-  }, []);
-
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  }, [content, updatePosition]);
 
   useEffect(() => {
-    if (!open) return;
-    const handle = () => updatePosition();
-    window.addEventListener('scroll', handle, true);
-    window.addEventListener('resize', handle);
-    return () => {
-      window.removeEventListener('scroll', handle, true);
-      window.removeEventListener('resize', handle);
-    };
-  }, [open, updatePosition]);
-
-  useEffect(() => {
-    if (!open) return;
-
+    const el = anchorRef.current;
+    if (el) el.setAttribute('aria-describedby', tipId);
+    const handleResize = () => updatePosition();
     const dismiss = (event: Event) => {
       const anchor = anchorRef.current;
       if (anchor && event.target instanceof Node && anchor.contains(event.target)) return;
-      hide();
+      onClose();
     };
+    const dismissOnScroll = () => onClose();
 
-    const dismissOnScroll = () => hide();
-
+    window.addEventListener('resize', handleResize);
     document.addEventListener('touchstart', dismiss, { passive: true, capture: true });
     document.addEventListener('pointerdown', dismiss, { capture: true });
     document.addEventListener('scroll', dismissOnScroll, { passive: true, capture: true });
     return () => {
+      if (el && el.getAttribute('aria-describedby') === tipId) {
+        el.removeAttribute('aria-describedby');
+      }
+      window.removeEventListener('resize', handleResize);
       document.removeEventListener('touchstart', dismiss, true);
       document.removeEventListener('pointerdown', dismiss, true);
       document.removeEventListener('scroll', dismissOnScroll, true);
     };
-  }, [open, hide]);
+  }, [anchorRef, onClose, tipId, updatePosition]);
+
+  return createPortal(
+    <div
+      ref={tipRef}
+      id={tipId}
+      role="tooltip"
+      style={style}
+      className="pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] animate-fade-in rounded-lg border border-white/10 bg-[#1a1a1a]/95 px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl backdrop-blur-md"
+    >
+      {content}
+    </div>,
+    document.body,
+  );
+}
+
+export default function Tooltip({
+  content,
+  side = 'top',
+  delay = 320,
+  disabled = false,
+  shouldShow,
+  tapToShow = false,
+  children,
+}: TooltipProps) {
+  const anchorRef = useRef<HTMLElement | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const shouldShowRef = useRef(shouldShow);
+  shouldShowRef.current = shouldShow;
+  const [open, setOpen] = useState(false);
+
+  const enabled = !disabled && hasTooltipContent(content);
+
+  const show = useCallback((immediate = false) => {
+    if (!enabled) return;
+    const anchor = anchorRef.current;
+    if (!anchor || !anchor.isConnected) return;
+    if (shouldShowRef.current && !shouldShowRef.current(anchor)) return;
+    clearTimeout(timerRef.current);
+    if (immediate) {
+      setOpen(true);
+      return;
+    }
+    timerRef.current = setTimeout(() => {
+      const currentAnchor = anchorRef.current;
+      if (!currentAnchor || !currentAnchor.isConnected) return;
+      if (shouldShowRef.current && !shouldShowRef.current(currentAnchor)) return;
+      setOpen(true);
+    }, delay);
+  }, [delay, enabled]);
+
+  const hide = useCallback(() => {
+    clearTimeout(timerRef.current);
+    setOpen((prev) => (prev ? false : prev));
+  }, []);
 
   if (!isValidElement(children)) return children;
 
@@ -256,11 +280,11 @@ export default function Tooltip({
     ref: mergeRefs<HTMLElement>((node) => { anchorRef.current = node; }, childRef),
     onMouseEnter: (event: MouseEvent<HTMLElement>) => {
       (child.props.onMouseEnter as ((e: MouseEvent<HTMLElement>) => void) | undefined)?.(event);
-      if (prefersHover) show();
+      if (getPrefersHover()) show();
     },
     onMouseLeave: (event: MouseEvent<HTMLElement>) => {
       (child.props.onMouseLeave as ((e: MouseEvent<HTMLElement>) => void) | undefined)?.(event);
-      if (prefersHover) hide();
+      if (getPrefersHover()) hide();
     },
     onFocus: (event: FocusEvent<HTMLElement>) => {
       (child.props.onFocus as ((e: FocusEvent<HTMLElement>) => void) | undefined)?.(event);
@@ -274,29 +298,24 @@ export default function Tooltip({
     },
     onClick: (event: MouseEvent<HTMLElement>) => {
       (child.props.onClick as ((e: MouseEvent<HTMLElement>) => void) | undefined)?.(event);
-      if (tapToShow && !prefersHover && enabled) {
+      if (tapToShow && !getPrefersHover() && enabled) {
         if (open) hide();
         else show(true);
       }
     },
-    'aria-describedby': open && enabled ? tipId : undefined,
     title: undefined,
   });
 
   return (
     <>
       {wrapped}
-      {open && enabled && createPortal(
-        <div
-          ref={tipRef}
-          id={tipId}
-          role="tooltip"
-          style={style}
-          className="pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] animate-fade-in rounded-lg border border-white/10 bg-[#1a1a1a]/95 px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl backdrop-blur-md"
-        >
-          {content}
-        </div>,
-        document.body,
+      {open && enabled && (
+        <TooltipOverlay
+          anchorRef={anchorRef}
+          side={side}
+          content={content}
+          onClose={hide}
+        />
       )}
     </>
   );

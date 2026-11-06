@@ -264,7 +264,7 @@ function AiMessageContent({
           >
             <span className="inline-flex items-center gap-1">
               <Sparkles className="h-3 w-3" />
-              <span>处理过程 · {aiThoughts.length} 步</span>
+              <span>AI 进展 · {aiThoughts.length} 条</span>
             </span>
             {showThoughts ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           </button>
@@ -672,12 +672,12 @@ function ChatMessageRow({
                     {aiProcessing.status !== 'error' && (
                       <Loader2 className="h-3.5 w-3.5 flex-shrink-0 animate-spin text-amber-200" aria-hidden="true" />
                     )}
-                    <span className="truncate">
+                    <span className="min-w-0 whitespace-pre-wrap break-words leading-relaxed" role="status" aria-live="polite">
                       {aiProcessing.status === 'error'
                         ? `AI 连续重试失败：${aiProcessing.error || '请稍后再试'}`
                         : aiProcessing.status === 'queued'
                           ? `${aiProcessing.attempt > 0 ? `AI 重试中（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : 'AI 排队等待中'}${aiProcessing.queuePosition > 0 ? ` · 第 ${aiProcessing.queuePosition} 位` : ''}`
-                          : normalizeAiQqFaceText(aiProcessing.stepText || '', { allowFaces: false }) || `AI 正在处理${aiProcessing.attempt > 0 ? `（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : ''}…`}
+                          : normalizeAiQqFaceText(aiProcessing.stepText || '', { allowFaces: false }) || `AI 正在回应${aiProcessing.attempt > 0 ? `（${aiProcessing.attempt + 1}/${aiProcessing.maxAttempts}）` : ''}…`}
                     </span>
                   </div>
                   {Array.isArray(aiProcessing.thoughtSteps) && aiProcessing.thoughtSteps.length > 1 && (
@@ -690,7 +690,7 @@ function ChatMessageRow({
                       className="flex flex-shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[10px] hover:bg-white/10 hover:text-white/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-200"
                       aria-expanded={expandProcessingSteps}
                     >
-                      <span>过程({aiProcessing.thoughtSteps.length})</span>
+                      <span>进展({aiProcessing.thoughtSteps.length})</span>
                       {expandProcessingSteps ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                     </button>
                   )}

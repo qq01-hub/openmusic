@@ -123,7 +123,9 @@ export function shouldProxyPlaybackUrl(url: string, visualModeProxy = false): bo
  * Meting `type=pic|url` 外链 → 同源 `/api/meting`（勿经 media-proxy 直接包 127.0.0.1）
  */
 export function toLocalMetingMediaUrl(url: string): string | null {
-  if (!url || url.startsWith('/api/meting')) return url.startsWith('/api/meting') ? url : null;
+  if (!url) return null;
+  if (url.startsWith('/api/meting')) return url;
+  if (!url.includes('type=pic') && !url.includes('type=url')) return null;
   try {
     const base = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
     const parsed = new URL(url, base);
@@ -143,14 +145,11 @@ export function toLocalMetingMediaUrl(url: string): string | null {
 
 /** Meting `type=pic` 外链 → 同源 `/api/meting` */
 export function toLocalMetingPicUrl(url: string): string | null {
+  if (!url || !url.includes('type=pic')) return null;
+  if (url.startsWith('/api/meting')) return url;
   const local = toLocalMetingMediaUrl(url);
   if (!local) return null;
-  try {
-    const parsed = new URL(url, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-    return parsed.searchParams.get('type') === 'pic' ? local : null;
-  } catch {
-    return null;
-  }
+  return local.includes('type=pic') ? local : null;
 }
 
 /** 歌曲播放地址走同源代理（HTTPS 站点避免混合内容） */

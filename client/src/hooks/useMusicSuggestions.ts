@@ -20,6 +20,7 @@ interface SuggestionsResponse {
 }
 
 const KNOWN_SOURCES = new Set(['netease', 'tencent', 'kugou', 'qishui']);
+const EMPTY_SUGGESTIONS: MusicSuggestion[] = [];
 
 function normalizeSuggestion(item: RawMusicSuggestion): MusicSuggestion | null {
   const name = String(item?.name || '').trim();
@@ -36,17 +37,21 @@ function normalizeSuggestion(item: RawMusicSuggestion): MusicSuggestion | null {
 const DEBOUNCE_MS = 300;
 
 export function useMusicSuggestions(keyword: string, enabled: boolean = true) {
-  const [suggestions, setSuggestions] = useState<MusicSuggestion[]>([]);
+  const [suggestions, setSuggestions] = useState<MusicSuggestion[]>(EMPTY_SUGGESTIONS);
   const [loading, setLoading] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
   // Abort 无法撤回已抵达的响应；递增编号保证旧响应不能覆盖最新关键词。
   const requestIdRef = useRef(0);
 
+  const resetEmptySuggestions = useCallback(() => {
+    setSuggestions((prev) => (prev.length === 0 ? prev : EMPTY_SUGGESTIONS));
+  }, []);
+
   const fetchSuggestions = useCallback(async (query: string, signal: AbortSignal, requestId: number) => {
     const isLatestRequest = () => !signal.aborted && requestId === requestIdRef.current;
     if (!query) {
-      if (isLatestRequest()) setSuggestions([]);
+      if (isLatestRequest()) resetEmptySuggestions();
       return;
     }
 
@@ -57,30 +62,31 @@ export function useMusicSuggestions(keyword: string, enabled: boolean = true) {
 
       if (!response.ok) {
         console.error('Failed to fetch suggestions:', response.status);
-        if (isLatestRequest()) setSuggestions([]);
+        if (isLatestRequest()) resetEmptySuggestions();
         return;
       }
 
       const data: SuggestionsResponse = await response.json();
       if (isLatestRequest()) {
-        setSuggestions(Array.isArray(data.suggestions)
+        const next = Array.isArray(data.suggestions)
           ? data.suggestions.map(normalizeSuggestion).filter((item): item is MusicSuggestion => Boolean(item))
-          : []);
+          : EMPTY_SUGGESTIONS;
+        setSuggestions((prev) => (prev.length === 0 && next.length === 0 ? prev : next));
       }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') return;
       console.error('Failed to fetch suggestions:', error);
-      if (isLatestRequest()) setSuggestions([]);
+      if (isLatestRequest()) resetEmptySuggestions();
     } finally {
       if (isLatestRequest()) setLoading(false);
     }
-  }, []);
+  }, [resetEmptySuggestions]);
 
   useEffect(() => {
     const requestId = ++requestIdRef.current;
     if (!enabled) {
-      setSuggestions([]);
-      setLoading(false);
+      resetEmptySuggestions();
+      setLoading((prev) => (prev ? false : prev));
       return;
     }
 
@@ -94,8 +100,8 @@ export function useMusicSuggestions(keyword: string, enabled: boolean = true) {
       abortControllerRef.current = null;
     }
     if (!trimmed) {
-      setSuggestions([]);
-      setLoading(false);
+      resetEmptySuggestions();
+      setLoading((prev) => (prev ? false : prev));
       return;
     }
 
@@ -109,8 +115,8 @@ export function useMusicSuggestions(keyword: string, enabled: boolean = true) {
       if (debounceTimerRef.current !== null) window.clearTimeout(debounceTimerRef.current);
       if (abortControllerRef.current) abortControllerRef.current.abort();
     };
-  }, [keyword, enabled, fetchSuggestions]);
+  }, [keyword, enabled, fetchSuggestions, resetEmptySuggestions]);
 
-  const clearSuggestions = useCallback(() => setSuggestions([]), []);
+  const clearSuggestions = useCallback(() => resetEmptySuggestions(), [resetEmptySuggestions]);
   return { suggestions, loading, clearSuggestions };
 }

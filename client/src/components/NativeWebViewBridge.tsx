@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import type { Song } from '../types';
 import { filterDisplayLyrics, getCoverUrl, LYRIC_SYNC_LEAD_SEC, songKey } from '../api/music';
 import { useAudioStore } from '../stores/audioStore';
@@ -93,7 +93,7 @@ function sendPlayerState(
 }
 
 /** Synchronizes the Web room player with the Android media notification. */
-export default function NativeWebViewBridge({ song, isPlaying, togglePlay, skipSong, showLyrics }: Props) {
+export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, skipSong, showLyrics }: Props) {
   const songId = song ? songKey(song) : '';
   const room = useRoomStore((state) => state.room);
   const canControlPlayback = useRoomStore((state) => state.canControlPlayback);
@@ -179,4 +179,4 @@ export default function NativeWebViewBridge({ song, isPlaying, togglePlay, skipS
   ]);
 
   return null;
-}
+});

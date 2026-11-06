@@ -11,11 +11,14 @@ import { getActiveLyricLine } from '../lib/lyricLookup';
 import { sampleLyricReaction, type LyricReactionMemory } from '../lib/deskPetLyrics';
 import { getDeskPetReply, getDeskPetThinkingTask } from '../lib/deskPetChat';
 import { normalizeAiQqFaceText } from '../lib/qface';
+import { registerDeskPetHandler, DESK_PET_AI_INTERACTIONS, type DeskPetAiAction, type DeskPetAiArgs, type DeskPetAiResult } from '../lib/deskPetAiBridge';
 import Tooltip from './Tooltip';
 import OriginalPetActionPicker from './OriginalPetActionPicker';
 import DeskPetAppearance from './DeskPetAppearance';
 import {
   pickMusicLedgerAction,
+  getDeskPetCharacter,
+  getDeskPetPlayableActions,
   pickOriginalAutomaticAction,
   type DeskPetCharacterId,
 } from '../lib/deskPetCharacters';
@@ -164,7 +167,8 @@ export default function RoomAiDesktopPet({
   const [squash, setSquash] = useState<{ sx: number; sy: number }>({ sx: 1, sy: 1 });
 
   // 气泡、双进度条（音浪能量 + 心情指数）、听歌账本、番茄钟
-  const [bubble, setBubble] = useState<{ text: string; aiOnly: boolean } | null>(null);
+  const [bubble, setBubble] = useState<{ text: string; aiOnly: boolean; command: boolean } | null>(null);
+  const aiCommandBubbleUntilRef = useRef(0);
   const [showBubbleBars, setShowBubbleBars] = useState(false);
   const [showMusicLedger, setShowMusicLedger] = useState(false);
   const [rhythmEnergy, setRhythmEnergy] = useState(86);
@@ -245,7 +249,7 @@ export default function RoomAiDesktopPet({
     if (active.thoughtSteps && active.thoughtSteps.length > 0) {
       return active.thoughtSteps[active.thoughtSteps.length - 1];
     }
-    return `${botName}正在认真思考与搜歌…`;
+    return `${botName}正在回应…`;
   }, [ownThinkingTask, botName]);
 
   const clampViewportPos = useCallback((x: number, y: number) => {
@@ -351,11 +355,12 @@ export default function RoomAiDesktopPet({
     (
       text: string,
       durationMs = 4800,
-      options?: { withBars?: boolean; withLedger?: boolean; force?: boolean; aiOnly?: boolean },
+      options?: { withBars?: boolean; withLedger?: boolean; force?: boolean; aiOnly?: boolean; command?: boolean },
     ) => {
       if (!dialogEnabled && !options?.force) return;
       if (bubbleTimerRef.current) window.clearTimeout(bubbleTimerRef.current);
-      setBubble({ text, aiOnly: Boolean(options?.aiOnly) });
+      setBubble({ text, aiOnly: Boolean(options?.aiOnly), command: Boolean(options?.command) });
+      aiCommandBubbleUntilRef.current = options?.command ? Date.now() + durationMs : 0;
       setShowBubbleBars(Boolean(options?.withBars));
       setShowMusicLedger(Boolean(options?.withLedger));
       bubbleTimerRef.current = window.setTimeout(() => {
@@ -394,9 +399,11 @@ export default function RoomAiDesktopPet({
   }, [aiEnabled, botName, currentSong, queueLength, rhythmEnergy, userCount]);
 
   // 喂食音符点心
-  const handleFeedMusicSnack = useCallback(() => {
+  const handleFeedMusicSnack = useCallback((silent = false) => {
     const food = MUSIC_FOODS[Math.floor(Math.random() * MUSIC_FOODS.length)];
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
+    roamTargetRef.current = null;
+    autoDozeRef.current = false;
     setTiltDeg(0);
     setPetState('eat');
     setPlayKey((serial) => serial + 1);
@@ -407,11 +414,11 @@ export default function RoomAiDesktopPet({
     spawnParticle('food', food.icon, 0, -18);
     window.setTimeout(() => spawnParticle('heart', '💖', 12, -8), 320);
     triggerSquash(1.18, 0.84, 320);
-    say(food.line, 5200, { withBars: true, force: true });
+    if (!silent) say(food.line, 5200, { withBars: true, force: true });
   }, [say, spawnParticle, triggerSquash]);
 
   // 摸摸头夸夸
-  const handlePatPet = useCallback(() => {
+  const handlePatPet = useCallback((silent = false) => {
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
     setTiltDeg(0);
     playOriginalAction(UPSTREAM_ANIM.clicks[Math.floor(Math.random() * UPSTREAM_ANIM.clicks.length)]);
@@ -421,7 +428,7 @@ export default function RoomAiDesktopPet({
     spawnParticle('note', '♪', 14, -14);
     triggerSquash(1.15, 0.86, 260);
     const line = PAT_LINES[Math.floor(Math.random() * PAT_LINES.length)];
-    say(line, 4600, { withBars: true, force: true });
+    if (!silent) say(line, 4600, { withBars: true, force: true });
   }, [playOriginalAction, say, spawnParticle, triggerSquash]);
 
   // 扫描房间内可交互的真实前端 DOM 组件
@@ -466,9 +473,9 @@ export default function RoomAiDesktopPet({
   }, []);
 
   // 动作2：在某个房间按钮旁边歪头思考（Ponder Button）
-  const triggerPonderButtonAction = useCallback(() => {
+  const triggerPonderButtonAction = useCallback((silent = false) => {
     const { buttons } = findRoomUiTargets();
-    if (buttons.length === 0) return;
+    if (buttons.length === 0) return false;
     const chosen = buttons[Math.floor(Math.random() * buttons.length)];
     const { rect, name } = chosen;
     const placeOnLeft = rect.left > PET_W + 30;
@@ -491,19 +498,20 @@ export default function RoomAiDesktopPet({
           `💡 盯——这个「${name}」按钮长得好精致呀，本鱼帮大家守着它～`,
           `🧐 正在认真研究「${name}」的构造…唔，闻起来有音乐魔法的味道 ♪`,
         ];
-        say(ponderLines[Math.floor(Math.random() * ponderLines.length)], 5200);
+        if (!silent) say(ponderLines[Math.floor(Math.random() * ponderLines.length)], 5200);
         if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
         stateTimerRef.current = window.setTimeout(() => {
           setPetState('idle');
         }, 5000);
       },
     };
+    return true;
   }, [clampViewportPos, findRoomUiTargets, say, spawnParticle]);
 
   // 动作3：偷偷点击某个按钮，不触发实际效果，反而被按钮弹飞并傲娇生气！（Sneak Click & Bounce）
-  const triggerSneakClickButtonAction = useCallback(() => {
+  const triggerSneakClickButtonAction = useCallback((silent = false) => {
     const { buttons } = findRoomUiTargets();
-    if (buttons.length === 0) return;
+    if (buttons.length === 0) return false;
     const chosen = buttons[Math.floor(Math.random() * buttons.length)];
     const { rect, name } = chosen;
     const approachLeft = rect.left > window.innerWidth / 2;
@@ -514,7 +522,7 @@ export default function RoomAiDesktopPet({
 
     setTiltDeg(0);
     setPetState('roam');
-    say(`🐾 嘿嘿，趁没人注意，本鱼悄悄去戳一下「${name}」按钮…`, 2600);
+    if (!silent) say(`🐾 嘿嘿，趁没人注意，本鱼悄悄去戳一下「${name}」按钮…`, 2600);
 
     roamTargetRef.current = {
       x: dest.x,
@@ -546,14 +554,15 @@ export default function RoomAiDesktopPet({
             `好痛好痛！「${name}」按钮居然有防鱼结界，把本鱼弹飞啦＞＜💢`,
             `呜哇——！被「${name}」弹开三米远，本鱼只是手痒想戳一下嘛，哼～！😤`,
           ];
-          say(angryLines[Math.floor(Math.random() * angryLines.length)], 5600, { force: true });
+          if (!silent) say(angryLines[Math.floor(Math.random() * angryLines.length)], 5600, { force: true });
         }, 620);
       },
     };
+    return true;
   }, [clampViewportPos, findRoomUiTargets, say, spawnButtonRipple, spawnParticle, triggerSquash]);
 
   // 动作4：在底栏播放进度条上踩着音浪冲浪滑行（Surf Progress Bar）
-  const triggerSurfProgressAction = useCallback(() => {
+  const triggerSurfProgressAction = useCallback((silent = false) => {
     const bottomBar = document.getElementById('bottom-bar');
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -574,7 +583,7 @@ export default function RoomAiDesktopPet({
         spawnParticle('note', '🌊', -12, 16);
         spawnParticle('note', '♪', 14, -10);
         const songTitle = (currentSong?.name || '这首歌').slice(0, 14);
-        say(
+        if (!silent) say(
           isPlaying
             ? `🏄‍♀️ 芜湖～踩着《${songTitle}》的播放进度条冲浪咯！这段副歌的浪头最高啦 🌊♪`
             : '🏄‍♀️ 踩着底栏进度条滑板巡航～快点播一首嗨歌掀起音浪吧！',
@@ -595,7 +604,7 @@ export default function RoomAiDesktopPet({
   }, [currentSong?.name, isPlaying, say, spawnParticle, triggerSquash]);
 
   // 动作5：坐在播放队列面板顶部甩竿垂钓待播好歌（Fish in Queue）
-  const triggerFishQueueAction = useCallback(() => {
+  const triggerFishQueueAction = useCallback((silent = false) => {
     const queueEl = document.querySelector<HTMLElement>('[data-guide="room-queue"]');
     const rect = queueEl?.getBoundingClientRect();
     const dest = rect
@@ -611,7 +620,7 @@ export default function RoomAiDesktopPet({
       onArrive: () => {
         setPetState('fish_queue');
         setFacingLeft(false);
-        say(
+        if (!silent) say(
           queueLength > 0
             ? `🎣 坐在播放队列顶上甩竿钓鱼…底下有 ${queueLength} 首待播好歌在吐泡泡呢～`
             : '🎣 坐在播放队列边甩出小鱼竿…咦，池子里空空的，快来点几首歌让本鱼钓嘛～',
@@ -622,7 +631,7 @@ export default function RoomAiDesktopPet({
           spawnParticle('note', '🎵', 16, -12);
           spawnParticle('spark', '🌟', -8, -16);
           triggerSquash(1.18, 0.84, 240);
-          say('🎣 嘿咻！提竿成功，从队列里钓上来一颗闪闪发光的金色高音谱号 ♪', 3800);
+          if (!silent) say('🎣 嘿咻！提竿成功，从队列里钓上来一颗闪闪发光的金色高音谱号 ♪', 3800);
           setPetState('idle');
         }, 4800);
       },
@@ -630,7 +639,7 @@ export default function RoomAiDesktopPet({
   }, [clampViewportPos, queueLength, say, spawnParticle, triggerSquash]);
 
   // 动作6：跑到左下角专辑封面旁戴墨镜搓碟打碟（DJ Scratch Cover）
-  const triggerDjCoverAction = useCallback(() => {
+  const triggerDjCoverAction = useCallback((silent = false) => {
     const bottomBar = document.getElementById('bottom-bar');
     const rect = bottomBar?.getBoundingClientRect();
     const dest = rect
@@ -648,7 +657,7 @@ export default function RoomAiDesktopPet({
         setFacingLeft(true);
         spawnParticle('note', '🎧', 0, -14);
         const songTitle = (currentSong?.name || '本场主打歌').slice(0, 14);
-        say(
+        if (!silent) say(
           `🕶️ 哟哟 Check it out！DJ 大肥鱼正在专辑封面旁为《${songTitle}》搓碟混音，动次打次～💿✨`,
           5400,
         );
@@ -661,7 +670,7 @@ export default function RoomAiDesktopPet({
   }, [clampViewportPos, currentSong?.name, say, spawnParticle]);
 
   // 动作7：在热榜或搜索区举着放大镜寻宝（Treasure Hunt Hotlist）
-  const triggerTreasureHotAction = useCallback(() => {
+  const triggerTreasureHotAction = useCallback((silent = false) => {
     const hotEl =
       document.querySelector<HTMLElement>('[data-guide="room-hot"]') ||
       document.querySelector<HTMLElement>('[data-guide="room-search"]');
@@ -680,7 +689,7 @@ export default function RoomAiDesktopPet({
         setPetState('treasure_hot');
         setFacingLeft(false);
         spawnParticle('spark', '🔍', 10, -12);
-        say('🔍 滴——大肥鱼宝藏歌单雷达开启！让我用放大镜找找这里藏着哪首神仙曲目～✨', 5200);
+        if (!silent) say('🔍 滴——大肥鱼宝藏歌单雷达开启！让我用放大镜找找这里藏着哪首神仙曲目～✨', 5200);
         if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
         stateTimerRef.current = window.setTimeout(() => {
           setPetState('idle');
@@ -690,7 +699,7 @@ export default function RoomAiDesktopPet({
   }, [clampViewportPos, say, spawnParticle]);
 
   // 动作8：趴在聊天室输入框上沿擦灰尘催大家聊天点歌（Perch Chat Input）
-  const triggerPerchChatAction = useCallback(() => {
+  const triggerPerchChatAction = useCallback((silent = false) => {
     const chatEl = document.querySelector<HTMLElement>('[data-guide="room-chat"]');
     const rect = chatEl?.getBoundingClientRect();
     const dest = rect
@@ -713,7 +722,7 @@ export default function RoomAiDesktopPet({
           '🫧 在聊天输入框上面托腮打滚～有人夸夸本鱼今天的新发型吗 ♪',
           '💌 守护聊天室输入框中！发一句好听的歌词，说不定有惊喜共鸣哦～',
         ];
-        say(lines[Math.floor(Math.random() * lines.length)], 5400);
+        if (!silent) say(lines[Math.floor(Math.random() * lines.length)], 5400);
         if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
         stateTimerRef.current = window.setTimeout(() => {
           setPetState('idle');
@@ -721,6 +730,94 @@ export default function RoomAiDesktopPet({
       },
     };
   }, [aiEnabled, botName, clampViewportPos, say, spawnParticle]);
+
+  const petAiHandlerRef = useRef<(command: 'get_state' | 'control', args: DeskPetAiArgs) => DeskPetAiResult>(() => ({ success: false }));
+  petAiHandlerRef.current = (command, args) => {
+    const prefs = useDeskPetStore.getState();
+    const live = useRoomStore.getState();
+    const fail = (code: string, error: string): DeskPetAiResult => ({ success: false, code, error });
+    if (!deskPetEnabled || !aiEnabled || !prefs.enabled) return fail('DESK_PET_DISABLED', '当前成员已收起桌宠或房间功能已关闭');
+    if (live.room?.id !== chatRoomId || live.mySocketId !== myUserId) return fail('DESK_PET_SCOPE_MISMATCH', '桌宠所属页面已变化');
+    const capabilities: DeskPetAiAction[] = ['sleep', 'wake'];
+    if (prefs.playEnabled) capabilities.push('perform', 'feed', 'pat');
+    if (prefs.dialogEnabled) capabilities.push('speak');
+    if (prefs.workEnabled) {
+      capabilities.push('focus_start', 'focus_stop');
+      if (prefs.dialogEnabled) capabilities.push('show_ledger');
+    }
+    if (prefs.physicsEnabled) capabilities.push('prepare_slingshot');
+    if (prefs.uiInteractEnabled && prefs.roamEnabled) capabilities.push('interact');
+    const interactions = DESK_PET_AI_INTERACTIONS.filter(item => item !== 'sneak_click' || prefs.physicsEnabled);
+    const actions = getDeskPetPlayableActions(prefs.character);
+    if (command === 'get_state') {
+      const keyword = (args.keyword || '').trim().toLocaleLowerCase();
+      const matching = prefs.playEnabled ? actions.filter(item => !keyword || item.label.toLocaleLowerCase().includes(keyword)) : [];
+      const offset = args.offset || 0;
+      return { success: true, state: {
+        character: prefs.character, label: getDeskPetCharacter(prefs.character).label,
+        activity: stateRef.current, capabilities,
+        interactions: capabilities.includes('interact') ? interactions : [],
+        actions: matching.slice(offset, offset + 8), nextOffset: offset + 8 < matching.length ? offset + 8 : null,
+        focusRemainingSeconds: pomodoroEndAt ? Math.max(0, Math.ceil((pomodoroEndAt - Date.now()) / 1000)) : 0,
+        songsListenedCount, listenSeconds: sessionListenSeconds, interactionCount,
+        energy: Math.round(rhythmEnergy), mood: Math.round(moodScore),
+      } };
+    }
+    const action = args.action!;
+    if (!capabilities.includes(action)) return fail('DESK_PET_FEATURE_DISABLED', '该桌宠功能已被当前成员关闭');
+    if (['drag', 'slingshot_aim', 'physics'].includes(stateRef.current) && !['speak', 'focus_stop'].includes(action)) {
+      return fail('DESK_PET_BUSY', '桌宠正在拖拽或弹射，请等动作结束');
+    }
+    if (action === 'perform' && !actions.some(item => item.id === args.animationId)) {
+      return fail('DESK_PET_ACTION_UNAVAILABLE', '当前形象没有这个动作，请重新查询可用动作');
+    }
+    if (action === 'interact' && !interactions.includes(args.interaction!)) return fail('DESK_PET_FEATURE_DISABLED', '该互动功能已关闭');
+    if ((action === 'focus_start' && pomodoroEndAt) || (action === 'focus_stop' && !pomodoroEndAt)
+      || (action === 'sleep' && stateRef.current === 'sleep') || (action === 'wake' && stateRef.current !== 'sleep')) {
+      return { success: true, status: 'unchanged', action };
+    }
+    const text = normalizeAiQqFaceText(args.text || '', { allowFaces: false }).trim();
+    if (action === 'speak' && !text) return fail('INVALID_ARGUMENTS', '请提供可显示的气泡文字');
+    if (action !== 'speak') {
+      if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
+      roamTargetRef.current = null;
+      autoDozeRef.current = false;
+      lastInteractRef.current = Date.now();
+      setTiltDeg(0);
+      setMenuPos(null);
+      setShowActSubmenu(false);
+    }
+    switch (action) {
+      case 'perform': playOriginalAction(args.animationId!); break;
+      case 'feed': handleFeedMusicSnack(true); break;
+      case 'pat': handlePatPet(true); break;
+      case 'sleep': setPetState('sleep'); break;
+      case 'wake': setPetState(baseStateRef.current); break;
+      case 'focus_start':
+        setPomodoroEndAt(Date.now() + 25 * 60 * 1000);
+        setPomodoroRemainingText('25:00');
+        setPetState('work');
+        break;
+      case 'focus_stop': setPomodoroEndAt(null); setPomodoroRemainingText(''); break;
+      case 'show_ledger': playOriginalAction(pickMusicLedgerAction({ isPlaying, queueLength, songsListenedCount })); break;
+      case 'prepare_slingshot': setPetState('slingshot_aim'); break;
+      case 'interact': {
+        const start = {
+          ponder_button: triggerPonderButtonAction, sneak_click: triggerSneakClickButtonAction,
+          surf_progress: triggerSurfProgressAction, fish_queue: triggerFishQueueAction,
+          dj_cover: triggerDjCoverAction, treasure_hot: triggerTreasureHotAction, perch_chat: triggerPerchChatAction,
+        }[args.interaction!];
+        if (start(true) === false) return fail('DESK_PET_TARGET_UNAVAILABLE', '当前视口没有可互动的按钮');
+        break;
+      }
+    }
+    if (text || action === 'show_ledger') say(text || '本场听歌账本', 7000, {
+      aiOnly: true, command: true, withLedger: action === 'show_ledger',
+      withBars: ['feed', 'pat', 'show_ledger'].includes(action),
+    });
+    return { success: true, status: ['speak', 'show_ledger'].includes(action) ? 'shown' : 'started', action };
+  };
+  useLayoutEffect(() => registerDeskPetHandler((command, args) => petAiHandlerRef.current(command, args)), [chatRoomId, myUserId]);
 
   // 只联动回复当前成员的 AI 消息，不按昵称判断归属
   const latestBotMessage = useMemo(
@@ -738,6 +835,7 @@ export default function RoomAiDesktopPet({
       return;
     }
     if (!latestBotMessage?.text || !dialogEnabled) return;
+    if (aiCommandBubbleUntilRef.current > Date.now()) return;
     const clean = normalizeAiQqFaceText(latestBotMessage.text, { allowFaces: false }).slice(0, 44);
     if (!clean) return;
     if (!['drag', 'slingshot_aim', 'physics', 'sleep'].includes(stateRef.current)
@@ -1286,8 +1384,13 @@ export default function RoomAiDesktopPet({
     );
   }
 
-  const bubbleFlipBelow = pos.y < 135;
-  const displayBubbleText = isAiThinking && workEnabled
+  const bubbleFlipBelow = pos.y < Math.min(280 * effectiveScale, window.innerHeight / 2);
+  const bubbleMaxWidth = Math.min(260, (window.innerWidth - 24) / effectiveScale);
+  const bubbleHalfWidth = bubbleMaxWidth * effectiveScale / 2;
+  const petCenterX = pos.x + PET_W / 2;
+  const bubbleOffset = (Math.max(12 + bubbleHalfWidth,
+    Math.min(window.innerWidth - 12 - bubbleHalfWidth, petCenterX)) - petCenterX) / effectiveScale;
+  const displayBubbleText = !dialogEnabled ? '' : bubble?.command && aiEnabled ? bubble.text : isAiThinking && workEnabled
     ? activeThinkingStep
     : bubble?.aiOnly && !aiEnabled ? '' : bubble?.text || '';
   const listenMins = Math.floor(sessionListenSeconds / 60);
@@ -1344,6 +1447,8 @@ export default function RoomAiDesktopPet({
               background: 'rgba(255, 255, 255, 0.97)',
               color: '#1e2a52',
               boxShadow: '0 8px 22px rgba(18, 32, 86, 0.3), 0 0 0 1px rgba(120, 150, 255, 0.22)',
+              left: PET_W / 2 + bubbleOffset,
+              maxWidth: bubbleMaxWidth,
             }}
             className={`room-desk-pet__bubble pointer-events-none absolute left-1/2 -translate-x-1/2 z-20 w-max max-w-[min(260px,calc(100vw-24px))] rounded-[16px] px-4 py-3 text-[14px] leading-[1.6] transition-all duration-200 ${
               bubbleFlipBelow ? 'top-[134px]' : 'bottom-[134px]'
@@ -1403,11 +1508,12 @@ export default function RoomAiDesktopPet({
 
             {/* 气泡小三角尾巴 (.bubble-tail) */}
             <div
-              style={
-                bubbleFlipBelow
+              style={{
+                ...(bubbleFlipBelow
                   ? { borderBottomColor: 'rgba(255, 255, 255, 0.97)' }
-                  : { borderTopColor: 'rgba(255, 255, 255, 0.97)' }
-              }
+                  : { borderTopColor: 'rgba(255, 255, 255, 0.97)' }),
+                left: `clamp(12px, calc(50% - ${bubbleOffset}px), calc(100% - 12px))`,
+              }}
               className={`absolute left-1/2 -translate-x-1/2 h-0 w-0 border-[6px] border-transparent ${
                 bubbleFlipBelow ? '-top-[11px]' : '-bottom-[11px]'
               }`}

@@ -386,10 +386,42 @@ export async function createRoom(name?: string, password?: string): Promise<{ id
   return res.json();
 }
 
+let inflightListRoomsPromise: Promise<RoomSummary[]> | null = null;
+let prefetchedRoomsSnapshot: { data: RoomSummary[]; at: number } | null = null;
+const PREFETCHED_ROOMS_TTL_MS = 2500;
+
+export function consumePrefetchedRooms(): RoomSummary[] | null {
+  if (!prefetchedRoomsSnapshot) return null;
+  const { data, at } = prefetchedRoomsSnapshot;
+  prefetchedRoomsSnapshot = null;
+  if (Date.now() - at > PREFETCHED_ROOMS_TTL_MS) return null;
+  return data;
+}
+
+export function prefetchRooms(): Promise<RoomSummary[]> {
+  return listRooms().then((data) => {
+    prefetchedRoomsSnapshot = { data, at: Date.now() };
+    return data;
+  });
+}
+
 export async function listRooms(): Promise<RoomSummary[]> {
-  const res = await fetchWithTimeout('/api/rooms', {}, 12000);
-  if (!res.ok) throw new Error('获取房间列表失败');
-  return res.json();
+  if (prefetchedRoomsSnapshot && Date.now() - prefetchedRoomsSnapshot.at <= PREFETCHED_ROOMS_TTL_MS) {
+    const data = prefetchedRoomsSnapshot.data;
+    prefetchedRoomsSnapshot = null;
+    return data;
+  }
+  if (inflightListRoomsPromise) {
+    return inflightListRoomsPromise;
+  }
+  inflightListRoomsPromise = (async () => {
+    const res = await fetchWithTimeout('/api/rooms', {}, 12000);
+    if (!res.ok) throw new Error('获取房间列表失败');
+    return res.json() as Promise<RoomSummary[]>;
+  })().finally(() => {
+    inflightListRoomsPromise = null;
+  });
+  return inflightListRoomsPromise;
 }
 
 export async function randomMatchRoom(): Promise<RoomSummary> {

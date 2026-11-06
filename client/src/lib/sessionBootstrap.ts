@@ -11,11 +11,16 @@ import {
 } from './softBlock';
 
 let bootstrapPromise: Promise<string | null> | null = null;
+let bootstrapReadyGeneration = -1;
 let lastBootstrapError = '';
 let bootstrapGeneration = 0;
 
 export function getLastBootstrapError(): string {
   return lastBootstrapError;
+}
+
+export function hasSessionBootstrapReady(): boolean {
+  return bootstrapReadyGeneration === bootstrapGeneration && !isSiteAccessBlocked();
 }
 
 async function requestSessionBootstrap(generation: number): Promise<string | null> {
@@ -62,7 +67,10 @@ async function requestSessionBootstrap(generation: number): Promise<string | nul
   };
   if (generation !== bootstrapGeneration) return null;
   applySiteFeatures(data.features);
-  if (data.clientId) rememberClientId(data.clientId);
+  if (data.clientId) {
+    rememberClientId(data.clientId);
+    bootstrapReadyGeneration = generation;
+  }
   lastBootstrapError = '';
   return data.clientId || null;
 }
@@ -70,7 +78,10 @@ async function requestSessionBootstrap(generation: number): Promise<string | nul
 /** 通过 HttpOnly Cookie 建立会话，不在 WebSocket 中传递身份令牌 */
 export function ensureSessionBootstrap(force = false): Promise<string | null> {
   if (isSiteAccessBlocked()) return Promise.resolve(null);
-  if (force) bootstrapPromise = null;
+  if (force) {
+    bootstrapPromise = null;
+    bootstrapReadyGeneration = -1;
+  }
   if (!bootstrapPromise) {
     const generation = bootstrapGeneration;
     bootstrapPromise = (async () => {
@@ -121,5 +132,6 @@ export async function requireSessionBootstrap(force = false): Promise<string> {
 export function resetSessionBootstrap(): void {
   if (isSiteAccessBlocked()) return;
   bootstrapGeneration += 1;
+  bootstrapReadyGeneration = -1;
   bootstrapPromise = null;
 }

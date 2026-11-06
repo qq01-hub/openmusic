@@ -22,6 +22,8 @@ function RadioCover({
         <img
           src={radio.coverImgUrl}
           alt=""
+          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           className="h-full w-full object-cover transition-transform group-hover:scale-105"
           onError={(event) => {
@@ -235,7 +237,7 @@ export default function DjRadioPanel({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
+      <div className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
         {loading || searching ? (
           <RadioSkeleton />
         ) : list.length === 0 ? (

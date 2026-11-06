@@ -1648,7 +1648,7 @@ export default function RoomSettingsModal({
                           </span>
                         </div>
                         <p className="mt-0.5 text-xs text-netease-muted">
-                          房主可选择下方完整预设，自行编写或修改后的角色设定最多 500 字，留空使用小肥鱼预设，权限与隐私规则始终生效
+                          留空使用系统固定的小鲸鱼默认角色，默认角色不可在此编辑；也可选择其他预设或填写最多 500 字的自定义角色，权限与隐私规则始终生效
                         </p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
                           {aiPersonaPresets.map((preset) => (
@@ -1675,7 +1675,7 @@ export default function RoomSettingsModal({
                           value={draftRoomAiPersona}
                           disabled={roomAiSaving || !globalAiEnabled || !roomAiEnabled}
                           onChange={(e) => setDraftRoomAiPersona(e.target.value)}
-                          placeholder="留空使用小肥鱼默认预设，也可以选择上方预设或填写自己的角色设定"
+                          placeholder="留空使用系统默认小鲸鱼，选择其他预设或填写自定义角色可切换人格"
                           className="mt-2 w-full resize-none rounded-xl border border-netease-border/60 bg-netease-dark px-3 py-2 text-sm text-white outline-none focus:border-netease-red/50 disabled:opacity-50"
                         />
                         {!isRoomAiPersonaAllowed(draftRoomAiPersona.trim()) && (

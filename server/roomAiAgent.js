@@ -55,6 +55,7 @@ import { listFavoriteSongs } from './roomStorage.js';
 import { sanitizeFavoriteSongInput } from './favoriteSongInput.js';
 import { incrementMetric } from './logger.js';
 import { searchWeb } from './aiWebSearch.js';
+import { validDeskPetArgs, compactDeskPetResult } from './roomAiDeskPet.js';
 import { fetchNeteaseHotToplist } from './neteaseToplist.js';
 import { getHotSongs } from './songHotRank.js';
 import {
@@ -90,6 +91,7 @@ const MUTATING_TOOL_NAMES = new Set([
   'send_sticker',
   'reply_message',
   'update_member_context',
+  'control_desk_pet',
 ]);
 const aiQueue = [];
 const aiActiveTasks = new Map();
@@ -356,6 +358,7 @@ function compactSongForModel(song, index = 0) {
 
 /** 仅压缩发给模型的工具结果，真实结果仍保留给执行台账与用户回复使用 */
 export function compactAiToolResultForModel(name, result) {
+  if (name === 'get_desk_pet_state' || name === 'control_desk_pet') return compactDeskPetResult(result);
   if (!result || typeof result !== 'object') return { success: false, error: '工具返回为空' };
   const compact = { success: Boolean(result.success) };
   for (const key of ['code', 'error', 'message', 'hint', 'tip', 'statusText', 'playbackStatus', 'rapportStage', 'chart', 'chartName']) {
@@ -659,56 +662,6 @@ function findRememberedSong(ctx, id, server) {
   return Array.from(ctx.songCandidates.values()).find((song) => String(song.id) === String(id)) || null;
 }
 
-/**
- * 把本轮缓冲的音乐卡片合并成一条聊天消息发出去。
- * 目的是让「一次回复里的多张候选卡片」只占一条消息，而不是刷屏多条。
- * finalText 是本轮模型的最终文字：有它就用它，避免只留下工具参数里的半句话而显得被截断。
- */
-function describeToolStep(fnName, args = {}) {
-  switch (fnName) {
-    case 'get_music_chart':
-      return args.chart === 'netease_hot' ? '正在查看网易热歌榜' : '正在查看平台热榜';
-    case 'search_web':
-      return '正在联网查找公开资料';
-    case 'get_qq_faces':
-      return '正在挑选合适的QQ表情';
-    case 'search_songs':
-      return `正在${({ netease: '网易云', tencent: 'QQ音乐', kugou: '酷狗', qishui: '汽水' })[args.server || 'netease'] || '指定音源'}搜索歌曲「${String(args.keyword || '').trim().slice(0, 24) || '候选'}」`;
-    case 'recommend_songs':
-      return `正在根据「${String(args.mood || args.keyword || '当前氛围').trim().slice(0, 20)}」挑选推荐歌曲`;
-    case 'request_song':
-      return `正在为你将歌曲加入播放队列`;
-    case 'skip_song':
-      return `正在校验权限并执行切歌`;
-    case 'request_skip_song':
-      return `正在为你发起切歌投票申请`;
-    case 'get_room_status':
-      return `正在查看当前房间在播与队列状态`;
-    case 'get_song_history':
-      return `正在翻阅房间最近播放历史记录`;
-    case 'get_my_favorites':
-      return '正在读取你的收藏歌曲';
-    case 'get_my_permissions':
-      return `正在核对你的房间角色与操作权限`;
-    case 'set_play_mode':
-      return `正在切换房间播放顺序模式`;
-    case 'set_fm_mode':
-      return `正在调整房间私人漫游配置`;
-    case 'jump_queue_song':
-      return `正在将待播歌曲插队到下一首`;
-    case 'remove_queue_song':
-      return `正在从待播队列移除指定歌曲`;
-    case 'like_queue_song':
-      return `正在为歌曲点赞助威`;
-    case 'send_song_card':
-      return `正在生成可试听的音乐卡片`;
-    case 'send_sticker':
-      return `正在挑选合适的表情包`;
-    default:
-      return '';
-  }
-}
-
 export async function searchStickerCandidatesForAi(keyword, ctx, deps = {}) {
   const activeRole = resolvePersonaStickerRole({
     roomPersona: ctx?.roomPersona,
@@ -878,7 +831,7 @@ export async function selectAndVerifyStickerForAi(args = {}, ctx = {}, deps = {}
 
     if (externalInspections >= 3) continue;
     externalInspections += 1;
-    ctx.reportStep?.('正在识别候选表情包内容是否符合当前角色、适合本次回答且无违规内容…');
+    ctx.reportStatus?.('正在查看表情包…');
     const verdict = await inspectSticker(candidate.url, {
       userText,
       replyText,
@@ -915,6 +868,7 @@ export async function selectAndVerifyStickerForAi(args = {}, ctx = {}, deps = {}
   };
 }
 
+/** 合并本轮音乐卡片，优先使用模型最终正文作为说明 */
 function flushPendingSongCards(ctx, finalText = '') {
   const buffer = ctx?.cardBuffer;
   if (!buffer || buffer.cards.length === 0) return;
@@ -997,6 +951,22 @@ async function executeTool(name, args, ctx) {
   }
 
   switch (name) {
+    case 'get_desk_pet_state':
+    case 'control_desk_pet': {
+      const finish = (result) => {
+        const outcome = result.success ? 'success' : result.code === 'DESK_PET_TIMEOUT' ? 'timeout'
+          : ['INVALID_ARGUMENTS', 'DESK_PET_DISABLED', 'DESK_PET_FEATURE_DISABLED', 'DESK_PET_LIMIT'].includes(result.code) ? 'rejected' : 'failure';
+        incrementMetric('room_ai_desk_pet_total', { result: outcome, tool: name });
+        return result;
+      };
+      if (!validDeskPetArgs(name, args)) return finish({ success: false, code: 'INVALID_ARGUMENTS', error: '桌宠参数无效' });
+      const currentRoom = getRoomInternal(roomId);
+      if (!isRoomAiEnabledForRoom(currentRoom) || currentRoom?.roomAiDeskPetEnabled !== true) {
+        return finish({ success: false, code: 'DESK_PET_DISABLED', error: '房间AI或桌宠已关闭' });
+      }
+      if (!ctx.requestDeskPet) return finish({ success: false, code: 'DESK_PET_UNAVAILABLE', error: '当前页面无法连接桌宠' });
+      return finish(await ctx.requestDeskPet(name, args));
+    }
     case 'report_progress': {
       if (Object.keys(args).some(key => key !== 'summary')
         || typeof args.summary !== 'string' || !args.summary.trim() || args.summary.length > 180) {
@@ -1561,35 +1531,35 @@ export async function handleRoomAiChat(params = {}) {
 
   const thoughtSteps = [];
   const reportStep = (stepText) => {
-    const clean = normalizeAiQqFaceText(stepText, { allow: false, maxLength: 180 });
-    if (!clean) return;
-    if (thoughtSteps[thoughtSteps.length - 1] !== clean) {
-      thoughtSteps.push(clean);
-      if (thoughtSteps.length > 30) thoughtSteps.shift();
-    }
+    const clean = sanitizeOutgoingAiText(normalizeAiQqFaceText(stepText, { allow: false, maxLength: 180 }));
+    if (!clean || thoughtSteps.includes(clean)) return;
+    thoughtSteps.push(clean);
+    if (thoughtSteps.length > 6) thoughtSteps.shift();
     params.onProgress?.(clean, [...thoughtSteps]);
+  };
+  // 系统等待状态不写入模型摘要，也不覆盖模型已经给出的进展
+  const reportStatus = (text) => {
+    if (!thoughtSteps.length) params.onProgress?.(text, []);
   };
 
   // 当前图片和被回复的截图都要先走视觉模型，再交给文本 Agent 调工具。
   if (hasImage) {
-    reportStep('正在识别你发送的图片内容…');
+    reportStatus('正在查看你发来的图片…');
     const vision = await describeImageWithVision(imageUrl, userPrompt, roomId, params.riskAccountId);
     if (vision.success) {
-      reportStep('已完成图片识别');
       userPrompt = `${userPrompt}\n\n[识图结果·${vision.model}]\n${vision.description}`;
     } else {
       userPrompt = `${userPrompt}\n\n[识图失败] ${vision.error || '无法识别图片'}`;
     }
   }
   if (replyContext?.imageUrl && !replyContext.asSticker && replyContext.imageUrl !== imageUrl) {
-    reportStep('正在识别引用消息中的图片…');
+    reportStatus('正在查看引用的图片…');
     const vision = await describeImageWithVision(replyContext.imageUrl, [
       `用户正在回复这张图片，并说：“${requestText}”。`,
       '结合用户问题描述相关图片内容，保留歌曲、歌手、列表顺序等可见线索，多首歌曲分别说明',
       '看不清的信息说明不确定，不要猜测或补全',
     ].join('\n'), roomId, params.riskAccountId);
     if (vision.success) {
-      reportStep('已完成引用图片识别');
       userPrompt = `${userPrompt}\n\n[引用图片识图结果·${vision.model}]\n${vision.description}`;
     } else {
       userPrompt = `${userPrompt}\n\n[引用图片识图失败] ${vision.error || '无法识别图片'}`;
@@ -1626,6 +1596,7 @@ export async function handleRoomAiChat(params = {}) {
     emitChat: params.emitChat,
     emitSystem: params.emitSystem,
     broadcastRoom: params.broadcastRoom,
+    requestDeskPet: params.requestDeskPet,
     permissions,
     requestText,
     replied: false,
@@ -1633,6 +1604,7 @@ export async function handleRoomAiChat(params = {}) {
     pendingReplies: [],
     thoughtSteps,
     reportStep,
+    reportStatus,
     songCandidates: new Map(persistedSongCandidates.map((song) => [songCandidateKey(song), song])),
     stickerCandidates: new Map(),
     recentQqFaceIds: collectRecentBotQqFaceIds(room.messages || [], AI_BOT_USER_ID),
@@ -1710,7 +1682,7 @@ export async function handleRoomAiChat(params = {}) {
 
     for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
       if (round === 0) {
-        reportStep(`${botName}正在组织思路与回应…`);
+        reportStatus(`${botName}正在回应…`);
       }
       const closing = round === MAX_TOOL_ROUNDS;
       if (closing) messages.push({
@@ -1777,8 +1749,6 @@ export async function handleRoomAiChat(params = {}) {
         const parsedArgs = safeJsonParse(call?.function?.arguments || '{}', null);
         const validArgs = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs);
         const args = validArgs ? parsedArgs : {};
-        const stepLabel = validArgs ? describeToolStep(fnName, args) : '';
-        if (stepLabel) reportStep(stepLabel);
         const ledgerKey = `${fnName}:${stableJson(args)}`;
         const mutating = Boolean(validArgs) && MUTATING_TOOL_NAMES.has(fnName)
           && (fnName !== 'send_sticker' || Boolean(args.id || args.keyword));

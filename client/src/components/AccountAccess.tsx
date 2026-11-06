@@ -226,38 +226,51 @@ export default function AccountAccess({
     return providerRequest.current;
   }, []);
 
+  const openRef = useRef(open);
+  openRef.current = open;
+
+  const refreshAccountDetails = useCallback(() => {
+    setAccountDataLoading(true);
+    void Promise.all([fetchAccountMusicAccounts(), listAccountRooms()])
+      .then(([accounts, rooms]) => { setMusicAccounts(accounts); setAccountRooms(rooms); })
+      .catch(() => undefined)
+      .finally(() => setAccountDataLoading(false));
+  }, []);
+
   const refresh = useCallback(async () => {
+    const shouldLoadModalData = openRef.current;
     const [session, status] = await Promise.allSettled([
       fetchAccountSession(),
-      refreshProviders(),
+      shouldLoadModalData ? refreshProviders() : Promise.resolve(null),
     ]);
     if (session.status === 'rejected') throw session.reason;
     setAccount(session.value);
     if (session.value) {
-      setAccountDataLoading(true);
-      void Promise.all([fetchAccountMusicAccounts(), listAccountRooms()])
-        .then(([accounts, rooms]) => { setMusicAccounts(accounts); setAccountRooms(rooms); })
-        .catch(() => undefined)
-        .finally(() => setAccountDataLoading(false));
+      if (shouldLoadModalData) {
+        refreshAccountDetails();
+      }
     } else {
       setMusicAccounts({ netease: null, tencent: null, kugou: null, qishui: null });
       setAccountRooms([]);
     }
     if (status.status === 'fulfilled') setError('');
     return session.value;
-  }, [refreshProviders]);
+  }, [refreshAccountDetails, refreshProviders]);
 
   useEffect(() => {
     if (!open) return;
-    const refresh = () => { void refreshProviders().catch(() => undefined); };
-    refresh();
-    window.addEventListener('focus', refresh);
-    window.addEventListener('online', refresh);
+    const refreshModalProviders = () => { void refreshProviders().catch(() => undefined); };
+    refreshModalProviders();
+    if (account) {
+      refreshAccountDetails();
+    }
+    window.addEventListener('focus', refreshModalProviders);
+    window.addEventListener('online', refreshModalProviders);
     return () => {
-      window.removeEventListener('focus', refresh);
-      window.removeEventListener('online', refresh);
+      window.removeEventListener('focus', refreshModalProviders);
+      window.removeEventListener('online', refreshModalProviders);
     };
-  }, [open, refreshProviders]);
+  }, [account?.id, open, refreshAccountDetails, refreshProviders]);
 
   useEffect(() => {
     const oauthResult = consumeAccountAuthReturn();

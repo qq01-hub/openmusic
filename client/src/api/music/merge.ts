@@ -302,15 +302,25 @@ export function prioritizeMatchingFavorites(
   favoriteIds: ReadonlySet<string>,
   keyword = '',
 ): SearchResult[] {
-  const terms = keyword.trim().split(/\s+/).map(normalizeRelevanceText).filter(Boolean);
+  if (!favoriteIds.size || songs.length <= 1) return songs;
+  const trimmedKeyword = keyword.trim();
+  const terms = trimmedKeyword ? trimmedKeyword.split(/\s+/).map(normalizeRelevanceText).filter(Boolean) : [];
+  if (trimmedKeyword && terms.length === 0) return songs;
   const favorites: SearchResult[] = [];
   const others: SearchResult[] = [];
   for (const song of songs) {
+    if (!favoriteIds.has(songKey(song))) {
+      others.push(song);
+      continue;
+    }
+    if (!trimmedKeyword) {
+      favorites.push(song);
+      continue;
+    }
     const name = normalizeRelevanceText(song.name);
     const artist = normalizeRelevanceText(song.artist);
-    const matches = !keyword.trim() || (terms.length > 0
-      && terms.every(term => name.includes(term) || artist.includes(term)));
-    (matches && favoriteIds.has(songKey(song)) ? favorites : others).push(song);
+    const matches = terms.every((term) => name.includes(term) || artist.includes(term));
+    (matches ? favorites : others).push(song);
   }
   return favorites.length ? [...favorites, ...others] : songs;
 }

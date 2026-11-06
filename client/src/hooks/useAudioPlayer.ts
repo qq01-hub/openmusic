@@ -1428,10 +1428,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);
         if (duration && duration > 0) {
           const live = useRoomStore.getState().room;
-          if (live?.current?.queueId === current.queueId) {
+          if (live?.current?.queueId === current.queueId && live.current.duration !== duration) {
             useRoomStore.getState().setRoom({
               ...live,
-              current: live.current.duration === duration ? live.current : { ...live.current, duration },
+              current: { ...live.current, duration },
             });
           }
           setMediaDuration(trackKey, duration);
@@ -1878,7 +1878,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     const optimistic = optimisticSeekPosition(live.id, current.queueId, capped, live.isPlaying);
     useAudioStore.getState().setPlaybackVersion(optimistic.version);
     snapSmoothPlaybackTime(capped);
-    useRoomStore.getState().setRoom({ ...live, currentTime: capped });
+    live.currentTime = capped;
 
     if (canSyncAudioForQueue(controller.audio, current.queueId)) {
       controller.audio.currentTime = capped;

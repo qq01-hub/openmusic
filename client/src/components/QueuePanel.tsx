@@ -108,7 +108,7 @@ interface Props {
   onShareSong?: (song: QueueItem) => void;
 }
 
-export default function QueuePanel({ fillHeight = false, onArtistClick, onShareSong }: Props) {
+export default memo(function QueuePanel({ fillHeight = false, onArtistClick, onShareSong }: Props) {
   const queue = useRoomStore((s) => s.room?.queue);
   const currentSong = useRoomStore((s) => s.room?.current);
   const memberTiers = useRoomStore((s) => s.room?.memberTiers);
@@ -440,4 +440,4 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
       </div>
     </div>
   );
-}
+});

@@ -15,6 +15,7 @@ import SongResultRow from './SongResultRow';
 import { immersiveGlassListFooter } from '../lib/immersiveGlass';
 import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
 import { useFavorites } from '../hooks/useFavorites';
+import { useVirtualListWindow } from '../hooks/useVirtualListWindow';
 import { stopSongPreview } from '../lib/songPreviewPlayer';
 import { useRoomStore } from '../stores/roomStore';
 
@@ -64,7 +65,7 @@ function SongResultList({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<SongResultPageSize>(getStoredSongResultPageSize);
   const { queueKeys, playedKeys } = useRoomSongKeySets();
-  const { favoriteIds } = useFavorites();
+  const { favoriteIds, toggleFavorite } = useFavorites();
   const queue = useRoomStore(s => s.room?.queue);
   const currentKey = useRoomStore(s => s.room?.current ? songKey(s.room.current) : '');
   const myUserId = useRoomStore(s => s.mySocketId);
@@ -95,6 +96,17 @@ function SongResultList({
     ? sortedResults
     : sortedResults.slice((page - 1) * pageSize, page * pageSize),
   [page, pageSize, remotePagination, sortedResults]);
+  const { startIndex, endIndex, topSpacerPx, bottomSpacerPx } = useVirtualListWindow(scrollBodyRef, {
+    count: pageResults.length,
+    itemSize: 80,
+    resetKey: `${keyword || ''}:${currentPage}:${effectivePageSize}`,
+  });
+  const visiblePageResults = useMemo(
+    () => (startIndex === 0 && endIndex === pageResults.length
+      ? pageResults
+      : pageResults.slice(startIndex, endIndex)),
+    [endIndex, pageResults, startIndex],
+  );
 
   const handleRowAdd = useCallback((song: SearchResult) => {
     onAddRef.current(song);
@@ -144,14 +156,19 @@ function SongResultList({
       className={`flex min-h-0 flex-col ${fillHeight ? 'h-full' : ''}`}
       style={fillHeight ? undefined : { height: RESULT_BODY_HEIGHT }}
     >
-      <div ref={scrollBodyRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5">
-        <div className="space-y-2">
+      <div ref={scrollBodyRef} className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain pr-0.5">
+        <div
+          className="space-y-2"
+          style={topSpacerPx > 0 || bottomSpacerPx > 0
+            ? { paddingTop: topSpacerPx, paddingBottom: bottomSpacerPx }
+            : undefined}
+        >
           {pageResults.length === 0 && (
             <p role="status" className="py-8 text-center text-sm text-netease-muted">
               {pagination?.loading ? '正在加载歌曲' : '本页暂无可显示的歌曲，可尝试翻页'}
             </p>
           )}
-          {pageResults.map((song) => {
+          {visiblePageResults.map((song) => {
             const key = songKey(song);
             return (
               <SongResultRow
@@ -171,6 +188,7 @@ function SongResultList({
                 onAddNext={onAddNext}
                 onShare={onShare}
                 onArtistClick={onArtistClick}
+                onToggleFavorite={toggleFavorite}
               />
             );
           })}

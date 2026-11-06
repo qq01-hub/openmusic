@@ -27,8 +27,9 @@ function syncRoomPlaybackFromState(state: PlaybackState) {
 
   const nextPlaying = state.status === 'playing';
   const nextTime = getPlaybackTime(state);
-  // 忽略纯进度微调，避免人多时 playback_state 频繁 setRoom 拖垮整页渲染
-  if (room.isPlaying === nextPlaying && Math.abs((room.currentTime || 0) - nextTime) < 1.25) {
+  // 纯进度漂移只原地同步 currentTime，避免 playback_state 产生新 room 引用触发整页重渲染
+  if (room.isPlaying === nextPlaying) {
+    room.currentTime = nextTime;
     return;
   }
 

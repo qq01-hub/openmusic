@@ -261,7 +261,7 @@ function createMetingProvider(
     },
     getCoverUrl(song) {
       const pic = String(song.pic || '');
-      if (isDirectPlayableUrl(pic)) return pic;
+      if (isDirectPlayableUrl(pic) || pic.startsWith('data:image/')) return pic;
       return `${API_BASE}?server=${song.source}&type=pic&id=${song.id}`;
     },
   };

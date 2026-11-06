@@ -5,21 +5,23 @@ import './MusicLoading.css';
 interface Props {
   label?: string;
   compact?: boolean;
+  inline?: boolean;
   className?: string;
 }
 
 let initialFullscreenDone = false;
 
 /** Shared by route loading and room connection; no simulated progress or audio. */
-export default function MusicLoading({ label = '正在连接音乐空间', compact = false, className = '' }: Props) {
+export default function MusicLoading({ label = '正在连接音乐空间', compact = false, inline = false, className = '' }: Props) {
   const quote = useLoadingQuote();
-  const skipEntranceAnimation = !compact && initialFullscreenDone;
-  if (!compact && !initialFullscreenDone) {
+  const fullscreen = !compact && !inline;
+  const skipEntranceAnimation = fullscreen && initialFullscreenDone;
+  if (fullscreen && !initialFullscreenDone) {
     initialFullscreenDone = true;
   }
   return (
     <div
-      className={`om-music-loading${compact ? ' om-music-loading--compact' : ' om-music-loading--fullscreen'}${className ? ` ${className}` : ''}`}
+      className={`om-music-loading${compact ? ' om-music-loading--compact' : fullscreen ? ' om-music-loading--fullscreen' : ''}${className ? ` ${className}` : ''}`}
       role="status"
       aria-live="polite"
       aria-label={label}

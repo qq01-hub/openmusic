@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { memo, useEffect } from 'react';
 import { useAudioPlayer } from '../hooks/useAudioPlayer';
 import { usePrefetchTrackDuration } from '../hooks/usePrefetchTrackDuration';
 import { useAudioStore } from '../stores/audioStore';
@@ -9,7 +9,7 @@ interface Props {
   tvMode?: boolean;
 }
 
-export default function AudioEngine({ tvMode = false }: Props) {
+export default memo(function AudioEngine({ tvMode = false }: Props) {
   const volume = useAudioStore((s) => s.volume);
   useAudioPlayer({ tvMode });
   usePrefetchTrackDuration();
@@ -19,4 +19,4 @@ export default function AudioEngine({ tvMode = false }: Props) {
   }, [volume]);
 
   return <AudioUnlockOverlay tvMode={tvMode} />;
-}
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageCircle, MicOff } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
@@ -25,7 +25,7 @@ import { useFavorites } from '../hooks/useFavorites';
 import { useRoomSongKeySets } from '../hooks/useRoomSongKeySets';
 import { songKey } from '../api/music';
 
-export default function ChatPanel({ className = '' }: { className?: string }) {
+export default memo(function ChatPanel({ className = '' }: { className?: string }) {
   const chatRoomSlice = useChatRoomSlice();
   const roomMeta = useChatRoomMeta();
   const rawRoomAi = useRoomStore((s) => s.room?.roomAi);
@@ -420,4 +420,4 @@ export default function ChatPanel({ className = '' }: { className?: string }) {
       />
     </div>
   );
-}
+});

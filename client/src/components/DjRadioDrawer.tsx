@@ -37,7 +37,7 @@ export default function DjRadioDrawer({ open, immersive = false, onClose, onSele
         aria-label="关闭音乐电台"
       />
       <div
-        className={`relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
+        className={`room-modal-panel relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
           immersive
             ? immersiveGlassModal
             : 'rounded-2xl border border-white/10 glass'

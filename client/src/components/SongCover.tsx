@@ -1,4 +1,4 @@
-import { memo, useEffect, useState } from 'react';
+import { memo, useState } from 'react';
 import { getCoverUrl } from '../api/music';
 import { getCoverPixelSize, getFallbackCoverUrl, type CoverSize } from '../lib/coverUrl';
 import { useSignedApiUrl } from '../lib/signedApiUrl';
@@ -28,12 +28,8 @@ export default memo(function SongCover({
 }: Props) {
   const identity = coverIdentity(song);
   const [stageFor, setStageFor] = useState<{ id: string; stage: LoadStage } | null>(null);
+  // stageFor 绑定 identity，切歌后 identity 变化会自动回到 primary，无需额外 effect 重置
   const stage: LoadStage = stageFor?.id === identity ? stageFor.stage : 'primary';
-
-  // 切歌后必须清掉失败态，否则底栏单例封面会一直卡在黑底占位
-  useEffect(() => {
-    setStageFor((prev) => (prev === null ? prev : null));
-  }, [identity]);
 
   const raw = getCoverUrl(song, size);
   const pixelSize = getCoverPixelSize(size);

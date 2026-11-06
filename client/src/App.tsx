@@ -28,6 +28,7 @@ function markStartupSeenToday() {
   catch { /* 当前页面仍然正常展示 */ }
 }
 import MusicLoading from './components/MusicLoading';
+import { prefetchRooms } from './api/meting';
 const AccountGate = lazyWithRetry(() => import('./components/AccountGate'), 'AccountGate');
 
 const Home = lazyWithRetry(() => import('./pages/Home'), 'Home');
@@ -48,11 +49,31 @@ function preloadAdminBundle() {
 
 let initialRouteBundleReady = false;
 let initialRoutePreloadPromise: Promise<unknown> = Promise.resolve();
+let initialSetupStatusPromise: Promise<boolean> | null = null;
+
+function getInitialSetupStatusPromise(): Promise<boolean> {
+  if (!initialSetupStatusPromise) {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 10000);
+    initialSetupStatusPromise = fetch('/api/setup/status', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+      .then((response) => response.json())
+      .then((data) => Boolean(data.setupRequired))
+      .catch(() => false)
+      .finally(() => window.clearTimeout(timer));
+  }
+  return initialSetupStatusPromise;
+}
 
 if (typeof window !== 'undefined') {
   const initialPath = window.location.pathname;
+  void getInitialSetupStatusPromise();
   const tasks: Promise<unknown>[] = [import('./components/AccountGate').catch(() => undefined)];
   if (initialPath === '/') {
+    void prefetchRooms().catch(() => undefined);
     tasks.push(import('./pages/Home').catch(() => undefined));
   } else if (initialPath.startsWith('/room/')) {
     tasks.push(import('./pages/Room').then((m) => m.preloadRoomShell()).catch(() => undefined));
@@ -165,24 +186,14 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => controller.abort(), 10000);
-    const setupFetch = fetch('/api/setup/status', { credentials: 'same-origin', cache: 'no-store', signal: controller.signal })
-      .then((response) => response.json())
-      .then((data) => Boolean(data.setupRequired))
-      .catch(() => false);
     Promise.all([
-      setupFetch,
+      getInitialSetupStatusPromise(),
       initialRouteBundleReady ? Promise.resolve() : initialRoutePreloadPromise,
-    ])
-      .then(([required]) => {
-        if (!cancelled) setSetupRequired(required);
-      })
-      .finally(() => window.clearTimeout(timer));
+    ]).then(([required]) => {
+      if (!cancelled) setSetupRequired(required);
+    });
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
-      controller.abort();
     };
   }, []);
 

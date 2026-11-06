@@ -16,7 +16,7 @@ import {
   clearRoomAiUserState,
 } from './roomAiUserState.js';
 import { AI_PERSONA_PRESETS, isRoomAiPersonaAllowed } from './aiPersonaPresets.js';
-import { buildOpenMusicAiSystemPrompt, buildRoomAiTools } from './aiModelService.js';
+import { buildRoomAiUserTurn, buildRoomAiTools, DEFAULT_ROOM_AI_PERSONA } from './aiModelService.js';
 
 test('工具结果发给模型前只保留可决策字段', () => {
   const result = compactAiToolResultForModel('search_songs', {
@@ -88,15 +88,14 @@ test('工具结果存在异常长提示时仍有硬上限', () => {
   assert.ok(JSON.stringify(result).length <= 2400);
 });
 
-test('全部AI人格预设通过长度或白名单校验且包含拟人化与自主工具指引', () => {
-  assert.equal(AI_PERSONA_PRESETS.length, 5);
+test('可选人格通过校验，默认角色独立于预设列表，工具通过schema提供', () => {
+  assert.equal(AI_PERSONA_PRESETS.length, 4);
   for (const preset of AI_PERSONA_PRESETS) {
     assert.equal(isRoomAiPersonaAllowed(preset.value), true);
     assert.ok(preset.value.length > 100);
   }
-  const sysPrompt = buildOpenMusicAiSystemPrompt({ recentQqFaceIds: ['13'] });
-  assert.ok(sysPrompt.includes('get_qq_faces'));
-  assert.ok(sysPrompt.includes('get_room_status'));
+  const userTurn = buildRoomAiUserTurn({ botName: '测试AI' });
+  assert.equal(JSON.parse(userTurn.content).context.roomPersona, DEFAULT_ROOM_AI_PERSONA);
   const toolNames = new Set(buildRoomAiTools().map((t) => t.function.name));
   assert.equal(toolNames.has('get_qq_faces'), true);
   assert.equal(toolNames.has('get_room_status'), true);

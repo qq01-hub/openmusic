@@ -110,10 +110,16 @@ function startProgressLoop() {
     const nextDuration = Number.isFinite(mediaDuration) && mediaDuration > 0
       ? mediaDuration
       : activeState.durationSec;
-    publish({
-      positionSec: Number.isFinite(cardAudio.currentTime) ? cardAudio.currentTime : 0,
-      durationSec: nextDuration,
-    });
+    const nextPosition = Number.isFinite(cardAudio.currentTime) ? cardAudio.currentTime : 0;
+    if (
+      Math.abs(nextPosition - activeState.positionSec) >= 0.05
+      || Math.abs(nextDuration - activeState.durationSec) >= 0.01
+    ) {
+      publish({
+        positionSec: nextPosition,
+        durationSec: nextDuration,
+      });
+    }
     rafId = requestAnimationFrame(tick);
   };
   rafId = requestAnimationFrame(tick);

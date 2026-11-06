@@ -6,7 +6,7 @@ import {
   Loader2, RefreshCw, Plus, X, Disc3, Sparkles, Github, History, HeartHandshake, Heart,
   Play, Activity, Search, ShieldCheck, Download, Shuffle
 } from 'lucide-react';
-import { createRoom, checkRoom, listRooms, randomMatchRoom } from '../api/meting';
+import { createRoom, checkRoom, consumePrefetchedRooms, listRooms, randomMatchRoom } from '../api/meting';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
 import type { RoomSummary } from '../types';
@@ -406,9 +406,10 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   usePageSeo({ path: '/' });
   const siteSeo = useSiteSeoConfig();
 
-  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const initialPrefetchedRooms = useMemo(() => consumePrefetchedRooms(), []);
+  const [rooms, setRooms] = useState<RoomSummary[]>(() => initialPrefetchedRooms ?? []);
   const [roomListLimit, setRoomListLimit] = useState(HOME_ROOM_PAGE_SIZE);
-  const [roomsLoading, setRoomsLoading] = useState(true);
+  const [roomsLoading, setRoomsLoading] = useState(() => initialPrefetchedRooms === null);
   const [actionLoading, setActionLoading] = useState(false);
   const [matchLoading, setMatchLoading] = useState(false);
   const [adminEntryPath] = useState(() => getRememberedAdminEntryPath());
@@ -527,7 +528,9 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   }, [leaveRoom]);
 
   useEffect(() => {
-    void fetchRooms();
+    if (initialPrefetchedRooms === null) {
+      void fetchRooms();
+    }
     const POLL_MS = 8000;
     const timer = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -542,7 +545,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
       clearInterval(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [fetchRooms]);
+  }, [fetchRooms, initialPrefetchedRooms]);
 
   // 空闲后再预热热歌榜 / Room chunk，避免与首屏房间列表抢带宽
   useEffect(() => {
@@ -570,8 +573,9 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   }, []);
 
   useEffect(() => {
+    if (!donationOpen) return;
     void fetchDonations().then(setDonations);
-  }, []);
+  }, [donationOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1057,7 +1061,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
 
           {roomsLoading && rooms.length === 0 ? (
             <div data-guide="home-lobby">
-              <MusicLoading label="正在寻找房间" />
+              <MusicLoading label="正在寻找房间" inline />
             </div>
           ) : error && rooms.length === 0 ? (
             <div data-guide="home-lobby" className="flex flex-col items-center justify-center py-24 px-4 text-center bg-red-500/[0.04] border border-red-500/15 rounded-[32px]">

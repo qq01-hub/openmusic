@@ -1,19 +1,16 @@
 import { useEffect, useState } from 'react';
 import { needsApiSign } from './apiSign';
-import { ensureSessionBootstrap } from './sessionBootstrap';
-import { ensureFreshAccountAccess } from './accountAccessSession';
+import { ensureSessionBootstrap, hasSessionBootstrapReady } from './sessionBootstrap';
+import { ensureFreshAccountAccess, hasVerifiedAccountSession } from './accountAccessSession';
 
 const SIGN_QUERY_KEYS = ['om_ts', 'om_nonce', 'om_sign'] as const;
 
 export function stripApiSignParams(url: string): string {
   if (!url) return url;
-  if (
-    !url.includes('/api/')
-    && !url.includes('om_ts=')
-    && !url.includes('om_nonce=')
-    && !url.includes('om_sign=')
-  ) {
-    return url;
+  const hasSignParams = url.includes('om_ts=') || url.includes('om_nonce=') || url.includes('om_sign=');
+  if (!hasSignParams) {
+    if (!url.includes('/api/')) return url;
+    if (url.startsWith('/api/')) return url;
   }
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
@@ -45,13 +42,20 @@ export async function resolveSignedApiUrl(url: string | null | undefined): Promi
   return signApiUrl(url);
 }
 
+function canResolveSignedSynchronously(canonical: string | null): boolean {
+  if (!canonical) return true;
+  if (!needsApiSign(canonical)) return true;
+  return hasVerifiedAccountSession() && hasSessionBootstrapReady();
+}
+
 export function useSignedApiUrl(url: string | null | undefined): string | null {
   const canonical = url ? stripApiSignParams(url) : null;
+  const syncReady = canResolveSignedSynchronously(canonical);
   const [state, setState] = useState<{ url: string | null; signed: string | null }>(() => ({
-    url: canonical, signed: canonical && !needsApiSign(canonical) ? canonical : null,
+    url: canonical, signed: syncReady ? canonical : null,
   }));
   useEffect(() => {
-    if (!canonical || !needsApiSign(canonical)) {
+    if (!canonical || canResolveSignedSynchronously(canonical)) {
       setState((prev) => (
         prev.url === canonical && prev.signed === canonical
           ? prev

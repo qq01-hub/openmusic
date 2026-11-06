@@ -14,20 +14,22 @@ import { prefetchLoadingQuote } from './lib/loadingQuote';
 import { fetchAccountSession } from './lib/accountAuth';
 
 applyStoredRoomThemeColor();
-void fetchAccountSession().catch(() => undefined);
+const initialAccountSession = fetchAccountSession().catch(() => undefined);
 installOpenMusicDebug();
 installVisibilitySync();
 installGuideUsageTracking();
 void prefetchLoadingQuote();
 void fetchSiteSeo().then(() => applyPageSeo());
 applyPageSeo();
-void ensureSessionBootstrap().then(() => {
-  const refresh = () => void refreshQualityCapabilities();
-  if (typeof window.requestIdleCallback === 'function') {
-    window.requestIdleCallback(refresh, { timeout: 5000 });
-  } else {
-    window.setTimeout(refresh, 2500);
-  }
+void initialAccountSession.finally(() => {
+  void ensureSessionBootstrap().then(() => {
+    const refresh = () => void refreshQualityCapabilities();
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(refresh, { timeout: 5000 });
+    } else {
+      window.setTimeout(refresh, 2500);
+    }
+  });
 });
 
 createRoot(document.getElementById('root')!).render(

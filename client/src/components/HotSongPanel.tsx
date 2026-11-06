@@ -1,7 +1,8 @@
-import { memo, useState, useEffect, useCallback } from 'react';
+import { memo, useState, useEffect, useCallback, useRef } from 'react';
 import { Flame, Plus, Loader2 } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
+import { useVirtualListWindow } from '../hooks/useVirtualListWindow';
 import {
   type HotRankSource,
   getNeteaseHotToplist,
@@ -50,7 +51,7 @@ function rankClass(rank: number) {
   return 'text-netease-muted/70 font-medium tabular-nums';
 }
 
-function ToplistRow({
+const ToplistRow = memo(function ToplistRow({
   song,
   rank,
   isAdding,
@@ -59,13 +60,13 @@ function ToplistRow({
   song: SearchResult;
   rank: number;
   isAdding: boolean;
-  onAdd: () => void;
+  onAdd: (song: SearchResult) => void;
 }) {
   return (
     <Tooltip content="双击点歌">
       <div
-        className="group flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/[0.04] [content-visibility:auto] [contain-intrinsic-size:auto_48px]"
-        onDoubleClick={() => onAdd()}
+        className="group flex items-center gap-2 rounded-lg px-1.5 py-1.5 transition-colors hover:bg-white/[0.04]"
+        onDoubleClick={() => onAdd(song)}
       >
       <span className={`w-4 flex-shrink-0 text-center text-[10px] leading-none ${rankClass(rank)}`}>
         {rank}
@@ -89,9 +90,9 @@ function ToplistRow({
       </div>
       <button
         type="button"
-        onClick={onAdd}
+        onClick={() => onAdd(song)}
         disabled={isAdding}
-        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-all hover:bg-netease-red/15 hover:text-netease-red disabled:opacity-50 ${
+        className={`flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md transition-colors hover:bg-netease-red/15 hover:text-netease-red disabled:opacity-50 ${
           isAdding
             ? 'text-netease-red opacity-100'
             : 'text-netease-muted opacity-100 sm:opacity-0 sm:group-hover:opacity-100'
@@ -107,9 +108,9 @@ function ToplistRow({
       </div>
     </Tooltip>
   );
-}
+});
 
-function CompactToplistCard({
+const CompactToplistCard = memo(function CompactToplistCard({
   song,
   rank,
   isAdding,
@@ -118,12 +119,12 @@ function CompactToplistCard({
   song: SearchResult;
   rank: number;
   isAdding: boolean;
-  onAdd: () => void;
+  onAdd: (song: SearchResult) => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onAdd}
+      onClick={() => onAdd(song)}
       disabled={isAdding}
       className="group flex w-[4.25rem] flex-shrink-0 flex-col text-left disabled:opacity-50"
     >
@@ -142,7 +143,7 @@ function CompactToplistCard({
       <p className="mt-0.5 truncate text-[10px] leading-3 text-netease-muted">{song.artist}</p>
     </button>
   );
-}
+});
 
 function SourceSwitch({
   source,
@@ -205,6 +206,13 @@ export default memo(function HotSongPanel({
     },
   }));
   const currentView = views[source];
+  const scrollBodyRef = useRef<HTMLDivElement>(null);
+  const { startIndex, endIndex, topSpacerPx, bottomSpacerPx } = useVirtualListWindow(scrollBodyRef, {
+    count: compact ? 0 : currentView.songs.length,
+    itemSize: 52,
+    defaultViewportHeight: 680,
+    resetKey: source,
+  });
 
   useEffect(() => {
     if (!neteaseEnabled && source === 'netease') setSource('platform');
@@ -350,17 +358,26 @@ export default memo(function HotSongPanel({
           <div className="flex w-max gap-2.5">
             {displaySongs.map((song, i) => {
               const key = songKey(song);
-              return <CompactToplistCard key={key} song={song} rank={i + 1} isAdding={addingId === key} onAdd={() => onAdd(song)} />;
+              return <CompactToplistCard key={key} song={song} rank={i + 1} isAdding={addingId === key} onAdd={onAdd} />;
             })}
           </div>
         </div>
       );
     }
+    const visibleSongs = startIndex === 0 && endIndex === displaySongs.length
+      ? displaySongs
+      : displaySongs.slice(startIndex, endIndex);
     return (
-      <div className="space-y-1">
-        {displaySongs.map((song, i) => {
+      <div
+        className="space-y-1"
+        style={topSpacerPx > 0 || bottomSpacerPx > 0
+          ? { paddingTop: topSpacerPx, paddingBottom: bottomSpacerPx }
+          : undefined}
+      >
+        {visibleSongs.map((song, idx) => {
+          const rank = startIndex + idx + 1;
           const key = songKey(song);
-          return <ToplistRow key={key} song={song} rank={i + 1} isAdding={addingId === key} onAdd={() => onAdd(song)} />;
+          return <ToplistRow key={key} song={song} rank={rank} isAdding={addingId === key} onAdd={onAdd} />;
         })}
       </div>
     );
@@ -395,7 +412,7 @@ export default memo(function HotSongPanel({
     >
       <div className="room-panel-divider border-b">{header}</div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 py-1">
+      <div ref={scrollBodyRef} className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5 py-1">
         {renderBody(source)}
       </div>
     </div>

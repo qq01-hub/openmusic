@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { getCoverUrl } from '../api/music';
 import type { QueueItem } from '../types';
 import { ROOM_VISUAL_MODE_META, type RoomVisualMode } from '../lib/roomVisualPreset';
@@ -21,7 +21,7 @@ interface Props {
   immersivePanelFocus?: 'search' | 'queue' | 'chat' | null;
 }
 
-export default function RoomAmbientBackground({
+export default memo(function RoomAmbientBackground({
   song,
   visualMode,
   isPlaying,
@@ -210,4 +210,4 @@ export default function RoomAmbientBackground({
       ) : null}
     </div>
   );
-}
+});

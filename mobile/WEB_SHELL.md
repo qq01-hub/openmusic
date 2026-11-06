@@ -31,6 +31,10 @@ flutter run --dart-define=OM_SERVER_URL=https://your-host
 
 当前房间页通过 `flutter_inappwebview` bridge 自动报送 Android 通知栏媒体状态，并响应 `play`、`pause`、`seek`、`next`、`lyrics`、`toggleMode`、`toggleFavorite`。通知栏的按钮、进度拖动与模式切换都依赖网页同步的权限字段；网页和服务端仍负责最终权限校验。Android 13 及以上首次播放需允许通知权限；悬浮歌词还需要系统悬浮窗权限。
 
+AI 桌宠调用新增服务端到网页的 Socket 事件 `room_ai_desk_pet`，仅发送到发起聊天的已认证连接，payload 为 `requestId / roomId / userId / expiresAt / command / args`，`command` 仅为 `get_state` 或 `control`；网页核对成员、房间、开关、过期时间与动作白名单并幂等执行，ack 返回同一 `requestId` 和 `success`，成功附状态或 `status: started|shown|unchanged`，失败附 `code / error`
+
+桌宠动作由网页现有组件处理，原生无需新增命令，页面互动不会触发真实业务按钮；旧网页无监听时5秒超时，模型得到未确认结果，不影响房间播放，断线或换房不向新连接补发动作，发布顺序为先兼容服务端、再刷新网页资源
+
 系统音频焦点中断只暂停本机跟播，不修改房间 `isPlaying`，也不由后台同步、回到前台或系统媒体 `stop` 自动抢回音频输出；浏览器后台收到的媒体 `pause` 无法可靠区分外部抢占与耳机暂停，因此仅中断本机，需点击网页开启声音或有权限的系统播放键主动恢复
 
 iOS 网页配置音频时尝试将 `navigator.audioSession.type` 设为 `playback`，普通直链播放使用原生 audio；iOS 酷狗播放链使用现有同源媒体代理后，才在用户手势唤醒 `AudioContext` 后接入增益输出。房主开启汽水同源代理且浏览器本地解密得到 blob 后，同样接入增益输出；普通汽水本地解密、跨源兜底和其他直链不接入 Web Audio。现有沉浸频谱模式仍按同源代理接入，音量与频谱复用同一媒体源，加载前设置 `crossOrigin=anonymous`，仅接入同源或本地 blob 音频

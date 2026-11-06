@@ -48,6 +48,14 @@ export function getDeskPetActions(character: DeskPetCharacterId): ReadonlyArray<
   }
   return actions;
 }
+export function getDeskPetPlayableActions(character: DeskPetCharacterId) {
+  const config = getDeskPetCharacter(character);
+  return config.kind === 'video'
+    ? UPSTREAM_VIDEO_NAMES.map(name => ({ id: name, label: name }))
+    : getDeskPetActions(character).map(([id, label]) => ({
+      id: `${config.kind === 'sprite' ? '__sprite:' : '__pose:'}${id}`, label,
+    }));
+}
 function pick(pool: readonly string[], random: () => number) {
   return pool[Math.min(pool.length - 1, Math.max(0, Math.floor(random() * pool.length)))];
 }

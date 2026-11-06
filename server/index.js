@@ -224,6 +224,7 @@ import {
   isQiniuConfigured,
 } from './qiniuOss.js';
 import { enqueueRoomAiChat, isRoomAiReply } from './roomAiAgent.js';
+import { createDeskPetRequester } from './roomAiDeskPet.js';
 import { getPublicRoomAiConfig, getAiModelConfig, isRoomAiEnabledForRoom, isAiModelEnabled, resolveRoomAiBotName, shouldTriggerRoomAi, stripAiTriggerPrefix } from './aiModelService.js';
 import {
   isApihzStickerConfigured,
@@ -3886,7 +3887,7 @@ app.get('/api/rooms', async (req, res) => {
     }
     return res.json(await listRooms(''));
   }
-  const identity = resolveIdentityFromRequest(req);
+  const identity = req.apiIdentity || resolveIdentityFromRequest(req);
   res.json(await listRooms(identity?.userId || ''));
 });
 
@@ -7110,6 +7111,15 @@ io.on('connection', (socket) => {
         triggerMessage: result.message,
         userId,
         userNickname: nickname,
+        requestDeskPet: createDeskPetRequester({
+          socket, roomId, userId,
+          isAvailable: () => {
+            const liveRoom = getRoomInternal(roomId);
+            return socket.connected && socketToRoom.get(socket.id) === roomId
+              && getSocketUserId(socket) === userId && liveRoom?.users.has(userId)
+              && liveRoom.roomAiDeskPetEnabled === true && isRoomAiEnabledForRoom(liveRoom);
+          },
+        }),
         emitChat: (message) => {
           if (message) io.to(roomId).emit('chat_message', message);
         },

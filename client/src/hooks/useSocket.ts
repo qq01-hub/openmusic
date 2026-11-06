@@ -1,4 +1,5 @@
 import { createDeviceProof } from '../lib/deviceProof';
+import { executeDeskPetRequest } from '../lib/deskPetAiBridge';
 import { useEffect, useRef, useCallback } from 'react';
 
 import { io, Socket } from 'socket.io-client';
@@ -963,6 +964,16 @@ export function useSocket() {
     s.on('chat_message', onChatMessage);
 
     s.on('room_ai_processing', onRoomAiProcessing);
+
+    s.on('room_ai_desk_pet', (payload: unknown, ack: unknown) => {
+      if (typeof ack !== 'function') return;
+      const { room, mySocketId } = useRoomStore.getState();
+      ack(executeDeskPetRequest(payload, {
+        roomId: room?.id || '', userId: mySocketId || '',
+        enabled: s.connected && room?.roomAi?.enabled === true
+          && (room.roomAiDeskPetEnabled ?? room.roomAi.deskPetEnabled) === true,
+      }));
+    });
 
     s.on('chat_message_recall', onChatMessageRecall);
 

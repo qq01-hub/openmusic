@@ -43,6 +43,8 @@ function PlaylistCover({
         <img
           src={playlist.coverImgUrl}
           alt=""
+          loading="lazy"
+          decoding="async"
           referrerPolicy="no-referrer"
           className="h-full w-full object-cover transition-transform group-hover:scale-105"
           onError={(event) => {

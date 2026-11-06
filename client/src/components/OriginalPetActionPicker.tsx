@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react';
 import {
   getDeskPetCharacter,
-  getDeskPetActions,
+  getDeskPetPlayableActions,
   DESK_PET_VIDEO_GROUPS,
   type DeskPetCharacterId,
 } from '../lib/deskPetCharacters';
-import { UPSTREAM_VIDEO_NAMES } from '../lib/deskPetUpstream';
 
 export default function OriginalPetActionPicker({ character, onPlay }: {
   character: DeskPetCharacterId; onPlay: (action: string) => void;
@@ -14,11 +13,7 @@ export default function OriginalPetActionPicker({ character, onPlay }: {
   const [activeGroup, setActiveGroup] = useState('全部');
   const config = getDeskPetCharacter(character);
 
-  const allActions = useMemo(() => config.kind === 'video'
-    ? UPSTREAM_VIDEO_NAMES.map((name) => ({ id: name, label: name }))
-    : getDeskPetActions(character).map(([id, label]) => ({
-      id: `${config.kind === 'sprite' ? '__sprite:' : '__pose:'}${id}`, label,
-    })), [character, config]);
+  const allActions = useMemo(() => getDeskPetPlayableActions(character), [character]);
 
   const groupNames = useMemo(
     () => (config.kind === 'video' ? ['全部', ...DESK_PET_VIDEO_GROUPS.map((g) => g.name)] : []),

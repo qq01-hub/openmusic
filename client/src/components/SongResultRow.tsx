@@ -1,10 +1,11 @@
 import { memo, useCallback, type ReactNode } from 'react';
 import { Plus, Minus, Loader2, Play, Pause, Share2, UserRound, Zap } from 'lucide-react';
-import type { SearchResult } from '../types';
+import type { FavoriteSong, SearchResult, Song } from '../types';
 import { formatDuration, songKey } from '../api/music';
 import SongCover from './SongCover';
 import SongRowBadges from './SongRowBadges';
 import FavoriteButton from './FavoriteButton';
+import FavoriteCategorySelect from './FavoriteCategorySelect';
 import Tooltip from './Tooltip';
 import TruncateTip from './TruncateTip';
 import { immersiveGlassListRow } from '../lib/immersiveGlass';
@@ -26,8 +27,15 @@ interface Props {
   /** 分享到当前房间聊天（音乐卡片） */
   onShare?: (song: SearchResult) => void;
   onArtistClick?: (artist: string) => void;
+  /** 由父级传入时避免每行独立订阅 useFavorites / useSocket */
+  onToggleFavorite?: (song: Song) => Promise<{ success: boolean; error?: string }>;
   extraActions?: ReactNode;
   onFavoriteChange?: (favorited: boolean) => void;
+  onUnfavoriteSong?: (songKey: string) => void;
+  favoriteCategory?: string;
+  favoriteCategories?: string[];
+  updatingFavoriteCategory?: boolean;
+  onChangeFavoriteCategory?: (song: FavoriteSong, category: string) => void;
 }
 
 function SongResultRow({
@@ -44,8 +52,14 @@ function SongResultRow({
   onAddNext,
   onShare,
   onArtistClick,
+  onToggleFavorite,
   extraActions,
   onFavoriteChange,
+  onUnfavoriteSong,
+  favoriteCategory,
+  favoriteCategories,
+  updatingFavoriteCategory = false,
+  onChangeFavoriteCategory,
 }: Props) {
   const key = songKey(song);
   const artistLine = `${song.artist}${song.album ? ` · ${song.album}` : ''}`;
@@ -81,9 +95,18 @@ function SongResultRow({
     onShare?.(song);
   }, [onShare, song]);
 
+  const handleToggleResult = useCallback((nextFavorited: boolean) => {
+    onFavoriteChange?.(nextFavorited);
+    if (!nextFavorited) onUnfavoriteSong?.(key);
+  }, [key, onFavoriteChange, onUnfavoriteSong]);
+
+  const handleCategoryChange = useCallback((category: string) => {
+    onChangeFavoriteCategory?.(song as FavoriteSong, category);
+  }, [onChangeFavoriteCategory, song]);
+
   return (
     <div
-      className={`group flex ${previewActive ? 'flex-wrap sm:flex-nowrap' : ''} cursor-pointer items-center gap-1 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 [content-visibility:auto] [contain-intrinsic-size:auto_72px] ${
+      className={`group flex ${previewActive ? 'flex-wrap sm:flex-nowrap' : ''} cursor-pointer items-center gap-1 rounded-xl p-2.5 transition-colors sm:gap-3 sm:p-3 ${
         glassRow ? immersiveGlassListRow : 'hover:bg-netease-card/80 active:bg-netease-card/80'
       }`}
       onDoubleClick={() => { if (!inQueue && addingId !== key) handleAdd(); }}
@@ -111,11 +134,21 @@ function SongResultRow({
       <FavoriteButton
         song={song}
         favorited={favorited}
+        onToggle={onToggleFavorite}
         showOnHover={!alwaysShowActions}
         className="h-7 w-7 text-netease-muted hover:text-rose-300"
         iconClassName="h-3.5 w-3.5"
-        onToggleResult={onFavoriteChange}
+        onToggleResult={onFavoriteChange || onUnfavoriteSong ? handleToggleResult : undefined}
       />
+      {favoriteCategories && onChangeFavoriteCategory && (
+        <FavoriteCategorySelect
+          value={favoriteCategory || ''}
+          categories={favoriteCategories}
+          songName={song.name}
+          onChange={handleCategoryChange}
+          disabled={updatingFavoriteCategory}
+        />
+      )}
       {extraActions}
       {onArtistClick && (
         <Tooltip content={`查找 ${song.artist} 的其他歌曲`}>
@@ -125,7 +158,7 @@ function SongResultRow({
               event.stopPropagation();
               onArtistClick(song.artist);
             }}
-            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/5 text-netease-muted transition-all hover:bg-white/10 hover:text-white ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/5 text-netease-muted transition-colors hover:bg-white/10 hover:text-white ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
             aria-label={`查找 ${song.artist} 的其他歌曲`}
           >
             <UserRound className="h-3.5 w-3.5" />
@@ -136,7 +169,7 @@ function SongResultRow({
         <button
           type="button"
           onClick={handleShare}
-          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/5 text-netease-muted transition-all hover:bg-sky-400/10 hover:text-sky-300 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+          className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-white/5 text-netease-muted transition-colors hover:bg-sky-400/10 hover:text-sky-300 ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
           aria-label="分享到聊天"
         >
           <Share2 className="h-3.5 w-3.5" />
@@ -153,7 +186,7 @@ function SongResultRow({
             type="button"
             onClick={handlePreview}
             disabled={previewLoading}
-            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-all disabled:opacity-50 ${
+            className={`flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50 ${
               previewPlaying || previewLoading
                 ? 'bg-white/10 text-white'
                 : 'bg-white/5 text-netease-muted hover:bg-white/10 hover:text-white'
@@ -214,7 +247,7 @@ function SongResultRow({
         onClick={inQueue && onRemove ? handleRemove : handleAdd}
         disabled={addingId === key || Boolean(inQueue && onRemove && cancelDisabledReason)}
         aria-label={inQueue && onRemove ? '取消点歌' : '点歌'}
-        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-all disabled:opacity-50 sm:h-auto sm:w-auto sm:gap-1 sm:px-2.5 sm:py-1 sm:text-xs sm:font-medium ${inQueue && onRemove ? 'bg-white/10 text-white/75 hover:bg-rose-400/20 hover:text-rose-200' : 'bg-netease-red/10 text-netease-red hover:bg-netease-red hover:text-white'} ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
+        className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full transition-colors disabled:opacity-50 sm:h-auto sm:w-auto sm:gap-1 sm:px-2.5 sm:py-1 sm:text-xs sm:font-medium ${inQueue && onRemove ? 'bg-white/10 text-white/75 hover:bg-rose-400/20 hover:text-rose-200' : 'bg-netease-red/10 text-netease-red hover:bg-netease-red hover:text-white'} ${alwaysShowActions ? 'opacity-100' : 'opacity-100 sm:opacity-0 sm:group-hover:opacity-100'}`}
       >
         {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : inQueue && onRemove ? <Minus className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
         <span className="hidden sm:inline">{inQueue && onRemove ? '取消' : '点歌'}</span>
@@ -224,25 +257,35 @@ function SongResultRow({
   );
 }
 
-export default memo(SongResultRow, (prev, next) => (
-  prev.addingId === next.addingId
-  && prev.alwaysShowActions === next.alwaysShowActions
-  && prev.inQueue === next.inQueue
-  && prev.played === next.played
-  && prev.favorited === next.favorited
-  && prev.glassRow === next.glassRow
-  && prev.onAdd === next.onAdd
-  && prev.onAddNext === next.onAddNext
-  && prev.onShare === next.onShare
-  && prev.onRemove === next.onRemove
-  && prev.cancelDisabledReason === next.cancelDisabledReason
-  && prev.onArtistClick === next.onArtistClick
-  && prev.extraActions === next.extraActions
-  && prev.onFavoriteChange === next.onFavoriteChange
-  && songKey(prev.song) === songKey(next.song)
-  && prev.song.name === next.song.name
-  && prev.song.artist === next.song.artist
-  && prev.song.album === next.song.album
-  && prev.song.pic === next.song.pic
-  && prev.song.duration === next.song.duration
-));
+export default memo(SongResultRow, (prev, next) => {
+  const prevKey = songKey(prev.song);
+  const nextKey = songKey(next.song);
+  return (
+    prevKey === nextKey
+    && (prev.addingId === prevKey) === (next.addingId === nextKey)
+    && prev.alwaysShowActions === next.alwaysShowActions
+    && prev.inQueue === next.inQueue
+    && prev.played === next.played
+    && prev.favorited === next.favorited
+    && prev.glassRow === next.glassRow
+    && prev.onAdd === next.onAdd
+    && prev.onAddNext === next.onAddNext
+    && prev.onShare === next.onShare
+    && prev.onRemove === next.onRemove
+    && prev.cancelDisabledReason === next.cancelDisabledReason
+    && prev.onArtistClick === next.onArtistClick
+    && prev.onToggleFavorite === next.onToggleFavorite
+    && prev.extraActions === next.extraActions
+    && prev.onFavoriteChange === next.onFavoriteChange
+    && prev.onUnfavoriteSong === next.onUnfavoriteSong
+    && prev.favoriteCategory === next.favoriteCategory
+    && prev.favoriteCategories === next.favoriteCategories
+    && prev.updatingFavoriteCategory === next.updatingFavoriteCategory
+    && prev.onChangeFavoriteCategory === next.onChangeFavoriteCategory
+    && prev.song.name === next.song.name
+    && prev.song.artist === next.song.artist
+    && prev.song.album === next.song.album
+    && prev.song.pic === next.song.pic
+    && prev.song.duration === next.song.duration
+  );
+});

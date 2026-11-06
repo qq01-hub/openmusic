@@ -13,6 +13,7 @@ export function mergeRoomState(incoming: RoomState, current: RoomState | null): 
     return incoming;
   }
   if (isRoomStateEquivalent(incoming, current)) {
+    current.currentTime = incoming.currentTime;
     return current;
   }
 

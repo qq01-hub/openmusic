@@ -135,7 +135,19 @@ export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity,
       }
       const identity = resolveIdentity(req);
       const roomUserId = account.roomUserId || await ensureIdentity(account.id);
-      if (!identity?.userId || identity.userId !== roomUserId) return res.status(401).json({ error: '账户身份已变化，请刷新页面后重试', code: 'ACCOUNT_IDENTITY_MISMATCH' });
+      if (!identity?.userId || identity.userId !== roomUserId) {
+        if (publicLobby && !account.anonymous && roomUserId) {
+          req.account = account;
+          req.riskAccount = account;
+          req.apiIdentity = { userId: roomUserId };
+          return withContext({ accountId: account.id, userId: roomUserId, clientIp: ip }, () => next());
+        }
+        if (publicLobby) {
+          req.publicLobbyPreview = true;
+          return next();
+        }
+        return res.status(401).json({ error: '账户身份已变化，请刷新页面后重试', code: 'ACCOUNT_IDENTITY_MISMATCH' });
+      }
       if (!account.anonymous) req.account = account;
       req.riskAccount = account;
       req.apiIdentity = identity;

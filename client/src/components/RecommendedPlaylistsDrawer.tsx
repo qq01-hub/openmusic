@@ -37,7 +37,7 @@ export default function RecommendedPlaylistsDrawer({ open, immersive = false, on
         aria-label="关闭热榜歌单"
       />
       <div
-        className={`relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
+        className={`room-modal-panel relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
           immersive
             ? immersiveGlassModal
             : 'rounded-2xl border border-white/10 glass'
@@ -58,7 +58,7 @@ export default function RecommendedPlaylistsDrawer({ open, immersive = false, on
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+        <div className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <RecommendedPlaylistsPanel hideHeader immersive={immersive} onSelectPlaylist={handleSelect} />
         </div>
       </div>

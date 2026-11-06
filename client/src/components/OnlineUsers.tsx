@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Clock, Crown, Image, MapPin, Pencil, Shield, Upload, UserMinus, Users, X } from "lucide-react";
 import { useRoomStore } from "../stores/roomStore";
 import Modal from "./Modal";
@@ -28,7 +28,7 @@ type DisplayUser = RoomUser & { offline?: boolean };
 
 type PendingAction = { type: "kick"; user: DisplayUser } | { type: "admin"; user: DisplayUser; admin: boolean };
 
-export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNotice }: Props) {
+export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, onNotice }: Props) {
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const isOwner = useRoomStore((s) => s.isOwner);
   const isAdmin = useRoomStore((s) => s.isAdmin);
@@ -691,4 +691,4 @@ export default function OnlineUsers({ users, creatorId, memberTiers = {}, onNoti
       </Modal>
     </div>
   );
-}
+});
