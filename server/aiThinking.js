@@ -5,6 +5,19 @@
 const THINKING_ADAPTERS = new Set(['auto', 'openai', 'gateway', 'siliconflow', 'qwen', 'deepseek', 'gemini', 'kimi', 'glm', 'openrouter', 'vllm', 'groq', 'minimax', 'mistral', 'ark']);
 const THINKING_EFFORTS = new Set(['auto', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 
+function openAiEfforts(name) {
+  if (/^o[134](?:-|$)/.test(name)) return ['low', 'medium', 'high'];
+  if (/^gpt-5-pro(?:-|$)/.test(name)) return ['high'];
+  if (/^gpt-5(?:\.1)?-codex(?:-mini)?$/.test(name)) return ['low', 'medium', 'high'];
+  if (/^gpt-5\.1-codex-max(?:-|$)/.test(name)) return ['low', 'medium', 'high', 'xhigh'];
+  if (/^gpt-5(?:-(?:mini|nano))?(?:-\d{4}-\d{2}-\d{2})?$/.test(name)) return ['minimal', 'low', 'medium', 'high'];
+  if (/^gpt-5\.1(?:-|$)/.test(name)) return ['low', 'medium', 'high'];
+  if (/^gpt-5\.[2-5](?:-|$)/.test(name)) return name.includes('-pro')
+    ? ['medium', 'high', 'xhigh'] : ['low', 'medium', 'high', 'xhigh'];
+  if (/^gpt-(?:5\.6|6)(?:[.-]|$)/.test(name)) return ['low', 'medium', 'high', 'xhigh', 'max'];
+  return null;
+}
+
 function thinkingConfigError(message, code = 'AI_THINKING_CONFIG_INVALID') {
   return Object.assign(new Error(message), { code, status: 400 });
 }
@@ -33,6 +46,7 @@ export function resolveAiThinking({ apiBaseUrl, protocol, model, enabled, thinki
   const budget = normalizeAiThinkingBudget(thinkingBudgetTokens);
   const host = new URL(apiBaseUrl).hostname.toLowerCase();
   const name = String(model).toLowerCase().replace(/^cn:/, '');
+  const openaiName = name.replace(/^openai\//, '');
   const isHost = (domain) => host === domain || host.endsWith(`.${domain}`);
   let adapter = 'unsupported';
   if (isHost('siliconflow.cn') || isHost('siliconflow.com')) adapter = 'siliconflow';
@@ -66,13 +80,15 @@ export function resolveAiThinking({ apiBaseUrl, protocol, model, enabled, thinki
   // 官方 Claude 兼容层会忽略 reasoning_effort，不能将手选 OpenAI 视作已启用
   if (isHost('anthropic.com') && enabled) unsupported();
 
-  const openaiCanDisable = /^gpt-5\.[1-9]/.test(name) && !name.includes('-pro');
+  const openaiCanDisable = (/^gpt-5\.[1-9]/.test(openaiName) && !/-(?:pro|codex)/.test(openaiName))
+    || /^gpt-6-(?:sol|luna)(?:-|$)/.test(openaiName);
+  const openaiDefaultEffort = /^gpt-5-pro(?:-|$)/.test(openaiName) ? 'high' : 'medium';
   if (protocol === 'responses') {
     if (!['openai', 'deepseek', 'gateway', 'ark'].includes(adapter)) {
       if (enabled) unsupported();
       return { adapter, fields, active: false };
     }
-    if (enabled) fields.reasoning = { effort: adapter === 'deepseek' ? 'high' : 'medium' };
+    if (enabled) fields.reasoning = { effort: adapter === 'deepseek' ? 'high' : adapter === 'openai' ? openaiDefaultEffort : 'medium' };
     else if (adapter === 'deepseek' || adapter === 'gateway' || adapter === 'ark' || openaiCanDisable) {
       fields.reasoning = { effort: 'none' };
     } else active = true; // 固有推理模型不能通过布尔开关关闭
@@ -82,7 +98,7 @@ export function resolveAiThinking({ apiBaseUrl, protocol, model, enabled, thinki
   } else if (adapter === 'openai') {
     completionTokens = true;
     omitTemperature = true;
-    if (enabled) fields.reasoning_effort = 'medium';
+    if (enabled) fields.reasoning_effort = openaiDefaultEffort;
     else if (openaiCanDisable) fields.reasoning_effort = 'none';
     else active = true;
   } else if (adapter === 'gateway') {
@@ -171,7 +187,7 @@ export function resolveAiThinking({ apiBaseUrl, protocol, model, enabled, thinki
     } else fields.thinking = { type: enabled ? 'enabled' : 'disabled' };
   } else if (enabled) unsupported();
 
-  if (enabled && active) {
+  if (active) {
     const effortError = () => {
       throw thinkingConfigError(`模型 ${model} 的 ${adapter} 协议不支持当前思考强度或预算，请调整配置后测试`, 'AI_THINKING_EFFORT_UNSUPPORTED');
     };
@@ -192,21 +208,63 @@ export function resolveAiThinking({ apiBaseUrl, protocol, model, enabled, thinki
         effort = ['xhigh', 'max'].includes(effort) ? 'high' : effort;
         allowed = ['minimal', 'low', 'medium', 'high'];
         if (name.includes('2.5')) minimumOutputTokens = ({ minimal: 1024, low: 1024, medium: 8192, high: 24576 }[effort] || 8192) + 4096;
-      } else if (adapter === 'openai' && /^(?:openai\/)?o[134](?:-|$)/.test(name)) allowed = ['low', 'medium', 'high'];
+      } else if (adapter === 'openai') allowed = openAiEfforts(openaiName) || allowed;
       else if (adapter === 'siliconflow') allowed = ['high', 'max'];
       else if (adapter === 'kimi' || adapter === 'glm') allowed = ['low', 'high', 'max'];
       else if (adapter === 'groq') allowed = ['low', 'medium', 'high'];
       else if (adapter === 'mistral') allowed = /mistral-small-2603|mistral-medium-3-5/.test(name) ? ['high'] : ['low', 'medium', 'high'];
       if (!allowed.includes(effort)) effortError();
-      if (protocol === 'responses' && fields.reasoning) fields.reasoning.effort = effort;
+      if (protocol === 'responses' && ['openai', 'deepseek', 'gateway', 'ark'].includes(adapter)) fields.reasoning = { ...fields.reasoning, effort };
       else if (adapter === 'openrouter') fields.reasoning.effort = effort;
-      else if (fields.reasoning_effort !== undefined || adapter === 'gateway') fields.reasoning_effort = effort;
+      else if (fields.reasoning_effort !== undefined || adapter === 'gateway' || adapter === 'openai' || adapter === 'gemini') fields.reasoning_effort = effort;
       else effortError();
     }
   }
   const effectiveEffort = fields.reasoning?.effort || fields.reasoning_effort || null;
   return {
     adapter, fields, active, omitTemperature, completionTokens, minimumOutputTokens,
-    requestedEffort, effectiveEffort, budgetTokens: enabled && active ? budget : 0,
+    requestedEffort, effectiveEffort, budgetTokens: active ? budget : 0,
   };
+}
+
+// 后台与请求构造共用适配结果，只列出无需兼容映射的档位
+export function getAiThinkingCapabilities(options = {}) {
+  const result = {
+    supported: false, adapter: 'unsupported', efforts: ['auto'], supportsBudget: false,
+    alwaysThinking: false, effectiveEffort: null, error: '',
+  };
+  if (!options.apiBaseUrl || !String(options.model || '').trim()) {
+    result.error = '先填写供应商地址与模型 ID，再选择思考配置';
+    return result;
+  }
+  const base = { ...options, enabled: true, thinkingEffort: 'auto', thinkingBudgetTokens: 0 };
+  try {
+    const defaults = resolveAiThinking(base);
+    result.supported = defaults.active;
+    result.adapter = defaults.adapter;
+    result.alwaysThinking = resolveAiThinking({ ...base, enabled: false }).active;
+    result.effectiveEffort = defaults.effectiveEffort;
+  } catch (error) {
+    result.error = error.code ? error.message : '供应商地址无效，暂时无法识别思考能力';
+    return result;
+  }
+  for (const effort of THINKING_EFFORTS) {
+    if (effort === 'auto') continue;
+    try {
+      if (resolveAiThinking({ ...base, thinkingEffort: effort }).effectiveEffort === effort) result.efforts.push(effort);
+    } catch { /* 不向后台提供当前适配器拒绝的档位 */ }
+  }
+  try {
+    result.supportsBudget = resolveAiThinking({ ...base, thinkingBudgetTokens: 128 }).budgetTokens === 128;
+  } catch { /* 不支持 Token 预算的模型保持不可选 */ }
+  try {
+    result.effectiveEffort = resolveAiThinking({
+      ...base, enabled: options.enabled ?? true,
+      thinkingEffort: options.thinkingEffort, thinkingBudgetTokens: options.thinkingBudgetTokens,
+    }).effectiveEffort;
+  } catch (error) {
+    result.effectiveEffort = null;
+    result.error = error.message;
+  }
+  return result;
 }

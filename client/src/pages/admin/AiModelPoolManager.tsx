@@ -31,6 +31,7 @@ import {
   Typography,
 } from 'antd';
 import type { AiModelPool, AiProvider, AiProviderModel } from './types';
+import { getAiThinkingCapabilities } from '../../../../server/aiThinking.js';
 import './AiModelPoolManager.css';
 
 type FetchedModelItem = {
@@ -41,6 +42,10 @@ type FetchedModelItem = {
 };
 
 type CatalogCapabilityFilter = 'all' | 'unadded' | 'vision' | 'added';
+const THINKING_EFFORT_LABELS = {
+  auto: '自动 · 保持协议默认', minimal: '最低 · minimal', low: '低 · low',
+  medium: '中 · medium', high: '高 · high', xhigh: '极高 · xhigh', max: '最高 · max',
+};
 
 function extractModelBrand(modelId: string): string {
   const raw = String(modelId || '').trim();
@@ -168,6 +173,24 @@ export default function AiModelPoolManager({ providers, onChange, onTest, onSave
     () => sortedModels.find((m) => m.id === selectedModelId) || sortedModels[0] || null,
     [sortedModels, selectedModelId],
   );
+
+  const thinkingCapabilities = useMemo(() => getAiThinkingCapabilities({
+    apiBaseUrl: activeProvider?.apiBaseUrl, protocol: activeProvider?.apiProtocol,
+    model: activeModel?.model, thinkingAdapter: activeModel?.thinkingAdapter,
+    enabled: Boolean(activeModel?.enableThinking), thinkingEffort: activeModel?.thinkingEffort,
+    thinkingBudgetTokens: activeModel?.thinkingBudgetTokens,
+  }), [activeProvider?.apiBaseUrl, activeProvider?.apiProtocol, activeModel?.model, activeModel?.enableThinking,
+    activeModel?.thinkingAdapter, activeModel?.thinkingEffort, activeModel?.thinkingBudgetTokens]);
+  const thinkingActive = Boolean(activeModel?.enableThinking || thinkingCapabilities.alwaysThinking);
+  const savedEffort = activeModel?.thinkingEffort || 'auto';
+  const effortOptions = thinkingCapabilities.efforts.map(value => ({ value, label: THINKING_EFFORT_LABELS[value], disabled: false }));
+  if (!thinkingCapabilities.efforts.includes(savedEffort)) effortOptions.push({
+    value: savedEffort, disabled: true,
+    label: thinkingCapabilities.effectiveEffort && thinkingCapabilities.effectiveEffort !== 'none'
+      && thinkingCapabilities.effectiveEffort !== savedEffort
+      ? `${THINKING_EFFORT_LABELS[savedEffort]}（实际为 ${thinkingCapabilities.effectiveEffort}）`
+      : `${THINKING_EFFORT_LABELS[savedEffort]}（当前模型不支持）`,
+  });
 
   const totalModelsCount = useMemo(
     () => sortedProviders.reduce((sum, p) => sum + (p.models?.length || 0), 0),
@@ -902,10 +925,11 @@ export default function AiModelPoolManager({ providers, onChange, onTest, onSave
                   <label className="ai-model-switch-item">
                     <div>
                       <strong>深度思考（Thinking）</strong>
-                      <span>按供应商、模型与接口协议发送思考参数，未适配时测试会报错；部分模型始终思考，关闭开关也无法禁用</span>
+                      <span>{thinkingCapabilities.alwaysThinking ? '该模型始终开启思考，可在下方调整它支持的强度或预算' : '开启后可设置当前模型支持的思考强度或预算，保存前可先测试效果'}</span>
                     </div>
                     <Switch
-                      checked={Boolean(activeModel.enableThinking)}
+                      checked={thinkingActive}
+                      disabled={thinkingCapabilities.alwaysThinking}
                       onChange={(enableThinking) => updateActiveModel(activeModel.id, (m) => ({ ...m, enableThinking }))}
                     />
                   </label>
@@ -943,33 +967,31 @@ export default function AiModelPoolManager({ providers, onChange, onTest, onSave
                   <div className="ai-model-switch-item ai-model-thinking-protocol">
                     <div>
                       <strong>思考强度</strong>
-                      <span>自动沿用当前协议的默认策略，其他档位按模型能力发送；不支持的配置会在测试中明确报错</span>
+                      <span>{thinkingCapabilities.error || (thinkingCapabilities.efforts.length === 1
+                        ? '当前模型未提供分级强度，支持时可调整下方 Token 预算'
+                        : `按当前模型与协议提供可选等级${thinkingCapabilities.effectiveEffort ? `，当前实际发送 ${thinkingCapabilities.effectiveEffort}` : ''}；中转服务的实际支持情况以测试结果为准`)}</span>
                     </div>
                     <Select
                       aria-label="思考强度"
-                      disabled={!activeModel.enableThinking}
+                      disabled={!thinkingActive || !thinkingCapabilities.supported || (effortOptions.length === 1 && savedEffort === 'auto')}
                       value={activeModel.thinkingEffort || 'auto'}
                       onChange={(thinkingEffort) => updateActiveModel(activeModel.id, (m) => ({ ...m, thinkingEffort }))}
                       style={{ width: '100%' }}
-                      options={[
-                        { value: 'auto', label: '自动 · 保持协议默认' },
-                        { value: 'minimal', label: '最低 · minimal' },
-                        { value: 'low', label: '低 · low' },
-                        { value: 'medium', label: '中 · medium' },
-                        { value: 'high', label: '高 · high' },
-                        { value: 'xhigh', label: '极高 · xhigh' },
-                        { value: 'max', label: '最高 · max' },
-                      ]}
+                      options={effortOptions}
                     />
                   </div>
                   <div className="ai-model-switch-item ai-model-thinking-protocol">
                     <div>
                       <strong>思考 Token 预算</strong>
-                      <span>0 表示沿用默认；仅百炼、硅基和 OpenRouter 的 Chat 接口支持，OpenRouter 使用预算时强度选自动，正文额度会另行预留</span>
+                      <span>{!thinkingCapabilities.supportsBudget && activeModel.thinkingBudgetTokens
+                        ? '当前模型不支持已保存的预算，请清零后保存'
+                        : thinkingCapabilities.supportsBudget
+                        ? '0 表示沿用默认；OpenRouter 使用预算时强度选自动，正文额度会另行预留'
+                        : '当前模型或协议未适配独立的思考 Token 预算'}</span>
                     </div>
                     <InputNumber
                       aria-label="思考 Token 预算"
-                      disabled={!activeModel.enableThinking}
+                      disabled={!thinkingActive || (!thinkingCapabilities.supportsBudget && !activeModel.thinkingBudgetTokens)}
                       min={0}
                       max={32768}
                       precision={0}

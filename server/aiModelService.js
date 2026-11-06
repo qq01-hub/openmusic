@@ -1939,6 +1939,10 @@ const LEGACY_ROOM_AI_PERSONA_IDS = new Map([
   ['9a29fd69ff505006cb2f82a7061afbc0aa5f7045c901e0732ede65c110ac767d', 'sharp-tongued'],
   ['94e0ce52b92c20c5246bb3f49531b509f7034e7bc091ac7d61782c8e6adcf1b8', 'tsundere-cat'],
   ['4185abec430622f2b032450edd686b7448dab0afeb987db93cd154ab52f45806', 'energetic-buddy'],
+  ['e9545d9769e7fd064ae5aafc6f7617cd9474face93f7983b194f42ccd27d0e54', 'gpt-niang'],
+  ['1785485b95b278c34aa8e8e594afea783ccd5d13b0c24651dfef1f48418b0912', 'sharp-tongued'],
+  ['603e1057f6864e785a5f46a543961e462e77a1e4c85dca907950033a0cd2be43', 'tsundere-cat'],
+  ['7445ea15c977ef25d2d112182eceb7b4f18db44f13dcdfa251c965803588e6b4', 'energetic-buddy'],
 ]);
 
 export function normalizeRoomAiPersona(value) {
