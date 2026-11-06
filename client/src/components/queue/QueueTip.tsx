@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useCallback, type ReactNode } from 'react';
+import { memo, useState, useRef, useCallback, useEffect, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface Props {
@@ -14,7 +14,10 @@ function QueueTip({ content, children }: Props) {
   const [pos, setPos] = useState({ x: 0, y: 0 });
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
 
+  useEffect(() => () => clearTimeout(timerRef.current), []);
+
   const handleEnter = useCallback((e: React.PointerEvent) => {
+    clearTimeout(timerRef.current);
     posRef.current = { x: e.clientX, y: e.clientY };
     timerRef.current = setTimeout(() => {
       setPos(posRef.current);

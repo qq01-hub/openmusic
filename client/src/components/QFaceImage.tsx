@@ -102,10 +102,18 @@ export default function QFaceImage({
     if (!img) return;
 
     let cancelled = false;
+    let revealFrame: number | null = null;
     const reveal = () => {
       if (cancelled) return;
       img.style.opacity = '1';
       markQFaceImageRendered(id);
+    };
+    const onLoad = () => {
+      if (img.decode) {
+        void img.decode().then(reveal, reveal);
+      } else {
+        reveal();
+      }
     };
 
     img.style.opacity = '0';
@@ -113,21 +121,17 @@ export default function QFaceImage({
     host.replaceChildren(img);
 
     if (img.complete && img.naturalWidth > 0) {
-      requestAnimationFrame(reveal);
+      revealFrame = requestAnimationFrame(reveal);
     } else {
-      const onLoad = () => {
-        if (img.decode) {
-          void img.decode().then(reveal, reveal);
-        } else {
-          reveal();
-        }
-      };
       img.addEventListener('load', onLoad, { once: true });
       img.addEventListener('error', reveal, { once: true });
     }
 
     return () => {
       cancelled = true;
+      if (revealFrame !== null) cancelAnimationFrame(revealFrame);
+      img.removeEventListener('load', onLoad);
+      img.removeEventListener('error', reveal);
       releaseQFaceDisplayImage(id, img);
       host.replaceChildren();
     };

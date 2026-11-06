@@ -14,8 +14,7 @@ import { useChatSystemToastStore } from '../stores/chatSystemToastStore';
 
 const VISIBLE_ROWS = 3;
 const LIST_HEIGHT = VISIBLE_ROWS * QUEUE_ROW_HEIGHT + (VISIBLE_ROWS - 1) * QUEUE_ROW_GAP;
-const VIRTUAL_THRESHOLD = 80;
-const VIRTUAL_OVERSCAN_COUNT = 8;
+const VIRTUAL_OVERSCAN_COUNT = 2;
 
 type QueueRowSong = QueueItem & { isCurrent: boolean };
 
@@ -31,12 +30,12 @@ type RowData = {
   dislikeSkipThreshold: number;
   canReorder: boolean;
   likeOrderScope: 'queue' | 'requester' | 'none';
+  dragFromId: string | null;
   dragOverQueueId: string | null;
   sourceStatusMap: Map<string, SourceStatus>;
   favoriteIds: Set<string>;
   favoriteSongMap: Map<string, FavoriteSong>;
   favoriteCategories: string[];
-  currentRef: React.RefObject<HTMLDivElement | null>;
   onLike: (queueId: string) => void;
   onDislike: () => void;
   onJump: (queueId: string) => void;
@@ -59,7 +58,7 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
   const ss = data.sourceStatusMap.get(song.queueId);
   const sKey = songKey(song);
   return (
-    <div style={style}>
+    <div style={style} data-queue-row={song.queueId}>
       <div style={{ height: QUEUE_ITEM_SIZE, paddingBottom: QUEUE_ROW_GAP }}>
         <QueueRow
           song={song}
@@ -75,9 +74,9 @@ const VirtualQueueRow = memo(function VirtualQueueRow({ index, style, data }: Li
           isDragOver={Boolean(
             data.dragOverQueueId
             && data.dragOverQueueId === song.queueId
+            && data.dragFromId !== song.queueId
             && !song.isCurrent
           )}
-          rowRef={song.isCurrent ? data.currentRef : undefined}
           onLike={data.onLike}
           onDislike={song.isCurrent ? data.onDislike : undefined}
           onShare={data.onShareSong}
@@ -136,8 +135,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   } = useFavorites();
   const [dragFromId, setDragFromId] = useState<string | null>(null);
   const [dragOverQueueId, setDragOverQueueId] = useState<string | null>(null);
-  const currentRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<FixedSizeList>(null);
+  const scrollRootRef = useRef<HTMLDivElement>(null);
   const listContainerRef = useRef<HTMLDivElement>(null);
   const [virtualListHeight, setVirtualListHeight] = useState(LIST_HEIGHT);
   const dragFromIdRef = useRef<string | null>(null);
@@ -203,11 +202,11 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   }, [allSongs, sourceErrorRevision]);
 
   const currentKey = currentSong?.queueId || '';
-  const useVirtualList = allSongs.length >= VIRTUAL_THRESHOLD;
+  const hasSongs = allSongs.length > 0;
   const prevCurrentKeyRef = useRef(currentKey);
 
   useLayoutEffect(() => {
-    if (!fillHeight || !useVirtualList) return;
+    if (!fillHeight || !hasRoom || !hasSongs) return;
     const container = listContainerRef.current;
     if (!container) return;
     const h = Math.floor(container.clientHeight);
@@ -218,7 +217,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     });
     ro.observe(container);
     return () => ro.disconnect();
-  }, [fillHeight, useVirtualList]);
+  }, [fillHeight, hasRoom, hasSongs]);
 
   // 仅在「当前曲目切换」时跟滚；点赞/插队等队列重排不要拽回顶部
   useEffect(() => {
@@ -226,17 +225,9 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     prevCurrentKeyRef.current = currentKey;
     if (!switched || !currentKey) return;
 
-    if (useVirtualList) {
-      const idx = allSongs.findIndex((song) => song.isCurrent);
-      if (idx >= 0) listRef.current?.scrollToItem(idx, 'smart');
-      return;
-    }
-    if (listContainerRef.current) {
-      listContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    currentRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }, [currentKey, allSongs, useVirtualList]);
+    const idx = allSongs.findIndex((song) => song.isCurrent);
+    if (idx >= 0) listRef.current?.scrollToItem(idx, 'smart');
+  }, [currentKey, allSongs]);
 
   const showQueueMessage = useCallback((message: string) => {
     useChatSystemToastStore.getState().show(message);
@@ -297,6 +288,8 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
 
   const autoScrollRef = useRef<number>(0);
 
+  useEffect(() => () => cancelAnimationFrame(autoScrollRef.current), []);
+
   const handleDragEnd = useCallback(() => {
     dragFromIdRef.current = null;
     setDragFromId(null);
@@ -311,7 +304,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     const rect = container.getBoundingClientRect();
     const y = e.clientY - rect.top;
     const edgeZone = 50;
-    const scrollEl = (container.querySelector('[style*="overflow"]') as HTMLElement | null) || container;
+    const scrollEl = scrollRootRef.current;
     if (!scrollEl) return;
 
     cancelAnimationFrame(autoScrollRef.current);
@@ -325,6 +318,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
   }, []);
 
   const handleDrop = useCallback(async (targetQueueId: string) => {
+    cancelAnimationFrame(autoScrollRef.current);
     const fromId = dragFromIdRef.current;
     dragFromIdRef.current = null;
     setDragFromId(null);
@@ -356,12 +350,12 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     dislikeSkipThreshold,
     canReorder: canControlPlayback,
     likeOrderScope,
+    dragFromId,
     dragOverQueueId,
     sourceStatusMap,
     favoriteIds,
     favoriteSongMap,
     favoriteCategories,
-    currentRef,
     onLike: handleLike,
     onDislike: handleDislike,
     onJump: handleJumpRequest,
@@ -384,6 +378,7 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     memberJumpEnabled,
     dislikeSkipThreshold,
     likeOrderScope,
+    dragFromId,
     dragOverQueueId,
     sourceStatusMap,
     favoriteIds,
@@ -420,80 +415,29 @@ export default function QueuePanel({ fillHeight = false, onArtistClick, onShareS
     );
   }
 
-  const renderPlainRows = () => allSongs.map((song, i) => {
-    const ss = sourceStatusMap.get(song.queueId);
-    const sKey = songKey(song);
-    return (
-      <QueueRow
-        key={song.queueId || `current-${song.id}`}
-        song={song}
-        index={i}
-        memberTier={song.requestedById ? memberTiers?.[song.requestedById] : undefined}
-        mySocketId={mySocketId}
-        nickname={nickname}
-        canControlPlayback={canControlPlayback}
-        memberJumpEnabled={memberJumpEnabled}
-        dislikeSkipThreshold={dislikeSkipThreshold}
-        canReorder={canControlPlayback}
-        likeOrderScope={likeOrderScope}
-        isDragOver={Boolean(dragOverQueueId && dragOverQueueId === song.queueId && dragFromId !== song.queueId)}
-        rowRef={song.isCurrent ? currentRef : undefined}
-        onLike={handleLike}
-        onDislike={song.isCurrent ? handleDislike : undefined}
-        onJump={handleJumpRequest}
-        onRemove={removeSong}
-        onBan={handleBanSong}
-        onArtistClick={onArtistClick}
-        onShare={onShareSong}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-        onDragEnd={handleDragEnd}
-        hasSourceError={ss?.error}
-        hasCrossSource={ss?.cross}
-        crossSourceFrom={ss?.crossFrom}
-        isFavorited={favoriteIds.has(sKey)}
-        favoriteCategory={favoriteSongMap.get(sKey)?.category || ''}
-        favoriteCategories={favoriteCategories}
-        onToggleFavorite={toggleFavorite}
-        onSelectFavoriteCategory={handleSelectFavoriteCategory}
-      />
-    );
-  });
-
   return (
     <div className={`flex flex-col ${fillHeight ? 'h-full min-h-0' : ''}`}>
-      {useVirtualList ? (
-        <div
-          ref={listContainerRef}
-          className={`pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
-          style={fillHeight ? undefined : { height: LIST_HEIGHT }}
-          onDragOver={handleContainerDragOver}
+      <div
+        ref={listContainerRef}
+        className={`pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
+        style={fillHeight ? undefined : { height: LIST_HEIGHT }}
+        onDragOver={handleContainerDragOver}
+      >
+        <FixedSizeList
+          className="queue-scroll-viewport"
+          ref={listRef}
+          outerRef={scrollRootRef}
+          height={fillHeight ? virtualListHeight : LIST_HEIGHT}
+          width="100%"
+          itemCount={allSongs.length}
+          itemSize={QUEUE_ITEM_SIZE}
+          itemData={rowData}
+          itemKey={(index, data) => data.songs[index]?.queueId ?? index}
+          overscanCount={VIRTUAL_OVERSCAN_COUNT}
         >
-          <FixedSizeList
-            className="queue-scroll-viewport"
-            ref={listRef}
-            height={fillHeight ? virtualListHeight : LIST_HEIGHT}
-            width="100%"
-            itemCount={allSongs.length}
-            itemSize={QUEUE_ITEM_SIZE}
-            itemData={rowData}
-            itemKey={(index, data) => data.songs[index]?.queueId ?? index}
-            overscanCount={VIRTUAL_OVERSCAN_COUNT}
-          >
-            {VirtualQueueRow}
-          </FixedSizeList>
-        </div>
-      ) : (
-        <div
-          ref={listContainerRef}
-          className={`queue-scroll-viewport space-y-1.5 overflow-y-auto pr-0.5 ${fillHeight ? 'flex-1 min-h-0' : ''}`}
-          style={fillHeight ? undefined : { height: LIST_HEIGHT }}
-          onDragOver={handleContainerDragOver}
-        >
-          {renderPlainRows()}
-        </div>
-      )}
+          {VirtualQueueRow}
+        </FixedSizeList>
+      </div>
     </div>
   );
 }

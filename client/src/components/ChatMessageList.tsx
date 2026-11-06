@@ -29,12 +29,6 @@ import {
 } from '../lib/memberTierPresets';
 import { VariableSizeList, type ListChildComponentProps, type ListOnScrollProps } from 'react-window';
 
-const VIRTUAL_LIST_THRESHOLD = 24;
-/**
- * VariableSizeList 用绝对定位；动态行高、图片和音乐卡片加载后会让滚动条估算产生偏差。
- * 保留原生列表，先保证滚动位置和实际内容一致。
- */
-const VIRTUAL_LIST_ENABLED = false;
 const ROW_GAP_PX = 8;
 const ESTIMATED_ROW_HEIGHT = 72;
 /** 仅对「刚发生」的迎宾放礼花，避免翻历史重放；覆盖进房 ACK 延迟 */
@@ -117,6 +111,42 @@ function estimateMessageHeight(msg: ChatMessage): number {
   return height + ROW_GAP_PX;
 }
 
+type ChatScrollAnchor = { messageId: string; offset: number };
+
+function messageHeight(msg: ChatMessage, heights: Map<string, number>): number {
+  return heights.get(msg.id) ?? estimateMessageHeight(msg);
+}
+
+function captureScrollAnchor(
+  messages: ChatMessage[],
+  heights: Map<string, number>,
+  scrollTop: number,
+): ChatScrollAnchor | null {
+  let top = 0;
+  for (const msg of messages) {
+    const height = messageHeight(msg, heights);
+    // 视口顶部落在行间距时，以紧接着的消息为锚点
+    if (top + height - ROW_GAP_PX > scrollTop) return { messageId: msg.id, offset: scrollTop - top };
+    top += height;
+  }
+  return null;
+}
+
+function resolveScrollAnchor(
+  messages: ChatMessage[],
+  heights: Map<string, number>,
+  anchor: ChatScrollAnchor | null,
+): number {
+  if (!anchor) return 0;
+  let top = 0;
+  for (const msg of messages) {
+    const height = messageHeight(msg, heights);
+    if (msg.id === anchor.messageId) return top + Math.min(anchor.offset, Math.max(0, height - 1));
+    top += height;
+  }
+  return 0;
+}
+
 function VirtualChatRow({ index, style, data }: ListChildComponentProps<VirtualRowData>) {
   const msg = data.messages[index];
   const rowRef = useRef<HTMLDivElement>(null);
@@ -142,8 +172,8 @@ function VirtualChatRow({ index, style, data }: ListChildComponentProps<VirtualR
   if (!msg) return null;
 
   return (
-    <div style={style} className="overflow-hidden">
-      <div ref={rowRef} className="px-3">
+    <div style={style} className="overflow-hidden" data-chat-message-row={msg.id}>
+      <div ref={rowRef} className="flow-root px-3">
         <ChatMessageRow
           msg={msg}
           room={data.roomMeta}
@@ -211,11 +241,11 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
   const [chatScrollRoot, setChatScrollRoot] = useState<HTMLDivElement | null>(null);
   const [listHeight, setListHeight] = useState(0);
+  const [listWidth, setListWidth] = useState(0);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [revealedPureImages, setRevealedPureImages] = useState<Set<string>>(() => new Set());
 
   const stickToBottomRef = useRef(true);
-  const pinningToBottomRef = useRef(false);
   const loadingOlderRef = useRef(false);
   const reactionPickerOpenRef = useRef(false);
   const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
@@ -225,16 +255,20 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const chatConfettiRootRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList>(null);
-  const scrollRafRef = useRef<number | null>(null);
   const rowHeightsRef = useRef(new Map<string, number>());
-  const prevMessageCountRef = useRef(0);
-  const prependAnchorRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const pendingRowHeightsRef = useRef(new Map<string, number>());
+  const measureFrameRef = useRef<number | null>(null);
+  const scrollRootRef = useRef<HTMLDivElement | null>(null);
+  const messagesRef = useRef(messages);
+  const committedMessagesRef = useRef<ChatMessage[]>([]);
+  const measuredWidthRef = useRef(0);
   const initialScrollDoneRef = useRef(false);
   const allowLoadOlderRef = useRef(false);
   const [showLoadOlderHint, setShowLoadOlderHint] = useState(false);
   const scrollbarHideTimerRef = useRef<number | null>(null);
 
-  const useVirtualList = VIRTUAL_LIST_ENABLED && messages.length >= VIRTUAL_LIST_THRESHOLD;
+  const hasMessages = messages.length > 0;
+  messagesRef.current = messages;
 
   reactionPickerOpenRef.current = reactionPickerMessageId !== null;
 
@@ -270,36 +304,30 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   }, [chatScrollRoot, hideChatScrollbar]);
 
   const handleChatPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    const el = event.currentTarget;
+    const el = chatScrollRoot;
+    if (!el) return;
     if (el.scrollHeight <= el.clientHeight) return;
     const distanceFromRight = el.getBoundingClientRect().right - event.clientX;
     if (distanceFromRight <= 20) showChatScrollbar();
     else hideChatScrollbar();
-  }, [hideChatScrollbar, showChatScrollbar]);
+  }, [chatScrollRoot, hideChatScrollbar, showChatScrollbar]);
 
   const bindScrollRoot = useCallback((el: HTMLDivElement | null) => {
+    scrollRootRef.current = el;
     setChatScrollRoot(el);
     onScrollRootChange?.(el);
   }, [onScrollRootChange]);
 
-  const scrollToBottomEnd = useCallback((behavior: ScrollBehavior = 'instant') => {
-    if (useVirtualList) {
-      const count = useChatStore.getState().messages.length;
-      if (count > 0) {
-        listRef.current?.scrollToItem(count - 1, 'end');
-      }
-      return;
+  const scrollToBottomEnd = useCallback(() => {
+    const count = messagesRef.current.length;
+    if (count > 0) {
+      listRef.current?.scrollToItem(count - 1, 'end');
     }
-    // 只滚聊天列表容器，避免 scrollIntoView 带动外层页面，
-    // 移动端会把输入区顶到固定迷你播放器下面被挡住。
-    const el = chatScrollRoot;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, [chatScrollRoot, useVirtualList]);
+  }, []);
 
   const flushWelcomeConfetti = useCallback(() => {
     if (pureMode || !pendingWelcomeConfettiRef.current) return;
-    if (!initialScrollDoneRef.current || pinningToBottomRef.current) return;
+    if (!initialScrollDoneRef.current) return;
 
     pendingWelcomeConfettiRef.current = false;
     // 聊天区未展开时回退全屏，保证房内其他人也能看到
@@ -322,104 +350,35 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     flushWelcomeConfetti();
   }, [flushWelcomeConfetti]);
 
-  const pinToBottomUntilStable = useCallback(() => {
-    let frames = 0;
-    let lastHeight = -1;
-    let rafId = 0;
-    let cancelled = false;
-
-    const step = () => {
-      if (cancelled || initialScrollDoneRef.current) return;
-
-      const el = chatScrollRoot;
-      if (!el) {
-        rafId = requestAnimationFrame(step);
-        return;
-      }
-
-      scrollToBottomEnd('instant');
-      const height = el.scrollHeight;
-      frames += 1;
-      const stable = height === lastHeight && frames >= 2;
-      lastHeight = height;
-
-      if (stable || frames >= 12) {
-        finishInitialScroll();
-        return;
-      }
-      rafId = requestAnimationFrame(step);
-    };
-
-    scrollToBottomEnd('instant');
-    rafId = requestAnimationFrame(step);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-    };
-  }, [chatScrollRoot, finishInitialScroll, scrollToBottomEnd]);
-
-  const pinToBottomWhileSticky = useCallback(() => {
-    pinningToBottomRef.current = true;
-    let frames = 0;
-    let lastHeight = -1;
-    let rafId = 0;
-    let cancelled = false;
-
-    const finish = () => {
-      pinningToBottomRef.current = false;
-      flushWelcomeConfetti();
-    };
-
-    const step = () => {
-      if (cancelled || !stickToBottomRef.current) {
-        finish();
-        return;
-      }
-
-      const el = chatScrollRoot;
-      if (!el) {
-        rafId = requestAnimationFrame(step);
-        return;
-      }
-
-      scrollToBottomEnd('instant');
-      const height = el.scrollHeight;
-      frames += 1;
-      const stable = height === lastHeight && frames >= 2;
-      lastHeight = height;
-
-      if (stable || frames >= 12) {
-        finish();
-        return;
-      }
-      rafId = requestAnimationFrame(step);
-    };
-
-    scrollToBottomEnd('instant');
-    rafId = requestAnimationFrame(step);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafId);
-      finish();
-    };
-  }, [chatScrollRoot, flushWelcomeConfetti, scrollToBottomEnd]);
-
-  const setRowHeight = useCallback((index: number, messageId: string, height: number) => {
+  const setRowHeight = useCallback((_index: number, messageId: string, height: number) => {
     if (!(height > 0)) return;
     const prev = rowHeightsRef.current.get(messageId);
-    // 只允许增高：图片未加载时测到的偏矮高度不要写回，否则会重叠
-    if (prev !== undefined && height <= prev + 1) return;
-    rowHeightsRef.current.set(messageId, height);
-    listRef.current?.resetAfterIndex(index);
-    // 贴底时任何行高修正（估算行高→实测、图片加载）都要重新贴底，
-    // 只在最后一行修正时贴底会让首次进房停在离底部差一小截的位置
-    if (stickToBottomRef.current && initialScrollDoneRef.current) {
-      requestAnimationFrame(() => {
-        if (!stickToBottomRef.current) return;
-        listRef.current?.scrollToItem(messages.length - 1, 'end');
+    if (prev !== undefined && Math.abs(prev - height) < 1) return;
+    pendingRowHeightsRef.current.set(messageId, height);
+    if (measureFrameRef.current !== null) return;
+    // 同一帧的测量一起更新，避免逐行失效缓存、滚动与测量相互触发
+    measureFrameRef.current = requestAnimationFrame(() => {
+      measureFrameRef.current = null;
+      const current = messagesRef.current;
+      const heights = rowHeightsRef.current;
+      const anchor = captureScrollAnchor(current, heights, scrollRootRef.current?.scrollTop ?? 0);
+      let firstChanged = current.length;
+      current.forEach((msg, index) => {
+        const next = pendingRowHeightsRef.current.get(msg.id);
+        if (next === undefined || heights.get(msg.id) === next) return;
+        heights.set(msg.id, next);
+        firstChanged = Math.min(firstChanged, index);
       });
-    }
-  }, [messages.length]);
+      pendingRowHeightsRef.current.clear();
+      if (firstChanged === current.length) return;
+      listRef.current?.resetAfterIndex(firstChanged);
+      if (stickToBottomRef.current) {
+        listRef.current?.scrollToItem(current.length - 1, 'end');
+      } else {
+        listRef.current?.scrollTo(resolveScrollAnchor(current, heights, anchor));
+      }
+    });
+  }, []);
 
   const getItemSize = useCallback((index: number) => {
     const msg = messages[index];
@@ -427,11 +386,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     return rowHeightsRef.current.get(msg.id) ?? estimateMessageHeight(msg);
   }, [messages]);
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'instant') => {
-    scrollToBottomEnd(behavior);
-  }, [scrollToBottomEnd]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     stickToBottomRef.current = true;
     setShowScrollToBottom(false);
     setShowLoadOlderHint(false);
@@ -441,7 +396,8 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     pendingWelcomeConfettiRef.current = false;
     setRevealedPureImages(new Set());
     rowHeightsRef.current.clear();
-    prevMessageCountRef.current = 0;
+    pendingRowHeightsRef.current.clear();
+    committedMessagesRef.current = [];
     initialScrollDoneRef.current = false;
     allowLoadOlderRef.current = false;
   }, [roomMeta.id]);
@@ -450,13 +406,14 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     const container = listContainerRef.current;
     if (!container) return;
     const ro = new ResizeObserver((entries) => {
-      const next = Math.floor(entries[0]?.contentRect.height ?? 0);
-      if (next > 0) setListHeight(next);
+      setListHeight(Math.max(0, Math.floor(entries[0]?.contentRect.height ?? 0)));
+      setListWidth(Math.max(0, Math.floor(entries[0]?.contentRect.width ?? 0)));
     });
     ro.observe(container);
     setListHeight(Math.floor(container.clientHeight));
+    setListWidth(Math.floor(container.clientWidth));
     return () => ro.disconnect();
-  }, [useVirtualList]);
+  }, [hasMessages]);
 
   useEffect(() => {
     if (pureMode) {
@@ -504,54 +461,42 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   }, [messages, pureMode, scheduleWelcomeConfetti]);
 
   useLayoutEffect(() => {
-    if (reactionPickerOpenRef.current) return;
+    if (!listRef.current || listHeight <= 0) return;
+    const previous = committedMessagesRef.current;
+    const heights = rowHeightsRef.current;
+    const anchor = captureScrollAnchor(previous, heights, chatScrollRoot?.scrollTop ?? 0);
+    const orderChanged = previous.length !== messages.length
+      || previous.some((msg, index) => msg.id !== messages[index]?.id);
+    const widthChanged = measuredWidthRef.current > 0 && measuredWidthRef.current !== listWidth;
+    committedMessagesRef.current = messages;
+    measuredWidthRef.current = listWidth;
 
-    const outer = chatScrollRoot;
-    if (prependAnchorRef.current && outer) {
-      const anchor = prependAnchorRef.current;
-      prependAnchorRef.current = null;
-      outer.scrollTop = anchor.scrollTop + (outer.scrollHeight - anchor.scrollHeight);
-      return;
-    }
-
-    const needsInitialScroll = messages.length > 0 && !initialScrollDoneRef.current;
-    const grew = messages.length > prevMessageCountRef.current;
-
-    if (needsInitialScroll) {
-      if (useVirtualList) {
-        if (listHeight > 0 && listRef.current) {
-          listRef.current.scrollToItem(messages.length - 1, 'end');
-          finishInitialScroll();
-        }
-      } else if (outer) {
-        prevMessageCountRef.current = messages.length;
-        return pinToBottomUntilStable();
+    // 宽度变化时保留旧高度作为估值，已挂载行由 ResizeObserver 重测
+    // 清空全部估值会先移动阅读位置，再因逐行测量发生二次跳动
+    if (orderChanged) {
+      const ids = new Set(messages.map(msg => msg.id));
+      for (const id of heights.keys()) {
+        if (!ids.has(id)) heights.delete(id);
       }
-      prevMessageCountRef.current = messages.length;
-      return;
     }
+    if (orderChanged || widthChanged) listRef.current.resetAfterIndex(0);
 
-    if (!stickToBottomRef.current) {
-      prevMessageCountRef.current = messages.length;
-      return;
+    if (!initialScrollDoneRef.current) {
+      scrollToBottomEnd();
+      finishInitialScroll();
+    } else if (stickToBottomRef.current && !reactionPickerOpenRef.current) {
+      scrollToBottomEnd();
+    } else if (orderChanged || widthChanged) {
+      // 用消息 ID 和消息内偏移保住阅读位置，兼容前插历史与头部消息截断
+      listRef.current.scrollTo(resolveScrollAnchor(messages, heights, anchor));
     }
-
-    if (grew || aiProcessing.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage?.kind === 'welcome') {
-        return pinToBottomWhileSticky();
-      }
-      scrollToBottomEnd('instant');
-    }
-
-    prevMessageCountRef.current = messages.length;
-  }, [messages.length, messagesTailKey, messages, chatScrollRoot, useVirtualList, listHeight, finishInitialScroll, pinToBottomUntilStable, pinToBottomWhileSticky, scrollToBottomEnd]);
+  }, [messages, messagesTailKey, chatScrollRoot, listHeight, listWidth, finishInitialScroll, scrollToBottomEnd]);
 
   const handleScroll = useCallback(() => {
     const el = chatScrollRoot;
     if (!el) return;
 
-    if (!initialScrollDoneRef.current || pinningToBottomRef.current) return;
+    if (!initialScrollDoneRef.current) return;
 
     const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     const atBottom = distanceToBottom < 80;
@@ -568,58 +513,34 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
     const requestRoomId = roomMeta.id;
     loadingOlderRef.current = true;
-    prependAnchorRef.current = { scrollHeight: el.scrollHeight, scrollTop: el.scrollTop };
     useChatStore.getState().setLoadingOlder(true);
 
     void loadChatHistory(oldest.timestamp, oldest.id).then((res) => {
       loadingOlderRef.current = false;
       if (useChatStore.getState().roomId !== requestRoomId) {
-        prependAnchorRef.current = null;
         useChatStore.getState().setLoadingOlder(false);
         return;
       }
       if (!res.success || !res.messages?.length) {
-        prependAnchorRef.current = null;
         useChatStore.getState().setLoadingOlder(false);
         if (res.success) useChatStore.getState().prependOlder([], false);
         return;
       }
 
       useChatStore.getState().prependOlder(res.messages, Boolean(res.hasMore));
-      // 高度按 messageId 缓存，加载更早消息时不要清空已有高度
-      listRef.current?.resetAfterIndex(0);
     });
   }, [chatScrollRoot, roomMeta.id, hasMoreOlder, loadChatHistory]);
 
-  const scheduleHandleScroll = useCallback(() => {
-    if (scrollRafRef.current !== null) return;
-    scrollRafRef.current = requestAnimationFrame(() => {
-      scrollRafRef.current = null;
-      handleScroll();
-    });
-  }, [handleScroll]);
-
   const onVirtualScroll = useCallback((props: ListOnScrollProps) => {
+    if (committedMessagesRef.current !== messages) return;
     if (!initialScrollDoneRef.current && stickToBottomRef.current) return;
     if (!props.scrollUpdateWasRequested) handleScroll();
-  }, [handleScroll]);
+  }, [handleScroll, messages]);
 
   useEffect(() => () => {
     if (scrollbarHideTimerRef.current !== null) window.clearTimeout(scrollbarHideTimerRef.current);
+    if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
   }, []);
-
-  useEffect(() => {
-    const el = chatScrollRoot;
-    if (!el || useVirtualList) return;
-    el.addEventListener('scroll', scheduleHandleScroll, { passive: true });
-    return () => {
-      el.removeEventListener('scroll', scheduleHandleScroll);
-      if (scrollRafRef.current !== null) {
-        cancelAnimationFrame(scrollRafRef.current);
-        scrollRafRef.current = null;
-      }
-    };
-  }, [chatScrollRoot, scheduleHandleScroll, useVirtualList]);
 
   useEffect(() => {
     if (!messages.length || typeof Notification === 'undefined') return;
@@ -663,17 +584,12 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     });
   }, []);
 
-  const handleStickyContentResize = useCallback(() => {
-    if (!stickToBottomRef.current || !initialScrollDoneRef.current || pinningToBottomRef.current) return;
-    scrollToBottomEnd('instant');
-  }, [scrollToBottomEnd]);
-
   const stickToBottomOnSend = useCallback(() => {
     stickToBottomRef.current = true;
     setShowScrollToBottom(false);
     setShowLoadOlderHint(false);
-    scrollToBottom('instant');
-  }, [scrollToBottom]);
+    scrollToBottomEnd();
+  }, [scrollToBottomEnd]);
 
   useImperativeHandle(ref, () => ({
     stickToBottom: stickToBottomOnSend,
@@ -720,55 +636,9 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     onReactionPickerChange,
     handleRevealPureImage,
     onPreviewImage,
-      setRowHeight,
+    cardActions,
+    setRowHeight,
   ]);
-
-  const renderPlainList = () => (
-    <div
-      ref={bindScrollRoot}
-      className="chat-scroll-root h-full space-y-2 overflow-x-hidden overflow-y-auto px-3 py-2 pb-3"
-      onPointerMove={handleChatPointerMove}
-      onPointerLeave={hideChatScrollbar}
-    >
-      {messages.map((msg) => {
-        // 保留原生滚动容器和真实文档流，只让浏览器跳过视口外消息的布局与绘制
-        // contain-intrinsic-size 让滚动条继续使用稳定的占位高度，进入视口后由真实高度接管
-        const intrinsicSize = estimateMessageHeight(msg);
-        return (
-          <div
-            key={msg.id}
-            data-chat-message-row={msg.id}
-            className="chat-message-render-boundary"
-            style={{ containIntrinsicSize: `auto ${intrinsicSize}px` }}
-          >
-            <ChatMessageRow
-              msg={msg}
-              room={roomMeta}
-              myUserId={myUserId}
-              pureMode={pureMode}
-              pureImageRevealed={revealedPureImages.has(msg.id)}
-              aiProcessing={processingMessages.get(msg.id) || null}
-              reactionPickerOpen={reactionPickerMessageId === msg.id}
-              chatMuted={chatMuted}
-              canModerate={canModerate}
-              chatScrollRoot={chatScrollRoot}
-              chatPanelRef={chatPanelRef}
-              onReply={onReply}
-              onRecall={onRecall}
-              onMentionUser={onMentionUser}
-              onToggleReaction={onToggleReaction}
-              onOpenReactionPicker={onReactionPickerChange}
-              onRevealPureImage={handleRevealPureImage}
-              onPreviewImage={onPreviewImage}
-              cardActions={cardActions}
-              onContentResize={handleStickyContentResize}
-            />
-          </div>
-        );
-      })}
-      <div className="h-px w-full shrink-0" aria-hidden />
-    </div>
-  );
 
   return (
     <div ref={chatConfettiRootRef} className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -779,27 +649,32 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
       )}
       {messages.length === 0 ? (
         <p className="py-8 text-center text-xs text-netease-muted">暂无消息，打个招呼吧</p>
-      ) : useVirtualList ? (
-        <div ref={listContainerRef} className="min-h-0 flex-1">
+      ) : (
+        <div
+          ref={listContainerRef}
+          className="min-h-0 flex-1"
+          onPointerMove={handleChatPointerMove}
+          onPointerLeave={hideChatScrollbar}
+        >
           {listHeight > 0 && (
             <VariableSizeList
               ref={listRef}
               outerRef={bindScrollRoot}
               height={listHeight}
               width="100%"
+              className="chat-scroll-root"
+              style={{ overflowX: 'hidden', overflowAnchor: 'none' }}
               itemCount={messages.length}
               itemSize={getItemSize}
               itemData={virtualRowData}
               itemKey={(index, data) => data.messages[index]?.id ?? index}
-              overscanCount={6}
+              overscanCount={2}
               onScroll={onVirtualScroll}
             >
               {VirtualChatRow}
             </VariableSizeList>
           )}
         </div>
-      ) : (
-        renderPlainList()
       )}
       {showScrollToBottom && (
         <Tooltip content="回到底部">
@@ -808,7 +683,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
             onClick={() => {
               stickToBottomRef.current = true;
               setShowScrollToBottom(false);
-              scrollToBottom('smooth');
+              scrollToBottomEnd();
             }}
             className="absolute bottom-3 right-3 z-20 flex h-8 w-8 items-center justify-center rounded-full border border-white/15 bg-netease-dark/95 text-white shadow-lg backdrop-blur transition-colors hover:bg-white/15"
             aria-label="回到底部"

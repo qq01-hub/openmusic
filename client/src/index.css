@@ -12,10 +12,6 @@
   z-index: 1;
 }
 
-.chat-message-render-boundary {
-  contain: layout style;
-}
-
 :root {
   --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
   color-scheme: dark;

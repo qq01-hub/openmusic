@@ -17,6 +17,7 @@ import {
 
 let sharedFavoriteSongs: FavoriteSong[] = [];
 let sharedFavoriteIds = new Set<string>();
+let sharedFavoriteCategories: string[] = [];
 type FavoritesLoadResult = { success: boolean; error?: string };
 let loadPromise: Promise<FavoritesLoadResult> | null = null;
 let loadGeneration = 0;
@@ -76,6 +77,11 @@ function updateSharedFavorites(songs: FavoriteSong[]) {
   notifyListeners();
 }
 
+function updateSharedCategories(categories: string[]) {
+  sharedFavoriteCategories = categories;
+  notifyListeners();
+}
+
 function updateSharedSyncState(state: FavoritesSyncState) {
   sharedSyncState = state;
   syncListeners.forEach((listener) => listener());
@@ -107,6 +113,7 @@ if (typeof window !== 'undefined') {
   const invalidate = () => {
     loadGeneration += 1;
     loadPromise = null;
+    updateSharedCategories([]);
     updateSharedFavorites([]);
   };
   window.addEventListener('openmusic:account-session-changed', invalidate);
@@ -121,13 +128,14 @@ export function useFavorites() {
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => sharedFavoriteIds);
   const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>(() => sharedFavoriteSongs);
   const [syncState, setSyncState] = useState<FavoritesSyncState>(() => sharedSyncState);
-  const [categories, setCategories] = useState<string[]>([]);
+  const [categories, setCategories] = useState<string[]>(() => sharedFavoriteCategories);
   const retryTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const listener = () => {
       setFavoriteIds((prev) => (prev === sharedFavoriteIds ? prev : sharedFavoriteIds));
       setFavoriteSongs((prev) => (prev === sharedFavoriteSongs ? prev : sharedFavoriteSongs));
+      setCategories((prev) => (prev === sharedFavoriteCategories ? prev : sharedFavoriteCategories));
     };
     listeners.add(listener);
     listener();
@@ -138,6 +146,7 @@ export function useFavorites() {
         loadPromise = null;
         sharedFavoriteSongs = [];
         sharedFavoriteIds = new Set();
+        sharedFavoriteCategories = [];
       }
     };
   }, []);
@@ -165,7 +174,7 @@ export function useFavorites() {
           assertCurrent();
           if (!result.success) throw new Error(result.error || '收藏列表加载失败');
           if (!categoryResult.success) throw new Error(categoryResult.error || '收藏分类加载失败');
-          setCategories(categoryResult.categories || []);
+          updateSharedCategories(categoryResult.categories || []);
           updateSharedFavorites(result.favorites || []);
           return { success: true };
         }
@@ -199,7 +208,7 @@ export function useFavorites() {
             try { localStorage.removeItem(GUEST_CATEGORIES_KEY); } catch { /* storage unavailable */ }
             if (imported.categories) {
               writeCategories(categoriesCacheKey(account.id), imported.categories);
-              setCategories(imported.categories);
+              updateSharedCategories(imported.categories);
             }
             const syncResult = imported.identitySame ? 'identity_same' : 'merged';
             updateSharedSyncState(markFavoritesSyncResult(syncResult, attempt));
@@ -223,7 +232,7 @@ export function useFavorites() {
       if (!categoryResult.success) throw new Error(categoryResult.error || '收藏分类加载失败');
       if (accountCached.length) removeCache(cacheKey);
       removeCache(categoriesCacheKey(account.id));
-      setCategories(categoryResult.categories || []);
+      updateSharedCategories(categoryResult.categories || []);
       updateSharedFavorites(result.favorites || []);
       return { success: true };
     })().catch((error): FavoritesLoadResult => ({
@@ -241,7 +250,6 @@ export function useFavorites() {
 
   useEffect(() => {
     const onAccountSessionChanged = () => {
-      setCategories([]);
       if (readCache(GUEST_CACHE_KEY).length || readCategories(GUEST_CATEGORIES_KEY).length) updateSharedSyncState(markFavoritesSyncPending());
       void ensureLoaded();
     };
@@ -337,7 +345,7 @@ export function useFavorites() {
     const generation = loadGeneration;
     const result = await listFavoriteCategories();
     if (generation !== loadGeneration) return { success: false, categories: [], error: '账户已变化，请重新读取收藏' };
-    if (result.success) setCategories(result.categories || []);
+    if (result.success) updateSharedCategories(result.categories || []);
     return result;
   }, [ensureLoaded, listFavoriteCategories]);
 
@@ -345,7 +353,7 @@ export function useFavorites() {
     return runFavoriteRequest(() => createFavoriteCategory(name), (result, accountId) => {
       if (result.categories) {
         if (accountId) removeCache(categoriesCacheKey(accountId));
-        setCategories(result.categories);
+        updateSharedCategories(result.categories);
       }
     });
   }, [createFavoriteCategory]);
@@ -359,7 +367,7 @@ export function useFavorites() {
   const deleteCategory = useCallback(async (name: string, keepSongs: boolean) => {
     return runFavoriteRequest(() => deleteFavoriteCategory(name, keepSongs), (result) => {
       if (result.favorites) updateSharedFavorites(result.favorites);
-      if (result.categories) setCategories(result.categories);
+      if (result.categories) updateSharedCategories(result.categories);
     });
   }, [deleteFavoriteCategory]);
 
