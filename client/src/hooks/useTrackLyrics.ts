@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getLyrics, parseLrc, getLrcFallbackDurationMs, getTrackKey } from '../api/music';
+import { getLyrics, getTranslatedLyricLines, parseLrc, getLrcFallbackDurationMs, getTrackKey } from '../api/music';
 import { useAudioStore } from '../stores/audioStore';
 import type { LyricLine, Song } from '../types';
 
@@ -31,6 +31,9 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
           const ms = getLrcFallbackDurationMs(lrc);
           if (ms) setLrcDuration(trackKey, ms);
         }
+        void getTranslatedLyricLines(song, lines).then(translated => {
+          if (!cancelled) setLyrics(translated);
+        });
       })
       .catch(() => {
         if (!cancelled) setLyrics([]);

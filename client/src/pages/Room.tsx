@@ -13,6 +13,9 @@ import { isSongInRoomQueue } from '../lib/roomSongStatus';
 import { searchAllSongs, getAvailableSources, listRooms, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform, type PlaylistChannelFilter as PlaylistChannelFilterMode } from '../api/music/playlist';
 import { fetchDjPrograms, type DjRadioItem } from '../api/music/djRadio';
+import { getRecommendedPlaylists } from '../lib/recommendedPlaylists';
+import { getDjRadiosByMode } from '../lib/djRadios';
+import { resizeCoverUrl } from '../lib/coverUrl';
 import { normalizeFmMode, normalizeFmSource, type FmSource } from '../api/music/fmMode';
 import { refreshQualityCapabilities } from '../api/music/quality';
 import { addSongsToQueue, formatBulkAddToast } from '../lib/addSongsToQueue';
@@ -122,8 +125,10 @@ import {
 
 const PlayerPage = lazyWithRetry(() => import('../components/PlayerPage'), 'PlayerPage');
 const PlaylistImportModal = lazyWithRetry(() => import('../components/PlaylistImportModal'), 'PlaylistImportModal');
-const RecommendedPlaylistsDrawer = lazyWithRetry(() => import('../components/RecommendedPlaylistsDrawer'), 'RecommendedPlaylistsDrawer');
-const DjRadioDrawer = lazyWithRetry(() => import('../components/DjRadioDrawer'), 'DjRadioDrawer');
+const loadRecommendedPlaylistsDrawer = () => import('../components/RecommendedPlaylistsDrawer');
+const loadDjRadioDrawer = () => import('../components/DjRadioDrawer');
+const RecommendedPlaylistsDrawer = lazyWithRetry(loadRecommendedPlaylistsDrawer, 'RecommendedPlaylistsDrawer');
+const DjRadioDrawer = lazyWithRetry(loadDjRadioDrawer, 'DjRadioDrawer');
 const ClientDownloadModal = lazyWithRetry(() => import('../components/ClientDownloadModal'), 'ClientDownloadModal');
 const RoomMemberModal = lazyWithRetry(() => import('../components/RoomMemberModal'), 'RoomMemberModal');
 const RoomSettingsModal = lazyWithRetry(() => import('../components/RoomSettingsModal'), 'RoomSettingsModal');
@@ -1193,6 +1198,26 @@ export default function Room() {
     URL.revokeObjectURL(url);
   }, [favorites]);
 
+  const warmRecommendPlaylistsModal = useCallback(() => {
+    void loadRecommendedPlaylistsDrawer();
+    void getRecommendedPlaylists().catch(() => undefined);
+  }, []);
+
+  const warmDjRadioModal = useCallback(() => {
+    if (!neteaseEnabled) return;
+    void loadDjRadioDrawer();
+    void getDjRadiosByMode('hot').catch(() => undefined);
+  }, [neteaseEnabled]);
+
+  useEffect(() => {
+    if (!room?.id) return;
+    const timer = window.setTimeout(() => {
+      warmRecommendPlaylistsModal();
+      warmDjRadioModal();
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [room?.id, warmRecommendPlaylistsModal, warmDjRadioModal]);
+
   useEffect(() => {
     if (!roomId) return;
     let cancelled = false;
@@ -1479,6 +1504,7 @@ export default function Room() {
         if (!isLgUp) {
           setSearchMode('song');
         }
+        setRecommendDrawerOpen(false);
         setIsPlaylistResults(true);
         setIsRadioResults(false);
         setActiveSearchMode('song');
@@ -1529,7 +1555,10 @@ export default function Room() {
     setRadioProgramLoading(true);
 
     try {
-      const result = await fetchDjPrograms(radio.id, page, pageSize, controller.signal);
+      const result = await fetchDjPrograms(radio.id, page, pageSize, controller.signal, {
+        knownName: radio.name,
+        knownTotal: radio.trackCount,
+      });
       if (radioProgramRequestRef.current !== requestId) return;
 
       const knownTotal = result.total > 0
@@ -1542,6 +1571,9 @@ export default function Room() {
         : (page - 1) * pageSize + result.upstreamCount;
       const total = knownTotal > 0 ? knownTotal : fallbackTotal;
 
+      if (initial) {
+        setDjRadioDrawerOpen(false);
+      }
       setRadioProgramRadio(radio);
       setRadioProgramPage(page);
       radioProgramTotalRef.current = total;
@@ -2940,9 +2972,11 @@ export default function Room() {
                 }}
               >
                 <img
-                  src={playlist.coverImgUrl || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect fill="%23333" width="48" height="48"/><text x="24" y="28" text-anchor="middle" fill="%23666" font-size="16">♪</text></svg>'}
+                  src={(playlist.coverImgUrl ? resizeCoverUrl(playlist.coverImgUrl, 'thumb') : '') || 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"><rect fill="%23333" width="48" height="48"/><text x="24" y="28" text-anchor="middle" fill="%23666" font-size="16">♪</text></svg>'}
                   alt=""
-                  loading="lazy"
+                  width={48}
+                  height={48}
+                  loading="eager"
                   decoding="async"
                   className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover"
                 />
@@ -3106,6 +3140,8 @@ export default function Room() {
       </button>
       <button
         type="button"
+        onMouseEnter={warmRecommendPlaylistsModal}
+        onFocus={warmRecommendPlaylistsModal}
         onClick={() => {
           markGuideFeatureUsed('room-search');
           setRecommendDrawerOpen(true);
@@ -3117,6 +3153,8 @@ export default function Room() {
 {neteaseEnabled && (
       <button
         type="button"
+        onMouseEnter={warmDjRadioModal}
+        onFocus={warmDjRadioModal}
         onClick={() => {
           markGuideFeatureUsed('room-search');
           setDjRadioDrawerOpen(true);
@@ -3962,6 +4000,8 @@ export default function Room() {
                   </button>
                   <button
                     type="button"
+                    onMouseEnter={warmRecommendPlaylistsModal}
+                    onFocus={warmRecommendPlaylistsModal}
                     onClick={() => {
                       markGuideFeatureUsed('room-search');
                       setRecommendDrawerOpen(true);
@@ -3973,6 +4013,8 @@ export default function Room() {
 {neteaseEnabled && (
                   <button
                     type="button"
+                    onMouseEnter={warmDjRadioModal}
+                    onFocus={warmDjRadioModal}
                     onClick={() => {
                       markGuideFeatureUsed('room-search');
                       setDjRadioDrawerOpen(true);

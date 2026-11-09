@@ -80,11 +80,19 @@ function mergePlaylistMeta(
 }
 
 async function loadRecommendedPlaylists(): Promise<RecommendedPlaylistsData> {
-  const [curatedMeta, neteaseSearch, qqSearch] = await Promise.all([
+  const [curatedMetaResult, neteaseSearchResult, qqSearchResult] = await Promise.allSettled([
     fetchNeteasePlaylistMetas(CURATED_NETEASE.map((item) => item.id)),
     searchNeteasePlaylists(NETEASE_RECOMMEND_KEYWORD, 1, NETEASE_EXTRA_LIMIT + 4),
     searchTencentPlaylists(QQ_RECOMMEND_KEYWORD, 1, QQ_EXTRA_LIMIT + 4),
   ]);
+
+  const curatedMeta = curatedMetaResult.status === 'fulfilled' ? curatedMetaResult.value : [];
+  const neteaseSearch = neteaseSearchResult.status === 'fulfilled'
+    ? neteaseSearchResult.value
+    : { playlists: [], total: 0, page: 1, limit: NETEASE_EXTRA_LIMIT + 4 };
+  const qqSearch = qqSearchResult.status === 'fulfilled'
+    ? qqSearchResult.value
+    : { playlists: [], total: 0, page: 1, limit: QQ_EXTRA_LIMIT + 4 };
 
   const curated = mergePlaylistMeta(CURATED_NETEASE, curatedMeta);
   const neteaseExtras = neteaseSearch.playlists

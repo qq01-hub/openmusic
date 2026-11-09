@@ -6638,6 +6638,14 @@ export function reportTrackDuration(roomId, userId, queueId, durationMs, connect
   return { success: true };
 }
 
+/** 复用真实选歌路径，只在副本上消费队列，不推进房间轮次 */
+function getUpcomingRoundRobinSong(room) {
+  if (normalizePlayMode(room.playMode) !== "user-round-robin") return null;
+  return room.queue.length
+    ? takeNextFromQueue({ ...room, queue: [...room.queue] })
+    : room.nextRandom || null;
+}
+
 function serializeRoom(room, options = {}) {
   repairPlaybackClock(room);
   const forUserId = options.forUserId || null;
@@ -6662,6 +6670,7 @@ function serializeRoom(room, options = {}) {
     userAvatarUrls: serializeUserAvatarUrlsForViewer(room),
     queue: room.queue.map(serializeQueueItemForRoom).filter(Boolean),
     current: serializeQueueItemForRoom(room.current),
+    upcomingSong: serializeQueueItemForRoom(getUpcomingRoundRobinSong(room)),
     isPlaying: room.isPlaying,
     currentTime: getPlaybackTime(room),
     playbackRate: normalizePlaybackRate(room.playbackRate),
@@ -6751,6 +6760,7 @@ export function prepareRoomBroadcast(roomId) {
     userAvatarUrls: serializeUserAvatarUrlsForViewer(room),
     queue: room.queue.map(serializeQueueItemForRoom).filter(Boolean),
     current: serializeQueueItemForRoom(room.current),
+    upcomingSong: serializeQueueItemForRoom(getUpcomingRoundRobinSong(room)),
     isPlaying: room.isPlaying,
     currentTime: getPlaybackTime(room),
     playbackRate: normalizePlaybackRate(room.playbackRate),

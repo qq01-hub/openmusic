@@ -1,6 +1,6 @@
 import type { SearchResult } from '../../types';
 import { fetchWithTimeout } from '../http';
-import { upgradeInsecureCoverUrl } from '../../lib/coverUrl';
+import { resizeCoverUrl } from '../../lib/coverUrl';
 
 export interface DjRadioItem {
   id: string;
@@ -22,12 +22,15 @@ function extractIdFromApiUrl(url: string): string {
 function normalizeRadio(raw: Record<string, unknown>): DjRadioItem | null {
   const id = String(raw.id || extractIdFromApiUrl(String(raw.url || '')) || '').trim();
   if (!id || id === 'undefined') return null;
-  const pic = String(raw.pic || raw.cover || raw.coverImgUrl || '');
+  const pic = String(raw.pic || raw.cover || raw.coverImgUrl || '').trim();
+  const coverImgUrl = pic.startsWith('http') || pic.startsWith('/api/')
+    ? resizeCoverUrl(pic, 'medium')
+    : undefined;
   return {
     id,
     name: String(raw.title || raw.name || '未命名电台'),
     creatorName: String(raw.author || raw.artist || raw.creatorName || '').trim() || undefined,
-    coverImgUrl: pic.startsWith('http') ? upgradeInsecureCoverUrl(pic) : undefined,
+    coverImgUrl,
     trackCount: Number(raw.trackCount || raw.programCount || raw.song_count || 0),
   };
 }
@@ -36,13 +39,13 @@ function normalizeProgram(raw: Record<string, unknown>): SearchResult | null {
   const urlStr = String(raw.url || '');
   const songId = extractIdFromApiUrl(urlStr) || (/^\d+$/.test(urlStr) ? urlStr : '');
   if (!songId || songId === 'undefined') return null;
-  const pic = String(raw.pic || raw.cover || '');
+  const pic = String(raw.pic || raw.cover || '').trim();
   return {
     id: songId,
     source: 'netease',
     name: String(raw.title || raw.name || '未知节目'),
     artist: String(raw.author || raw.artist || '未知主播'),
-    pic: pic.startsWith('http') ? upgradeInsecureCoverUrl(pic) : undefined,
+    pic: pic.startsWith('http') || pic.startsWith('/api/') ? resizeCoverUrl(pic, 'thumb') : undefined,
   };
 }
 
@@ -101,6 +104,7 @@ export async function fetchDjPrograms(
   page = 1,
   limit = 100,
   signal?: AbortSignal,
+  options?: { knownName?: string; knownTotal?: number },
 ): Promise<{
   name: string;
   songs: SearchResult[];
@@ -112,6 +116,9 @@ export async function fetchDjPrograms(
   const safePage = Math.max(1, Math.floor(page) || 1);
   const safeLimit = Math.min(100, Math.max(1, Math.floor(limit) || 100));
   let upstreamCount: number | undefined;
+  const knownName = options?.knownName?.trim() || '';
+  const knownTotal = Number(options?.knownTotal || 0);
+  const needDetail = safePage === 1 && (!knownName || knownTotal <= 0);
 
   const [programs, detail] = await Promise.all([
     metingJson('dj', id, { page: String(safePage), limit: String(safeLimit) }, signal, (response) => {
@@ -120,7 +127,7 @@ export async function fetchDjPrograms(
         upstreamCount = Number(count);
       }
     }),
-    safePage === 1
+    needDetail
       ? metingJson('dj_detail', id, undefined, signal).catch(() => [])
       : Promise.resolve<Record<string, unknown>[]>([]),
   ]);
@@ -131,10 +138,10 @@ export async function fetchDjPrograms(
 
   const radioName = detail[0]
     ? String(detail[0].title || detail[0].name || '')
-    : '';
+    : knownName;
   const total = detail[0]
     ? Number(detail[0].trackCount || detail[0].programCount || 0)
-    : 0;
+    : knownTotal;
 
   return {
     name: radioName,

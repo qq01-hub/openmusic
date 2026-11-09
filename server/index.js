@@ -226,6 +226,8 @@ import {
 import { enqueueRoomAiChat, isRoomAiReply } from './roomAiAgent.js';
 import { createDeskPetRequester } from './roomAiDeskPet.js';
 import { getPublicRoomAiConfig, getAiModelConfig, isRoomAiEnabledForRoom, isAiModelEnabled, resolveRoomAiBotName, shouldTriggerRoomAi, stripAiTriggerPrefix } from './aiModelService.js';
+import { normalizeStructuredLyrics, readStructuredLyricResponse } from './structuredLyrics.js';
+import { createLyricTranslator } from './lyricTranslation.js';
 import {
   isApihzStickerConfigured,
   searchApihzStickers,
@@ -948,27 +950,10 @@ function isMetingNoUrlMessage(raw) {
 function extractMetingLyricText(raw) {
   const text = normalizeMetingResolvedUrl(raw);
   if (!text) return '';
-  if (text.startsWith('{')) {
-    try {
-      const payload = JSON.parse(text);
-      const lyric = String(payload?.lyric || payload?.data?.lyric || '').trim();
-      const translation = String(payload?.tlyric || payload?.data?.tlyric || '').trim();
-      // 仅在字段确实是带时间轴的 LRC 时解包；其它 JSON 保持旧的文本返回行为。
-      if (/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/.test(lyric)) {
-        return translation ? `${lyric}\n${translation}` : lyric;
-      }
-
-      const fallbackCandidates = [
-        payload?.lrc,
-        payload?.data?.lrc?.lyric,
-        payload?.data?.tlyric?.lyric,
-      ];
-      for (const candidate of fallbackCandidates) {
-        const fallback = String(candidate || '').trim();
-        if (/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/.test(fallback)) return fallback;
-      }
-    } catch {
-      // 非 JSON 时按纯 LRC 继续处理
+  if (text.startsWith('{') || text.startsWith('"')) {
+    const { lyric, translation } = normalizeStructuredLyrics(text);
+    if (/\[\d{1,3}:\d{2}(?:[.:]\d{1,3})?\]/.test(lyric)) {
+      return translation ? `${lyric}\n${translation}` : lyric;
     }
   }
   return text;
@@ -1373,7 +1358,6 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
   }
   if (metingType === 'lrc' && metingQuery.format === 'json') {
     try {
-      const { normalizeStructuredLyrics, readStructuredLyricResponse } = await import('./structuredLyrics.js');
       const lyrics = normalizeStructuredLyrics(await readStructuredLyricResponse(response));
       incrementMetric('structured_lyrics_total', { result: 'success', format: lyrics.wordFormat || 'lrc' });
       return res.json(lyrics);
@@ -1798,6 +1782,49 @@ app.get('/api/music/quality-capabilities', async (req, res) => {
     qishuiVip,
     qishuiSvip,
   });
+});
+
+const translateLyrics = createLyricTranslator();
+
+app.post('/api/music/lyrics/translate', async (req, res) => {
+  const identity = requireSessionIdentity(req, res);
+  if (!identity) return;
+  const { source, id } = req.body || {};
+  if (!VALID_SOURCES.has(source) || typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/u.test(id)) {
+    return res.status(400).json({ error: '歌曲参数无效', code: 'LYRIC_TRANSLATION_BAD_REQUEST' });
+  }
+  if (!isMusicSourceEnabled(source, getRuntimeConfig().musicSourcesEnabled)) {
+    return res.status(503).json({ error: '该音源已关闭', code: 'LYRIC_SOURCE_DISABLED' });
+  }
+  if (!isAiModelEnabled()) return res.json({ translations: [], source: 'unavailable' });
+  const rate = await distributedSocketRateLimiter.consume({
+    scope: 'http:lyric-translation', principal: `account:${req.riskAccount.id}`, windowMs: 60_000, max: 6,
+  });
+  if (!rate.allowed) {
+    incrementMetric('lyric_translation_total', { result: 'rate_limited' });
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(rate.retryAfterMs / 1000))));
+    return res.status(rate.unavailable ? 503 : 429).json({ error: '歌词翻译暂时繁忙', code: 'LYRIC_TRANSLATION_RATE_LIMITED' });
+  }
+  const started = performance.now();
+  try {
+    // 只根据服务端取回的歌词翻译，不接受客户端提交提示词或任意文本
+    const response = await fetchMetingApi({ server: source, id, type: 'lrc', format: 'json' },
+      { redirect: 'manual', maxResponseBytes: 4 * 1024 * 1024 }, 15000);
+    if (!response.ok) throw new Error('lyric upstream unavailable');
+    const lyrics = normalizeStructuredLyrics(await readStructuredLyricResponse(response));
+    const translations = await translateLyrics(lyrics, {
+      riskAccountId: req.riskAccount.id,
+      roomId: findUserRoomPresence(identity.userId)?.roomId || '',
+    });
+    incrementMetric('lyric_translation_total', { result: translations.length ? 'success' : 'empty' });
+    return res.json({ translations, source: 'supplement' });
+  } catch (error) {
+    incrementMetric('lyric_translation_total', { result: String(error?.code || '').startsWith('RISK_') ? 'rejected' : 'failed' });
+    return res.status(503).json({ error: '歌词翻译暂不可用，继续显示原文', code: 'LYRIC_TRANSLATION_UNAVAILABLE' });
+  } finally {
+    const elapsed = performance.now() - started;
+    incrementMetric('lyric_translation_latency_total', { bucket: elapsed < 5000 ? 'under_5s' : elapsed < 15000 ? 'under_15s' : 'over_15s' });
+  }
 });
 
 app.get('/api/meting', async (req, res) => {

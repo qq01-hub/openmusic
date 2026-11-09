@@ -12,7 +12,7 @@ export function normalizeStructuredLyrics(body) {
   return {
     version: 1,
     lyric: lyric(data?.lyric || data?.lrc),
-    translation: lyric(data?.translation || data?.tlyric),
+    translation: lyric(data?.translation) || lyric(data?.tlyric) || lyric(data?.ytlyric) || lyric(data?.ytlrc),
     romanization: lyric(data?.romanization || data?.romalrc),
     wordLyric: wordFormat ? text(data?.wordLyric) : '',
     wordFormat,

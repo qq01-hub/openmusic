@@ -395,8 +395,8 @@ body {
 }
 
 @keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.92; }
 }
 
 @keyframes vinyl-disc-spin {
@@ -981,12 +981,11 @@ body {
     background: linear-gradient(
       90deg,
       #242424 0%,
-      #333 20%,
-      #242424 40%,
+      #2f2f35 50%,
       #242424 100%
     );
-    background-size: 200% 100%;
-    animation: shimmer 1.6s ease-in-out infinite;
+    will-change: opacity;
+    animation: shimmer 1.4s ease-in-out infinite;
   }
 
   .safe-top {
@@ -1979,33 +1978,38 @@ html :is(.room-modal-panel, .mineradio-glass-panel, .mineradio-glass-search-resu
   -webkit-backdrop-filter: none !important;
 }
 
+/* 全屏弹框遮罩与滚动弹框面板：禁用全视口高斯模糊重采样，使用高不透明度深色图层，
+   避免底部黑胶旋转、进度条与 3D 舞台在弹框打开或列表滚动时每帧触发 1920x1080 离屏模糊合成 */
+.modal-mask,
+.mineradio-glass-scrim,
+.fixed.inset-0 > .absolute.inset-0.backdrop-blur-sm {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 .room-modal-panel {
   position: relative;
   isolation: isolate;
   transform: translateZ(0);
   backface-visibility: hidden;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
-/* 将弹框的毛玻璃背景剥离到独立 ::before 合成层（z-index: -1），
-   避免内部列表滚动时每帧重触发父容器的 backdrop-filter 高斯模糊与圆角遮罩合成 */
 .room-modal-panel.glass {
-  background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  background: rgba(20, 20, 25, 0.96);
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .room-modal-panel.glass::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  border-radius: inherit;
-  background: rgba(17, 17, 20, 0.82);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  pointer-events: none;
-  transform: translateZ(0);
-  backface-visibility: hidden;
+  display: none;
+}
+
+.room-modal-panel.mineradio-glass-modal {
+  background: linear-gradient(160deg, rgba(22, 26, 34, 0.95), rgba(10, 12, 18, 0.97)) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 .room-modal-scroll {
@@ -2014,6 +2018,10 @@ html :is(.room-modal-panel, .mineradio-glass-panel, .mineradio-glass-search-resu
   backface-visibility: hidden;
   contain: layout paint;
   overscroll-behavior: contain;
+}
+
+.modal-card-grid-item {
+  contain: layout style paint;
 }
 
 .mineradio-glass-search-box {

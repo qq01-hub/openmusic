@@ -23,6 +23,7 @@
 聚合微信与 QQ 二维码显示后不再定时查询，手机确认后由用户点击「我已完成扫码，检查登录」，检查期间禁用重复操作，普通检查间隔至少 7 秒，上游限流冷却 60 秒，恢复按钮与二维码到期提示仅使用本地计时，不自动发起网络请求，原生壳无需新增命令
 
 首页封面通过受限的 `GET /api/meting?type=pic` 公开读取，普通歌曲信息、歌词、播放地址和通用媒体代理继续鉴权，原生端无需新增桥接命令
+网页外语歌词先显示原文，再通过受账户身份、设备校验、站点风控和分布式限流保护的 `POST /api/music/lyrics/translate` 请求补全中文译文，请求仅含 `source / id`，服务端重新读取歌词并复用后台 AI 文字模型与额度，未开启 AI 或翻译失败时继续显示原文，原生媒体桥接字段与命令不变，旧网页可忽略新增接口
 微信扫码轮询遇到短暂网络故障由网页有限重试，完成登录的确认凭证仅在服务端写入成功后消费，过期或拒绝仍需重新扫码
 
 ```bash
@@ -30,6 +31,8 @@ flutter run --dart-define=OM_SERVER_URL=https://your-host
 ```
 
 当前房间页通过 `flutter_inappwebview` bridge 自动报送 Android 通知栏媒体状态，并响应 `play`、`pause`、`seek`、`next`、`lyrics`、`toggleMode`、`toggleFavorite`。通知栏的按钮、进度拖动与模式切换都依赖网页同步的权限字段；网页和服务端仍负责最终权限校验。Android 13 及以上首次播放需允许通知权限；悬浮歌词还需要系统悬浮窗权限。
+
+用户轮播的房间快照与 `room_update` 追加可选 `upcomingSong`，由服务端按现有插队、轮次、点赞与离线置后规则计算，只包含既有公开歌曲字段，不消费队列或推进轮次；网页在播放剩余 20 秒时于队列顶部用切歌同款黑色气泡预告下一首歌名、歌手和点歌人，持续显示 10 秒且不展示倒计时，暂停或没有预告歌曲时隐藏，原生桥接命令不变，旧网页忽略新字段，新网页连接旧服务端时不显示预告，先升级服务端再刷新网页资源
 
 AI 桌宠调用新增服务端到网页的 Socket 事件 `room_ai_desk_pet`，仅发送到发起聊天的已认证连接，payload 为 `requestId / roomId / userId / expiresAt / command / args`，`command` 仅为 `get_state` 或 `control`；网页核对成员、房间、开关、过期时间与动作白名单并幂等执行，ack 返回同一 `requestId` 和 `success`，成功附状态或 `status: started|shown|unchanged`，失败附 `code / error`
 

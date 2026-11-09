@@ -2,13 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Music2, Maximize } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
-import { useAudioStore } from '../stores/audioStore';
 import { useSocket } from '../hooks/useSocket';
-import {
-  getLyrics, parseLrc, getCoverUrl,
-  getLrcFallbackDurationMs, getTrackKey,
-} from '../api/music';
-import type { LyricLine } from '../types';
+import { getCoverUrl } from '../api/music';
+import { useTrackLyrics } from '../hooks/useTrackLyrics';
 import VinylPlayer from '../components/VinylPlayer';
 import SongInfoPanel from '../components/SongInfoPanel';
 import SyncedLyricsPane from '../components/playback/SyncedLyricsPane';
@@ -39,10 +35,9 @@ export default function TvDisplay() {
   const rawCoverUrl = current ? getCoverUrl(current, 'medium') : null;
   const signedCoverUrl = useSignedApiUrl(rawCoverUrl);
   const { joinRoom } = useSocket();
-  const setLrcDuration = useAudioStore((s) => s.setLrcDuration);
 
   const [joinError, setJoinError] = useState('');
-  const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const lyrics = useTrackLyrics(current);
   const [bgLoaded, setBgLoaded] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,31 +116,8 @@ export default function TvDisplay() {
   }, [roomId, location.search, joinRoom, navigate]);
 
   useEffect(() => {
-    if (!current) {
-      setLyrics([]);
-      return;
-    }
-
-    setLyrics([]);
     setBgLoaded(false);
-
-    getLyrics({
-      id: current.id,
-      source: current.source || 'netease',
-      name: current.name,
-      artist: current.artist,
-      lrc: current.lrc,
-    })
-      .then((lrc) => {
-        const lines = parseLrc(lrc);
-        setLyrics(lines);
-        if (!current.duration) {
-          const ms = getLrcFallbackDurationMs(lrc);
-          if (ms) setLrcDuration(getTrackKey(current), ms);
-        }
-      })
-      .catch(() => setLyrics([]));
-  }, [current?.id, current?.source, current?.name, current?.lrc, current?.duration, setLrcDuration]);
+  }, [current?.id, current?.source]);
 
   useEffect(() => {
     if (!current) return;

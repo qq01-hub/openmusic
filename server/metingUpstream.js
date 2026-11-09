@@ -28,6 +28,10 @@ const METING_CACHE_TTLS = {
   song: 60_000,
   playlist: 60_000,
   search_playlist: 30_000,
+  dj_hot: 10 * 60_000,
+  dj_detail: 10 * 60_000,
+  dj: 2 * 60_000,
+  search_dj: 60_000,
 };
 
 /** HTTP/Socket 请求上下文：失败日志归因到用户与房间 */

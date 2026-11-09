@@ -10,6 +10,34 @@ const QQ_HEADERS = {
   Referer: 'https://y.qq.com/',
 };
 
+const PLAYLIST_META_CACHE_TTL_MS = 30 * 60 * 1000;
+const PLAYLIST_META_CACHE_MAX = 256;
+const neteasePlaylistMetaCache = new Map();
+const neteasePlaylistMetaInflight = new Map();
+const qqPlaylistMetaCache = new Map();
+const qqPlaylistMetaInflight = new Map();
+
+function readMetaCache(cache, key) {
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (Date.now() >= entry.expiresAt) {
+    cache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function writeMetaCache(cache, key, value) {
+  if (!value) return;
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, { value, expiresAt: Date.now() + PLAYLIST_META_CACHE_TTL_MS });
+  while (cache.size > PLAYLIST_META_CACHE_MAX) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -117,27 +145,43 @@ function normalizeMetingPlaylistSong(raw, source) {
 }
 
 async function fetchNeteasePlaylistMeta(playlistId) {
+  const key = String(playlistId || '').trim();
+  if (!key) return null;
+  const cached = readMetaCache(neteasePlaylistMetaCache, key);
+  if (cached) return cached;
+  const pending = neteasePlaylistMetaInflight.get(key);
+  if (pending) return pending;
+
+  const request = (async () => {
   try {
     const response = await fetchWithTimeout(
-      `https://music.163.com/api/playlist/detail?id=${encodeURIComponent(playlistId)}`,
+      `https://music.163.com/api/playlist/detail?id=${encodeURIComponent(key)}`,
       { headers: NETEASE_HEADERS },
-      10000,
+      6000,
     );
     if (!response.ok) return null;
     const data = await response.json();
     if (data.code !== 200 || !data.result) return null;
     const result = data.result;
-    return {
-      id: String(result.id || playlistId),
+    const meta = {
+      id: String(result.id || key),
       name: String(result.name || '未命名歌单'),
       coverImgUrl: String(result.coverImgUrl || result.picUrl || ''),
       creatorName: String(result.creator?.nickname || ''),
       trackCount: Number(result.trackCount || 0),
       playCount: Number(result.playCount || 0),
     };
+    writeMetaCache(neteasePlaylistMetaCache, key, meta);
+    return meta;
   } catch {
     return null;
   }
+  })().finally(() => {
+    neteasePlaylistMetaInflight.delete(key);
+  });
+
+  neteasePlaylistMetaInflight.set(key, request);
+  return request;
 }
 
 async function fetchNeteasePlaylistName(playlistId) {
@@ -147,28 +191,35 @@ async function fetchNeteasePlaylistName(playlistId) {
 
 export async function fetchNeteasePlaylistMetas(playlistIds) {
   const unique = [...new Set(playlistIds.map((id) => String(id || '').trim()).filter(Boolean))].slice(0, 12);
-  const results = [];
-
-  for (const id of unique) {
-    let meta = await fetchNeteasePlaylistMeta(id);
-    if (!meta) {
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      meta = await fetchNeteasePlaylistMeta(id);
-    }
-    if (meta) results.push(meta);
-  }
-
-  return results;
+  const settled = await Promise.all(
+    unique.map(async (id) => {
+      let meta = await fetchNeteasePlaylistMeta(id);
+      if (!meta) {
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        meta = await fetchNeteasePlaylistMeta(id);
+      }
+      return meta;
+    }),
+  );
+  return settled.filter(Boolean);
 }
 
 async function fetchQqPlaylistMeta(playlistId) {
+  const key = String(playlistId || '').trim();
+  if (!key) return null;
+  const cached = readMetaCache(qqPlaylistMetaCache, key);
+  if (cached) return cached;
+  const pending = qqPlaylistMetaInflight.get(key);
+  if (pending) return pending;
+
+  const request = (async () => {
   try {
     const params = new URLSearchParams({
       type: '1',
       json: '1',
       utf8: '1',
       onlysong: '0',
-      disstid: String(playlistId),
+      disstid: key,
       format: 'json',
       platform: 'yqq',
       needNewCode: '0',
@@ -182,7 +233,7 @@ async function fetchQqPlaylistMeta(playlistId) {
     const response = await fetchWithTimeout(
       `https://c.y.qq.com/qzone/fcg-bin/fcg_ucc_getcdinfo_byids_cp.fcg?${params.toString()}`,
       { headers: QQ_HEADERS },
-      10000,
+      6000,
     );
     if (!response.ok) return null;
 
@@ -201,17 +252,25 @@ async function fetchQqPlaylistMeta(playlistId) {
     if (!cd) return null;
 
     const name = String(cd.dissname || '').trim();
-    return {
-      id: String(cd.disstid || playlistId),
+    const meta = {
+      id: String(cd.disstid || key),
       name: name || null,
       coverImgUrl: String(cd.logo || '').trim(),
       creatorName: String(cd.nickname || cd.nick || '').trim(),
       trackCount: Number(cd.songnum || cd.total_song_num || 0),
       playCount: Number(cd.visitnum || 0),
     };
+    writeMetaCache(qqPlaylistMetaCache, key, meta);
+    return meta;
   } catch {
     return null;
   }
+  })().finally(() => {
+    qqPlaylistMetaInflight.delete(key);
+  });
+
+  qqPlaylistMetaInflight.set(key, request);
+  return request;
 }
 
 async function fetchQqPlaylistName(playlistId) {

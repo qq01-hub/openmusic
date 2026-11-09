@@ -261,6 +261,8 @@ export interface RoomState {
   ownerConnectionId?: string | null;
   queue: QueueItem[];
   current: QueueItem | null;
+  /** 服务端按用户轮播规则计算的下一首，旧服务端缺省时不显示预告 */
+  upcomingSong?: QueueItem | null;
   isPlaying: boolean;
   currentTime: number;
   /** 房间统一播放倍速，仅房主可修改 */

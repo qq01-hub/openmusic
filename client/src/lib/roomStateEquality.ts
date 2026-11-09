@@ -193,6 +193,8 @@ export function isRoomStateEquivalent(a: RoomState, b: RoomState): boolean {
     && skipRequestsEqual(a.skipRequests, b.skipRequests)
     && a.chatVisibleSince === b.chatVisibleSince
     && currentSongEqual(a.nextRandom ?? null, b.nextRandom ?? null)
+    && currentSongEqual(a.upcomingSong ?? null, b.upcomingSong ?? null)
+    && a.upcomingSong?.artist === b.upcomingSong?.artist
     && a.randomLoading === b.randomLoading
     && a.randomError === b.randomError
     && audioQualityEqual(a.audioQuality, b.audioQuality)

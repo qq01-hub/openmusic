@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2, Sparkles } from 'lucide-react';
 import type { PlaylistSearchItem } from '../api/music/playlist';
 import {
@@ -24,7 +24,7 @@ interface Props {
   immersive?: boolean;
 }
 
-function PlaylistCover({
+const PlaylistCover = memo(function PlaylistCover({
   playlist,
   isLoading,
   compact = false,
@@ -33,6 +33,7 @@ function PlaylistCover({
   isLoading: boolean;
   compact?: boolean;
 }) {
+  const px = compact ? 80 : 160;
   return (
     <div
       className={`relative overflow-hidden bg-netease-card ${
@@ -43,10 +44,12 @@ function PlaylistCover({
         <img
           src={playlist.coverImgUrl}
           alt=""
-          loading="lazy"
+          width={px}
+          height={px}
+          loading={compact ? 'lazy' : 'eager'}
           decoding="async"
           referrerPolicy="no-referrer"
-          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          className="h-full w-full object-cover"
           onError={(event) => {
             event.currentTarget.style.display = 'none';
             const fallback = event.currentTarget.nextElementSibling;
@@ -66,19 +69,21 @@ function PlaylistCover({
       )}
     </div>
   );
-}
+});
 
 function PlaylistSkeleton({
   compact = false,
+  count = 8,
 }: {
   compact?: boolean;
+  count?: number;
 }) {
   const cardClass = compact ? 'aspect-square w-full rounded-xl' : 'aspect-square w-full rounded-2xl';
 
   if (compact) {
     return (
       <div className="flex min-w-min gap-2.5 pb-1">
-        {Array.from({ length: CURATED_COUNT + NETEASE_EXTRA_LIMIT }, (_, i) => (
+        {Array.from({ length: Math.min(8, CURATED_COUNT + NETEASE_EXTRA_LIMIT) }, (_, i) => (
           <div key={i} className="flex w-20 flex-shrink-0 flex-col items-center">
             <div className={`${cardClass} skeleton-shimmer`} />
             <div className="mt-1 h-2 w-full rounded skeleton-shimmer" />
@@ -89,42 +94,20 @@ function PlaylistSkeleton({
   }
 
   return (
-    <div className="space-y-3">
-      <div className={GRID_COLS_CLASS}>
-        {Array.from({ length: CURATED_COUNT }, (_, i) => (
-          <div key={`curated-${i}`} className="flex flex-col items-center">
-            <div className={`${cardClass} skeleton-shimmer`} />
-            <div className="mt-1 w-full space-y-1">
-              <div className="h-2 w-full rounded skeleton-shimmer" />
-            </div>
+    <div className={GRID_COLS_CLASS}>
+      {Array.from({ length: count }, (_, i) => (
+        <div key={`skeleton-${i}`} className="flex flex-col items-center">
+          <div className={`${cardClass} skeleton-shimmer`} />
+          <div className="mt-1 w-full space-y-1">
+            <div className="h-2 w-full rounded skeleton-shimmer" />
           </div>
-        ))}
-      </div>
-      <div className={GRID_COLS_CLASS}>
-        {Array.from({ length: NETEASE_EXTRA_LIMIT }, (_, i) => (
-          <div key={`netease-extra-${i}`} className="flex flex-col items-center">
-            <div className={`${cardClass} skeleton-shimmer`} />
-            <div className="mt-1 w-full space-y-1">
-              <div className="h-2 w-full rounded skeleton-shimmer" />
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className={GRID_COLS_CLASS}>
-        {Array.from({ length: NETEASE_EXTRA_LIMIT }, (_, i) => (
-          <div key={`qq-extra-${i}`} className="flex flex-col items-center">
-            <div className={`${cardClass} skeleton-shimmer`} />
-            <div className="mt-1 w-full space-y-1">
-              <div className="h-2 w-full rounded skeleton-shimmer" />
-            </div>
-          </div>
-        ))}
-      </div>
+        </div>
+      ))}
     </div>
   );
 }
 
-function PlaylistCard({
+const PlaylistCard = memo(function PlaylistCard({
   playlist,
   isLoading,
   disabled,
@@ -137,14 +120,14 @@ function PlaylistCard({
   disabled: boolean;
   compact: boolean;
   immersive?: boolean;
-  onSelect: () => void;
+  onSelect: (playlist: PlaylistSearchItem) => void;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
-      onClick={onSelect}
-      className={`group flex flex-col transition-colors disabled:opacity-60 ${
+      onClick={() => onSelect(playlist)}
+      className={`modal-card-grid-item group flex flex-col transition-colors disabled:opacity-60 ${
         compact
           ? 'w-20 flex-shrink-0 items-center text-center'
           : immersive
@@ -162,9 +145,9 @@ function PlaylistCard({
       </p>
     </button>
   );
-}
+});
 
-export default function RecommendedPlaylistsPanel({
+export default memo(function RecommendedPlaylistsPanel({
   onSelectPlaylist,
   compact = false,
   hideHeader = false,
@@ -177,6 +160,10 @@ export default function RecommendedPlaylistsPanel({
   const [qqPlaylists, setQqPlaylists] = useState(() => cached?.qqPlaylists ?? []);
   const [loading, setLoading] = useState(() => !cached);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const onSelectPlaylistRef = useRef(onSelectPlaylist);
+  const loadingKeyRef = useRef<string | null>(null);
+  onSelectPlaylistRef.current = onSelectPlaylist;
+  loadingKeyRef.current = loadingKey;
 
   useEffect(() => {
     let cancelled = false;
@@ -201,16 +188,16 @@ export default function RecommendedPlaylistsPanel({
     return () => { cancelled = true; };
   }, []);
 
-  const handleSelect = async (playlist: PlaylistSearchItem) => {
+  const handleSelect = useCallback((playlist: PlaylistSearchItem) => {
     const key = playlistKey(playlist);
-    if (loadingKey) return;
+    if (loadingKeyRef.current) return;
+    loadingKeyRef.current = key;
     setLoadingKey(key);
-    try {
-      await onSelectPlaylist(playlist);
-    } finally {
+    void onSelectPlaylistRef.current(playlist).finally(() => {
+      loadingKeyRef.current = null;
       setLoadingKey(null);
-    }
-  };
+    });
+  }, []);
 
   const renderPlaylistHorizontalScroll = () => {
     const curated = neteasePlaylists.slice(0, CURATED_COUNT);
@@ -220,6 +207,7 @@ export default function RecommendedPlaylistsPanel({
       if (neteaseExtras[i]) items.push(neteaseExtras[i]);
       if (qqPlaylists[i]) items.push(qqPlaylists[i]);
     }
+    const anyLoading = Boolean(loadingKey);
 
     return (
       <div className="flex min-w-min gap-2.5 pb-1">
@@ -228,10 +216,10 @@ export default function RecommendedPlaylistsPanel({
             key={playlistKey(playlist)}
             playlist={playlist}
             isLoading={loadingKey === playlistKey(playlist)}
-            disabled={Boolean(loadingKey)}
+            disabled={anyLoading}
             compact
             immersive={immersive}
-            onSelect={() => void handleSelect(playlist)}
+            onSelect={handleSelect}
           />
         ))}
       </div>
@@ -241,16 +229,17 @@ export default function RecommendedPlaylistsPanel({
   const renderPlaylistGrid = () => {
     const curated = neteasePlaylists.slice(0, CURATED_COUNT);
     const neteaseExtras = neteasePlaylists.slice(CURATED_COUNT);
+    const anyLoading = Boolean(loadingKey);
 
     const renderCard = (playlist: PlaylistSearchItem) => (
       <PlaylistCard
         key={playlistKey(playlist)}
         playlist={playlist}
         isLoading={loadingKey === playlistKey(playlist)}
-        disabled={Boolean(loadingKey)}
+        disabled={anyLoading}
         compact={false}
         immersive={immersive}
-        onSelect={() => void handleSelect(playlist)}
+        onSelect={handleSelect}
       />
     );
 
@@ -259,6 +248,9 @@ export default function RecommendedPlaylistsPanel({
         <div className={GRID_COLS_CLASS}>
           {curated.map(renderCard)}
         </div>
+        {loading && neteaseExtras.length === 0 && qqPlaylists.length === 0 && (
+          <PlaylistSkeleton count={8} />
+        )}
         {neteaseExtras.length > 0 && (
           <div className={GRID_COLS_CLASS}>
             {neteaseExtras.map(renderCard)}
@@ -292,7 +284,7 @@ export default function RecommendedPlaylistsPanel({
   if (hideHeader) {
     return (
       <div className="px-3 py-3 pb-4">
-        {loading ? <PlaylistSkeleton /> : renderPlaylistGrid()}
+        {renderPlaylistGrid()}
       </div>
     );
   }
@@ -304,9 +296,9 @@ export default function RecommendedPlaylistsPanel({
         <h2 className="text-sm font-medium">热榜歌单</h2>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2">
-        {loading ? <PlaylistSkeleton /> : renderPlaylistGrid()}
+      <div className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2">
+        {renderPlaylistGrid()}
       </div>
     </div>
   );
-}
+});

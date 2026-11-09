@@ -1,6 +1,6 @@
 import type { MusicSource, SearchResult } from '../../types';
 import { fetchWithTimeout } from '../http';
-import { upgradeInsecureCoverUrl } from '../../lib/coverUrl';
+import { resizeCoverUrl } from '../../lib/coverUrl';
 import { metingSearchPlaylists } from './providers/meting';
 
 export type PlaylistPlatform = 'netease' | 'qq' | 'kugou' | 'qishui';
@@ -51,7 +51,7 @@ function normalizePlaylist(
     id,
     platform,
     name: String(raw.name || raw.title || '未命名歌单'),
-    coverImgUrl: upgradeInsecureCoverUrl(String(raw.cover || raw.coverImgUrl || raw.pic || '')),
+    coverImgUrl: resizeCoverUrl(String(raw.cover || raw.coverImgUrl || raw.pic || ''), 'medium'),
     creatorName,
     trackCount: Number(raw.trackCount || raw.track_count || raw.song_count || raw.musicNum || 0),
     playCount: Number(raw.playCount || raw.playcount || raw.play_count || 0),
@@ -233,7 +233,7 @@ export async function fetchNeteasePlaylistMetas(ids: string[]): Promise<Playlist
     id: String(item.id || ''),
     platform: 'netease' as const,
     name: String(item.name || '未命名歌单'),
-    coverImgUrl: upgradeInsecureCoverUrl(String(item.coverImgUrl || '')),
+    coverImgUrl: resizeCoverUrl(String(item.coverImgUrl || ''), 'medium'),
     creatorName: String(item.creatorName || ''),
     trackCount: Number(item.trackCount || 0),
     playCount: Number(item.playCount || 0),

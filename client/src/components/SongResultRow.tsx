@@ -113,6 +113,7 @@ function SongResultRow({
     >
       <SongCover
         song={song}
+        lazy={false}
         className="h-12 w-12 flex-shrink-0 rounded-lg bg-netease-card object-cover"
       />
       <div className="min-w-0 flex-1 space-y-0.5">

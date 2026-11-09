@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { getCoverUrl, getLyrics, getTrackKey } from '../../api/music';
+import { getCoverUrl, getLyrics, getTrackKey, getTranslatedLyricLines, parseLrc } from '../../api/music';
+import { serializeLyricTranslations } from '../../lib/immersiveLyricLines';
 import { fetchWithTimeout } from '../../api/http';
 import { readLocalPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
 import { useAudioStore } from '../../stores/audioStore';
@@ -149,6 +150,17 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
         lyrics = { ...lyrics, lyric: await getLyrics(track).catch(() => '') };
       }
       if (!cancelled) send('openmusic:folia-lyrics', { key, lyrics });
+      if (cancelled) return;
+      const original = parseLrc(typeof lyrics.lyric === 'string' ? lyrics.lyric : '');
+      const existing = parseLrc(typeof lyrics.translation === 'string' ? lyrics.translation : '');
+      const lines = original.map(line => ({
+        ...line,
+        translation: line.translation || existing.find(other => Math.abs(other.time - line.time) < 0.051)?.text,
+      }));
+      const translated = await getTranslatedLyricLines(track, lines);
+      if (!cancelled && translated !== lines) {
+        send('openmusic:folia-lyrics', { key, lyrics: { ...lyrics, translation: serializeLyricTranslations(translated) } });
+      }
     })();
     return () => { cancelled = true; controller.abort(); };
   }, [ready, key]);

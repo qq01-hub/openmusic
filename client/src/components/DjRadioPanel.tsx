@@ -1,7 +1,15 @@
-import { useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Radio, Search } from 'lucide-react';
 import type { DjRadioItem } from '../api/music/djRadio';
-import { getDjRadios, peekDjRadios, searchDjRadiosCached } from '../lib/djRadios';
+import { useVirtualListWindow } from '../hooks/useVirtualListWindow';
+import {
+  getDjRadiosByMode,
+  peekDjRadiosByMode,
+  searchDjRadiosCached,
+} from '../lib/djRadios';
+
+const GRID_COLUMNS = 4;
+const GRID_ROW_ESTIMATE_PX = 164;
 
 interface Props {
   onSelectRadio: (radio: DjRadioItem) => Promise<void>;
@@ -9,7 +17,7 @@ interface Props {
   immersive?: boolean;
 }
 
-function RadioCover({
+const RadioCover = memo(function RadioCover({
   radio,
   isLoading,
 }: {
@@ -22,10 +30,12 @@ function RadioCover({
         <img
           src={radio.coverImgUrl}
           alt=""
-          loading="lazy"
+          width={160}
+          height={160}
+          loading="eager"
           decoding="async"
           referrerPolicy="no-referrer"
-          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+          className="h-full w-full object-cover"
           onError={(event) => {
             event.currentTarget.style.display = 'none';
             const fallback = event.currentTarget.nextElementSibling;
@@ -45,9 +55,9 @@ function RadioCover({
       )}
     </div>
   );
-}
+});
 
-function RadioCard({
+const RadioCard = memo(function RadioCard({
   radio,
   isLoading,
   disabled,
@@ -58,14 +68,14 @@ function RadioCard({
   isLoading: boolean;
   disabled: boolean;
   immersive: boolean;
-  onSelect: () => void;
+  onSelect: (radio: DjRadioItem) => void;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
-      onClick={onSelect}
-      className={`group flex h-full w-full flex-col items-center text-center transition-colors disabled:opacity-60 ${
+      onClick={() => onSelect(radio)}
+      className={`modal-card-grid-item group flex h-full w-full flex-col items-center text-center transition-colors disabled:opacity-60 ${
         immersive
           ? 'mineradio-glass-card rounded-2xl p-1.5'
           : 'rounded-2xl p-1 hover:bg-netease-card/60'
@@ -82,7 +92,7 @@ function RadioCard({
       )}
     </button>
   );
-}
+});
 
 function RadioSkeleton() {
   return (
@@ -97,55 +107,74 @@ function RadioSkeleton() {
   );
 }
 
-export default function DjRadioPanel({
+export default memo(function DjRadioPanel({
   onSelectRadio,
   hideHeader = false,
   immersive = false,
 }: Props) {
-  const cached = peekDjRadios();
+  const cachedHot = peekDjRadiosByMode('hot');
+  const cachedRecommend = peekDjRadiosByMode('recommend');
   const [tab, setTab] = useState<'hot' | 'recommend'>('hot');
-  const [hot, setHot] = useState<DjRadioItem[]>(() => cached?.hot ?? []);
-  const [recommend, setRecommend] = useState<DjRadioItem[]>(() => cached?.recommend ?? []);
-  const [loading, setLoading] = useState(() => !cached);
+  const [hot, setHot] = useState<DjRadioItem[]>(() => cachedHot ?? []);
+  const [recommend, setRecommend] = useState<DjRadioItem[]>(() => cachedRecommend ?? []);
+  const [hotLoading, setHotLoading] = useState(() => !cachedHot);
+  const [recommendLoading, setRecommendLoading] = useState(() => !cachedRecommend);
   const [loadingKey, setLoadingKey] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState('');
   const [searchResults, setSearchResults] = useState<DjRadioItem[] | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
+  const scrollBodyRef = useRef<HTMLDivElement>(null);
+  const onSelectRadioRef = useRef(onSelectRadio);
+  const loadingKeyRef = useRef<string | null>(null);
+  onSelectRadioRef.current = onSelectRadio;
+  loadingKeyRef.current = loadingKey;
 
   useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      if (!peekDjRadios()) setLoading(true);
-      try {
-        const data = await getDjRadios();
+    if (!peekDjRadiosByMode('hot')) setHotLoading(true);
+    void getDjRadiosByMode('hot')
+      .then((data) => {
         if (cancelled) return;
-        setHot(data.hot);
-        setRecommend(data.recommend);
+        setHot(data);
         setError('');
-      } catch (err) {
-        if (!cancelled) {
+      })
+      .catch((err) => {
+        if (!cancelled && !peekDjRadiosByMode('hot')) {
           setError(err instanceof Error ? err.message : '电台加载失败');
         }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    void load();
+      })
+      .finally(() => {
+        if (!cancelled) setHotLoading(false);
+      });
+
+    if (!peekDjRadiosByMode('recommend')) setRecommendLoading(true);
+    void getDjRadiosByMode('recommend')
+      .then((data) => {
+        if (cancelled) return;
+        setRecommend(data);
+      })
+      .catch(() => {
+        // 推荐电台失败不覆盖热门电台状态
+      })
+      .finally(() => {
+        if (!cancelled) setRecommendLoading(false);
+      });
+
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const handleSelect = async (radio: DjRadioItem) => {
-    if (loadingKey) return;
+  const handleSelect = useCallback((radio: DjRadioItem) => {
+    if (loadingKeyRef.current) return;
+    loadingKeyRef.current = radio.id;
     setLoadingKey(radio.id);
-    try {
-      await onSelectRadio(radio);
-    } finally {
+    void onSelectRadioRef.current(radio).finally(() => {
+      loadingKeyRef.current = null;
       setLoadingKey(null);
-    }
-  };
+    });
+  }, []);
 
   const handleSearch = async () => {
     const keyword = searchInput.trim();
@@ -168,6 +197,21 @@ export default function DjRadioPanel({
   };
 
   const list = searchResults ?? (tab === 'hot' ? hot : recommend);
+  const loading = searchResults === null && (tab === 'hot' ? hotLoading && hot.length === 0 : recommendLoading && recommend.length === 0);
+  const rowCount = Math.ceil(list.length / GRID_COLUMNS);
+  const { startIndex, endIndex, topSpacerPx, bottomSpacerPx } = useVirtualListWindow(scrollBodyRef, {
+    count: loading || searching ? 0 : rowCount,
+    itemSize: GRID_ROW_ESTIMATE_PX,
+    overscan: 3,
+    minVirtualCount: 6,
+    defaultViewportHeight: 540,
+    resetKey: searchResults ? `search:${searchResults.length}` : tab,
+  });
+  const visibleList = useMemo(() => {
+    if (startIndex === 0 && endIndex >= rowCount) return list;
+    return list.slice(startIndex * GRID_COLUMNS, endIndex * GRID_COLUMNS);
+  }, [endIndex, list, rowCount, startIndex]);
+  const anyLoading = Boolean(loadingKey);
 
   return (
     <div className={`flex min-h-0 flex-col overflow-hidden ${hideHeader ? 'h-full flex-1' : 'h-full'}`}>
@@ -237,7 +281,7 @@ export default function DjRadioPanel({
         )}
       </div>
 
-      <div className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
+      <div ref={scrollBodyRef} className="room-modal-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 pb-4">
         {loading || searching ? (
           <RadioSkeleton />
         ) : list.length === 0 ? (
@@ -249,15 +293,20 @@ export default function DjRadioPanel({
             {error && list.length > 0 && (
               <p className="mb-2 text-center text-[11px] text-amber-300/80">{error}</p>
             )}
-            <div className="grid grid-cols-4 gap-2">
-              {list.map((radio) => (
+            <div
+              className="grid grid-cols-4 gap-2"
+              style={topSpacerPx > 0 || bottomSpacerPx > 0
+                ? { paddingTop: topSpacerPx, paddingBottom: bottomSpacerPx }
+                : undefined}
+            >
+              {visibleList.map((radio) => (
                 <RadioCard
                   key={radio.id}
                   radio={radio}
                   isLoading={loadingKey === radio.id}
-                  disabled={Boolean(loadingKey)}
+                  disabled={anyLoading}
                   immersive={immersive}
-                  onSelect={() => void handleSelect(radio)}
+                  onSelect={handleSelect}
                 />
               ))}
             </div>
@@ -266,4 +315,4 @@ export default function DjRadioPanel({
       </div>
     </div>
   );
-}
+});

@@ -74,6 +74,7 @@ const ToplistRow = memo(function ToplistRow({
       <SongCover
         song={song}
         size="thumb"
+        lazy={false}
         className="h-9 w-9 flex-shrink-0 rounded-md object-cover bg-netease-card"
       />
       <div className="min-w-0 flex-1 self-stretch flex flex-col justify-center gap-0.5">
@@ -207,6 +208,11 @@ export default memo(function HotSongPanel({
   }));
   const currentView = views[source];
   const scrollBodyRef = useRef<HTMLDivElement>(null);
+  const onAddRef = useRef(onAdd);
+  onAddRef.current = onAdd;
+  const handleRowAdd = useCallback((song: SearchResult) => {
+    onAddRef.current(song);
+  }, []);
   const { startIndex, endIndex, topSpacerPx, bottomSpacerPx } = useVirtualListWindow(scrollBodyRef, {
     count: compact ? 0 : currentView.songs.length,
     itemSize: 52,
@@ -358,7 +364,7 @@ export default memo(function HotSongPanel({
           <div className="flex w-max gap-2.5">
             {displaySongs.map((song, i) => {
               const key = songKey(song);
-              return <CompactToplistCard key={key} song={song} rank={i + 1} isAdding={addingId === key} onAdd={onAdd} />;
+              return <CompactToplistCard key={key} song={song} rank={i + 1} isAdding={addingId === key} onAdd={handleRowAdd} />;
             })}
           </div>
         </div>
@@ -377,7 +383,7 @@ export default memo(function HotSongPanel({
         {visibleSongs.map((song, idx) => {
           const rank = startIndex + idx + 1;
           const key = songKey(song);
-          return <ToplistRow key={key} song={song} rank={rank} isAdding={addingId === key} onAdd={onAdd} />;
+          return <ToplistRow key={key} song={song} rank={rank} isAdding={addingId === key} onAdd={handleRowAdd} />;
         })}
       </div>
     );

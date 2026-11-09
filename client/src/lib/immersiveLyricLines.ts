@@ -136,3 +136,33 @@ export function mergeLyricTranslations<T extends { time: number; text: string; t
   }
   return out;
 }
+
+/** 只补全同一句、同时间轴的译文，已有译文始终优先 */
+export function supplementLyricTranslations<T extends { time: number; text: string; translation?: string }>(
+  lines: T[],
+  translations: unknown,
+): T[] {
+  if (!Array.isArray(translations)) return lines;
+  const valid = translations.filter((line): line is { time: number; text: string; translation: string } =>
+    line && Number.isFinite(line.time) && typeof line.text === 'string'
+    && typeof line.translation === 'string' && line.translation.length <= 500
+    && /[\u3400-\u9fff]/u.test(line.translation));
+  let changed = false;
+  const result = lines.map(line => {
+    if (line.translation) return line;
+    const match = valid.find(other => other.text === line.text && Math.abs(other.time - line.time) < 0.051);
+    if (!match) return line;
+    changed = true;
+    return { ...line, translation: match.translation };
+  });
+  return changed ? result : lines;
+}
+
+export function serializeLyricTranslations(lines: { time: number; translation?: string }[]): string {
+  return lines.filter(line => line.translation && Number.isFinite(line.time)).map(line => {
+    const ms = Math.max(0, Math.round(line.time * 1000));
+    const minutes = String(Math.floor(ms / 60000)).padStart(2, '0');
+    const seconds = String(Math.floor(ms / 1000) % 60).padStart(2, '0');
+    return `[${minutes}:${seconds}.${String(ms % 1000).padStart(3, '0')}]${line.translation}`;
+  }).join('\n');
+}

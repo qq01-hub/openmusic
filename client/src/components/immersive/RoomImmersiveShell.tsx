@@ -568,10 +568,10 @@ export default function RoomImmersiveShell({
             >
               <X className="h-4 w-4" />
             </button>
+            <QueueSystemToast />
           </div>
           <div className="relative min-h-0 flex-1 overflow-hidden p-2">
             {mountedPanels.queue ? queueContent : null}
-            <QueueSystemToast />
           </div>
         </div>
       </div>

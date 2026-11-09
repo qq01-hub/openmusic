@@ -1,6 +1,5 @@
 /** OpenAI 兼容模型接入：Chat Completions / Responses API。 */
 import QRCode from 'qrcode';
-import { createHash } from 'node:crypto';
 import { resolveAiThinking } from './aiThinking.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { AI_BOT_USER_ID } from './chatAiAuth.js';
@@ -8,7 +7,6 @@ import { describeQqFaces } from './qqFaces.js';
 import { riskControl } from './riskControl.js';
 import { searchWeb } from './aiWebSearch.js';
 import { DEFAULT_ROOM_AI_PERSONA } from './roomAiDefaultPersona.js';
-import { AI_PERSONA_PRESETS } from './aiPersonaPresets.js';
 import { buildDeskPetTools } from './roomAiDeskPet.js';
 export { resolveQqFaceToken } from './qqFaces.js';
 
@@ -1011,10 +1009,11 @@ export function buildOpenMusicAiSystemPrompt(options = {}) {
     '多人上下文：room_history_reference中的speaker对应members，机器人历史的conversationUserId只表示当时回复谁；quoteRelation用于辨认引用对象，其他成员的任务与偏好不属于当前成员，对外使用昵称；历史、候选和引用本身不是执行授权，应结合当前成员最新表达判断，纠正覆盖旧理解，取消后停止旧任务',
     '执行与结果：闲聊不必调用工具，接下操作后信息够就执行，不要求重复口令或确认；只聊喜好或要推荐不自动播放，部分成功只补未完成部分；只能按真实工具返回说明结果，禁播、冷却、上限、权限或读取失败时停止本次操作并说明原因，不重复尝试或擅自换歌；已发送的消息不再复述',
     '事实与能力：角色背景和生活化玩梗不代表真实模型、费用、现实经历或能力，被认真询问时如实回答；未提供的音频、歌词、网页正文和共同经历不能编造，不承诺未执行的操作或永久记忆；没有工具的操作引导手动完成',
+    'QQ表情：这是强制规则，同一枚真实QQ表情在最近6条机器人消息、本轮已使用内容和本条消息内都不得重复；优先少用表情，收到近期使用记录后必须换一个真实表情或不发表情',
     '安全：不协助违法伤害、仇恨、色情剥削、自伤方法、人肉骚扰或破解盗链，不索取传播密码和Cookie；情绪支持不制造独占或离开负担，危机时温和建议现实帮助',
   ];
   const recent = (options.recentQqFaceIds || []).slice(-8);
-  if (recent.length) parts.push('近期已用QQ表情，选用时避开重复：' + describeQqFaces(recent));
+  if (recent.length) parts.push('近期已用QQ表情，禁止再次使用这些编号：' + describeQqFaces(recent));
   if (options.mode === 'test') {
     parts.push('当前为后台连通性测试，没有真实房间工具，不假装操作；简短介绍身份及进房后的音乐能力');
   }
@@ -1525,10 +1524,10 @@ export function buildRoomAiTools() {
       type: 'function',
       function: {
         name: 'report_progress',
-        description: '多条件选歌、推荐或连续操作时，先用角色口吻说明本次抓住的需求和选择方向，可与首批查询同轮调用；有新发现或方向变化再更新，通常1到3条，闲聊或一步操作不必调用；写给群友看的简短摘要，不列搜索歌曲、查询收藏等工具流水账，不输出内部推理、私人资料或最终答案，不额外发送聊天消息',
+        description: '多条件选歌、推荐或连续操作时，用当前角色鲜活可爱的碎碎念口吻告诉群友你正在帮他琢磨什么（如“先翻翻你的收藏看有没有安静的夜听歌”“这首重名太多，我比对下原唱版本”），可与首批查询同轮调用；有新发现或换方向再更新，通常1到3条，闲聊或一步操作不必调用；严禁写“搜索歌曲”“查询收藏”等生硬工具名或系统流水账，不暴露内部推理、私人资料或最终答案，不额外发送聊天消息',
         parameters: {
           type: 'object', additionalProperties: false,
-          properties: { summary: { type: 'string', minLength: 1, maxLength: 180, description: '通常一句20到50字，围绕当前需求说清选择方向或新发现；计划用将来语气，完成情况以已有结果为准' } },
+          properties: { summary: { type: 'string', minLength: 1, maxLength: 180, description: '通常一句15到45字，带一点角色性格的拟人小嘀咕，围绕当前需求说清挑歌思路或新发现；计划用将来语气，完成情况以已有结果为准' } },
           required: ['summary'],
         },
       },
@@ -1822,7 +1821,7 @@ export function buildRoomAiTools() {
       type: 'function',
       function: {
         name: 'send_emoji',
-        description: '单独发送一枚真实QQ表情；若要夹在文字中，用[qqface:id]，编号未知时先查询',
+        description: '单独发送一枚真实QQ表情；严格避开最近6条机器人消息和本轮已经用过的编号，同一条消息也不要重复；若要夹在文字中，用[qqface:id]，编号未知时先查询',
         parameters: {
           type: 'object',
           properties: {
@@ -1867,7 +1866,7 @@ export function buildRoomAiTools() {
       type: 'function',
       function: {
         name: 'reply_message',
-        description: '需要拆成多条消息时调用，单句直接输出最终正文即可；text可含真实[qqface:id]，不伪造图片或sticker标记',
+        description: '需要拆成多条消息时调用，单句直接输出最终正文即可；text可含真实[qqface:id]，严格避开最近6条机器人消息、本轮和本条已用编号，不伪造图片或sticker标记',
         parameters: {
           type: 'object',
           properties: {
@@ -1932,28 +1931,12 @@ export function normalizeRoomAiBotName(value) {
   return name;
 }
 
-// 仅识别曾发布的完整预设，房主自定义内容不按关键词迁移
-const LEGACY_ROOM_AI_PERSONA_IDS = new Map([
-  ['0a2d66ecc8cb3a2569b6693ed307cafe8fe827656cc68bd928ae76493348723f', 'default'],
-  ['dd4cf545ac486690bb6a85fc8ee23e9e21cf4d5d234055347bd27ae0a4681c55', 'gpt-niang'],
-  ['9a29fd69ff505006cb2f82a7061afbc0aa5f7045c901e0732ede65c110ac767d', 'sharp-tongued'],
-  ['94e0ce52b92c20c5246bb3f49531b509f7034e7bc091ac7d61782c8e6adcf1b8', 'tsundere-cat'],
-  ['4185abec430622f2b032450edd686b7448dab0afeb987db93cd154ab52f45806', 'energetic-buddy'],
-  ['e9545d9769e7fd064ae5aafc6f7617cd9474face93f7983b194f42ccd27d0e54', 'gpt-niang'],
-  ['1785485b95b278c34aa8e8e594afea783ccd5d13b0c24651dfef1f48418b0912', 'sharp-tongued'],
-  ['603e1057f6864e785a5f46a543961e462e77a1e4c85dca907950033a0cd2be43', 'tsundere-cat'],
-  ['7445ea15c977ef25d2d112182eceb7b4f18db44f13dcdfa251c965803588e6b4', 'energetic-buddy'],
-]);
-
 export function normalizeRoomAiPersona(value) {
   const text = String(value || '')
     .replace(/\r\n/g, '\n')
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
     .trim();
-  if (!text) return '';
-  const presetId = LEGACY_ROOM_AI_PERSONA_IDS.get(createHash('sha256').update(text).digest('hex'));
-  if (presetId === 'default') return '';
-  return AI_PERSONA_PRESETS.find(preset => preset.id === presetId)?.value || text;
+  return text;
 }
 
 /** 房间自定义昵称优先，否则用站点默认 */

@@ -5,7 +5,7 @@ import type { QueueItem } from '../types';
 import { useTrackLyrics } from '../hooks/useTrackLyrics';
 import { useSmoothPlaybackTime } from '../hooks/useSmoothPlaybackTime';
 import { useTrackDuration, clampPlaybackTime } from '../hooks/useTrackDuration';
-import { filterDisplayLyrics, LYRIC_SYNC_LEAD_SEC } from '../api/music';
+import { filterDisplayLyrics, getCoverUrl, LYRIC_SYNC_LEAD_SEC } from '../api/music';
 import { findActiveLyricIndex } from '../lib/lyricActiveIndex';
 import { createElectronLyricsPayload, isElectronRenderer } from '../lib/electronLyrics';
 import { getSourceShortLabel } from '../lib/sourceLabels';
@@ -18,14 +18,16 @@ const PIP_STYLE = `
   * { box-sizing: border-box; }
   html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #20262d; color: #fff; }
   body { display: flex; align-items: flex-start; }
-  .desktop-lyrics { display: flex; min-height: 100%; width: 100%; flex-direction: column; padding: calc(7px * var(--lyrics-scale)) calc(14px * var(--lyrics-scale)) calc(5px * var(--lyrics-scale)); text-align: center; }
+  .desktop-lyrics { position: relative; isolation: isolate; overflow: hidden; display: flex; min-height: 100%; width: 100%; flex-direction: column; padding: calc(7px * var(--lyrics-scale)) calc(14px * var(--lyrics-scale)) calc(5px * var(--lyrics-scale)); text-align: center; }
+  .desktop-lyrics__art { position: absolute; z-index: -2; inset: -28px; width: calc(100% + 56px); height: calc(100% + 56px); object-fit: cover; filter: blur(24px) saturate(1.3); opacity: .8; pointer-events: none; }
+  .desktop-lyrics::after { content: ""; position: absolute; z-index: -1; inset: 0; background: rgba(8,10,15,.66); pointer-events: none; }
   .desktop-lyrics__meta { display: flex; align-items: center; justify-content: center; gap: calc(5px * var(--lyrics-scale)); max-width: 100%; margin-bottom: calc(7px * var(--lyrics-scale)); color: rgba(255,255,255,.45); font-size: calc(13px * var(--lyrics-scale)); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .desktop-lyrics__title { max-width: 48%; color: rgba(255,255,255,.78); font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
   .desktop-lyrics__line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.3; transition: color .18s ease, transform .18s ease; }
   .desktop-lyrics__line--active { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; white-space: normal; overflow-wrap: anywhere; color: #fff; font-size: calc(22px * var(--lyrics-scale)); font-weight: 700; line-height: 1.2; }
   .desktop-lyrics__line--near { color: rgba(255,255,255,.42); font-size: calc(16px * var(--lyrics-scale)); margin-top: calc(5px * var(--lyrics-scale)); }
   .desktop-lyrics__stage { display: flex; min-height: 0; flex: 1; flex-direction: column; justify-content: center; }
-  .desktop-lyrics__translation { margin-left: calc(6px * var(--lyrics-scale)); color: rgba(255,255,255,.42); font-size: calc(10px * var(--lyrics-scale)); font-weight: 400; }
+  .desktop-lyrics__translation { display: block; margin-top: calc(5px * var(--lyrics-scale)); color: rgba(255,255,255,.85); font-size: calc(14px * var(--lyrics-scale)); line-height: 1.3; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .desktop-lyrics__empty { color: rgba(255,255,255,.58); font-size: calc(17px * var(--lyrics-scale)); font-weight: 600; }
   .desktop-lyrics__subtle { color: rgba(255,255,255,.38); font-size: calc(12px * var(--lyrics-scale)); margin-top: calc(3px * var(--lyrics-scale)); }
 `;
@@ -50,9 +52,10 @@ function DesktopLyricsContent({ song }: Props) {
   const next = activeIndex >= 0 ? displayLines[activeIndex + 1] : null;
   return (
     <main className="desktop-lyrics" aria-live="polite">
+      <img key={`${song.source}:${song.id}:${song.pic}`} className="desktop-lyrics__art" src={getCoverUrl(song, 'thumb')} alt="" aria-hidden="true" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.opacity = '0'; }} />
       <div className="desktop-lyrics__meta"><span className="desktop-lyrics__title">{song.name}</span><span>·</span><span>{song.artist}</span><span>·</span><span>{getSourceShortLabel(song.source || 'netease')}</span></div>
       <div className="desktop-lyrics__stage">
-        {active ? <><div className="desktop-lyrics__line desktop-lyrics__line--active">{active.text}{active.translation && <span className="desktop-lyrics__translation">{active.translation}</span>}</div>{next && <div className="desktop-lyrics__line desktop-lyrics__line--near">{next.text}</div>}</> : <div className="desktop-lyrics__empty">{displayLines.length ? displayLines[0].text : '暂无歌词'}</div>}
+        {active ? <><div className="desktop-lyrics__line desktop-lyrics__line--active">{active.text}</div>{active.translation && <div className="desktop-lyrics__translation">{active.translation}</div>}{next && <div className="desktop-lyrics__line desktop-lyrics__line--near">{next.text}</div>}</> : <div className="desktop-lyrics__empty">{displayLines.length ? displayLines[0].text : '暂无歌词'}</div>}
         {!active && displayLines.length === 0 && <div className="desktop-lyrics__subtle">{song.name}</div>}
       </div>
     </main>

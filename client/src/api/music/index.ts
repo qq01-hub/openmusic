@@ -13,7 +13,7 @@ import { resizeCoverUrl, type CoverSize } from '../../lib/coverUrl';
 import { requireSessionBootstrap } from '../../lib/sessionBootstrap';
 import { signApiUrl } from '../../lib/signedApiUrl';
 import { isBlockedPlaybackUrl, SourceUnavailableError } from '../../lib/audioPlaybackError';
-import { mergeLyricTranslations } from '../../lib/immersiveLyricLines';
+import { mergeLyricTranslations, supplementLyricTranslations } from '../../lib/immersiveLyricLines';
 export {
   filterDisplayLyrics,
   getActiveLyricLine,
@@ -238,6 +238,43 @@ export async function getLyrics(song: LyricsSong): Promise<string> {
   });
   lyricsInflight.set(key, promise);
   return promise;
+}
+
+const translationRequests = new Map<string, { expires: number; promise: Promise<unknown> }>();
+
+export function getLyricTranslations(song: Pick<Song, 'id' | 'source'>): Promise<unknown> {
+  const source = song.source || 'netease';
+  const key = `${source}:${song.id}`;
+  const cached = translationRequests.get(key);
+  if (cached && cached.expires > Date.now()) return cached.promise;
+  const entry = {
+    expires: Date.now() + LYRICS_CACHE_TTL_MS,
+    promise: Promise.resolve<unknown>([]),
+  };
+  entry.promise = fetchWithTimeout('/api/music/lyrics/translate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source, id: song.id }),
+  }, 90000).then(async response => {
+    if (!response.ok) throw new Error('translation unavailable');
+    const data = await response.json() as { translations?: unknown };
+    return data.translations;
+  }).catch(() => {
+    entry.expires = Date.now() + 30_000;
+    return [];
+  });
+  translationRequests.delete(key);
+  translationRequests.set(key, entry);
+  while (translationRequests.size > MAX_LYRICS_CACHE_ENTRIES) {
+    translationRequests.delete(translationRequests.keys().next().value!);
+  }
+  return entry.promise;
+}
+
+export async function getTranslatedLyricLines(song: Pick<Song, 'id' | 'source'>, lines: import('../../types').LyricLine[]) {
+  if (!filterDisplayLyrics(lines).some(line => !line.translation
+    && /[A-Za-z\u3040-\u30ff\uac00-\ud7af]/u.test(line.text) && !/[\u3400-\u9fff]/u.test(line.text))) return lines;
+  return supplementLyricTranslations(lines, await getLyricTranslations(song));
 }
 
 export function getCoverUrl(
