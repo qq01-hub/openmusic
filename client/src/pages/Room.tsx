@@ -79,6 +79,7 @@ import RoomQualityBadge from '../components/RoomQualityBadge';
 import { useSiteFeaturesStore } from '../stores/siteFeaturesStore';
 import { resolveEffectiveAudioQuality, useUserQualityStore } from '../stores/userQualityStore';
 import { invalidateUnloadedSongUrlCache, prefetchUpcomingFromRoom } from '../lib/songPreloadCache';
+import { stopSongPreview } from '../lib/songPreviewPlayer';
 import { DEFAULT_MEMBER_SETTINGS } from '../lib/memberTierPresets';
 import { getSongRequestBlockReason } from '../lib/roomPermissions';
 import { markAnnouncementSeen, shouldAutoShowAnnouncement } from '../lib/announcementSeen';
@@ -968,6 +969,13 @@ export default function Room() {
       showToast(res.error || '收藏列表加载失败', 'error');
     }
   }, [cachedFavorites.length, listFavorites, listCategories, showToast, applyFavorites]);
+
+  // 收藏弹框的试听由全局播放器驱动，不随弹框卸载停止；
+  // 关闭收藏或在其上叠开分享弹框时主动收尾，避免看不见的弹框继续出声
+  useEffect(() => {
+    if (!favoritesOpen || favoriteShareOpen) return;
+    return () => stopSongPreview({ resumeRoom: true });
+  }, [favoriteShareOpen, favoritesOpen]);
 
   const handleCreateFavoriteCategory = useCallback(async () => {
     const name = newFavoriteCategoryName.trim();
