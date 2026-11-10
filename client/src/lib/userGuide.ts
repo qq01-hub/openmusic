@@ -118,7 +118,7 @@ export const GUIDE_STEPS: GuideStep[] = [
     id: 'room-queue',
     scope: 'room',
     title: '播放队列',
-    body: '查看待播歌曲，用户轮播会提前预告下一首',
+    body: '查看待播歌曲，用户轮播时标题右侧常驻显示下一首，悬停可查看完整歌曲信息',
     side: 'top',
   },
   {

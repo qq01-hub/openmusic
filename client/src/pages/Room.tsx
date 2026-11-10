@@ -85,7 +85,7 @@ import { markAnnouncementSeen, shouldAutoShowAnnouncement } from '../lib/announc
 import JumpRequestBanner from '../components/JumpRequestBanner';
 import Toast from '../components/Toast';
 import ShareSongCardModal from '../components/ShareSongCardModal';
-import QueueSystemToast from '../components/QueueSystemToast';
+import QueueSystemToast, { UpcomingSongNotice } from '../components/QueueSystemToast';
 import Tooltip from '../components/Tooltip';
 import RoomThemeColorPicker from '../components/RoomThemeColorPicker';
 import UserRoleMarks from '../components/UserRoleMarks';
@@ -2859,8 +2859,11 @@ export default function Room() {
       }`}
     >
       <div className="room-panel-divider relative flex items-center justify-between px-4 py-2.5 sm:py-3 border-b flex-shrink-0">
-        <h2 className="text-sm font-medium">播放队列</h2>
-        <div className="flex items-center gap-1.5">
+        <div className="mr-3 flex min-w-0 flex-1 items-center gap-2.5">
+          <h2 className="shrink-0 text-sm font-medium">播放队列</h2>
+          <UpcomingSongNotice />
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
           {canClearQueue && (
             <button
               type="button"

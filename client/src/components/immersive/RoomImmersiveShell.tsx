@@ -6,7 +6,7 @@ import {
   requestElementFullscreen,
   subscribeFullscreenChange,
 } from '../../lib/browserFullscreen';
-import QueueSystemToast from '../QueueSystemToast';
+import QueueSystemToast, { UpcomingSongNotice } from '../QueueSystemToast';
 import Tooltip from '../Tooltip';
 
 type PanelId = 'search' | 'queue' | 'chat';
@@ -559,11 +559,14 @@ export default function RoomImmersiveShell({
       >
         <div className="mineradio-glass-panel m-3 flex h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-[22px]">
           <div className="relative flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
-            <h2 className="text-sm font-medium text-white/90">播放队列</h2>
+            <div className="mr-3 flex min-w-0 flex-1 items-center gap-2.5">
+              <h2 className="shrink-0 text-sm font-medium text-white/90">播放队列</h2>
+              <UpcomingSongNotice />
+            </div>
             <button
               type="button"
               onClick={() => setOpenPanel(null)}
-              className="rounded-lg p-1 text-white/40 hover:bg-white/10 hover:text-white"
+              className="shrink-0 rounded-lg p-1 text-white/40 hover:bg-white/10 hover:text-white"
               aria-label="关闭队列"
             >
               <X className="h-4 w-4" />

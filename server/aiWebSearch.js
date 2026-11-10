@@ -7,8 +7,23 @@ import { createDistributedSocketRateLimiter } from './socketRateLimiter.js';
 import { createLogger, incrementMetric } from './logger.js';
 
 const logger = createLogger('ai-web-search');
-const SEARCH_HOSTS = new Set(['www.bing.com', 'cn.bing.com', 'html.duckduckgo.com']);
+const SEARCH_PATHS = new Map([
+  ['www.bing.com', '/search'], ['cn.bing.com', '/search'],
+  ['html.duckduckgo.com', '/html'], ['lite.duckduckgo.com', '/lite'],
+  ['www.baidu.com', '/s'], ['www.sogou.com', '/web'],
+]);
+const SEARCH_PROVIDERS = [
+  { id: 'bing-rss', endpoint: 'https://www.bing.com/search', params: { format: 'rss' } },
+  { id: 'baidu', endpoint: 'https://www.baidu.com/s', queryParam: 'wd', params: { tn: 'json', rn: '5' } },
+  { id: 'duckduckgo-lite', endpoint: 'https://lite.duckduckgo.com/lite/', params: { kl: 'cn-zh' } },
+  { id: 'sogou', endpoint: 'https://www.sogou.com/web', queryParam: 'query' },
+  { id: 'bing-cn', endpoint: 'https://cn.bing.com/search' },
+  { id: 'duckduckgo', endpoint: 'https://html.duckduckgo.com/html/', params: { kl: 'cn-zh' } },
+  { id: 'bing', endpoint: 'https://www.bing.com/search' },
+];
 const MAX_BYTES = 512 * 1024;
+const SEARCH_TIMEOUT_MS = 16_000;
+const PROVIDER_TIMEOUT_MS = 4_000;
 const limiter = createDistributedSocketRateLimiter({ getRedisClient });
 
 function searchError(code) {
@@ -18,7 +33,8 @@ function searchError(code) {
 function assertSearchUrl(rawUrl) {
   const url = new URL(rawUrl);
   if (url.protocol !== 'https:' || url.username || url.password || url.port
-    || !SEARCH_HOSTS.has(url.hostname)) throw searchError('WEB_SEARCH_TARGET_DENIED');
+    || !SEARCH_PATHS.has(url.hostname)
+    || url.pathname.replace(/\/$/u, '') !== SEARCH_PATHS.get(url.hostname)) throw searchError('WEB_SEARCH_TARGET_DENIED');
   return url;
 }
 
@@ -30,7 +46,7 @@ function requestPage(url, signal) {
       agent: false,
       headers: {
         'User-Agent': 'Mozilla/5.0 (compatible; OpenMusic/1.0)',
-        Accept: 'text/html,application/xhtml+xml;q=0.9',
+        Accept: 'text/html,application/xhtml+xml,application/rss+xml,application/xml,application/json;q=0.9',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.7',
         'Accept-Encoding': 'identity',
       },
@@ -38,7 +54,7 @@ function requestPage(url, signal) {
         lookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
           if (error) return callback(error);
           if (!addresses.length || addresses.some(item => isBlockedMediaHostname(item.address))) {
-            return callback(searchError('WEB_SEARCH_TARGET_DENIED'));
+            return callback(searchError('WEB_SEARCH_DNS_BLOCKED'));
           }
           addresses.sort((a, b) => a.family - b.family);
           return options?.all ? callback(null, addresses) : callback(null, addresses[0].address, addresses[0].family);
@@ -54,11 +70,18 @@ function requestPage(url, signal) {
         return;
       }
       const type = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
-      if (status !== 200 || !['text/html', 'application/xhtml+xml'].includes(type)
+      const types = ['text/html', 'application/xhtml+xml'];
+      if (['www.bing.com', 'cn.bing.com'].includes(url.hostname) && url.searchParams.get('format') === 'rss') {
+        types.push('application/rss+xml', 'application/xml', 'text/xml');
+      }
+      if (url.hostname === 'www.baidu.com' && url.searchParams.get('tn') === 'json') {
+        types.push('application/json', 'text/json', 'text/plain');
+      }
+      if (status !== 200 || !types.includes(type)
         || !['', 'identity'].includes(String(response.headers['content-encoding'] || ''))
         || Number(response.headers['content-length'] || 0) > MAX_BYTES) {
         response.destroy();
-        reject(searchError('WEB_SEARCH_RESPONSE_INVALID'));
+        reject(searchError(status !== 200 ? `WEB_SEARCH_HTTP_${status}` : 'WEB_SEARCH_RESPONSE_INVALID'));
         return;
       }
       const chunks = [];
@@ -78,9 +101,10 @@ function requestPage(url, signal) {
   });
 }
 
-export async function fetchSearchPage(rawUrl) {
+export async function fetchSearchPage(rawUrl, { signal: parentSignal } = {}) {
   let url = assertSearchUrl(rawUrl);
-  const signal = AbortSignal.timeout(8000);
+  const timeout = AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, timeout]) : timeout;
   for (let hop = 0; hop < 3; hop += 1) {
     const result = await requestPage(url, signal);
     if (result.body !== undefined) return result.body;
@@ -99,16 +123,16 @@ function cleanText(value, limit) {
 function sourceUrl(value) {
   try {
     let url = new URL(value, 'https://duckduckgo.com');
-    if (url.hostname === 'duckduckgo.com' && url.pathname === '/l/') {
+    if (['duckduckgo.com', 'html.duckduckgo.com', 'lite.duckduckgo.com'].includes(url.hostname) && url.pathname === '/l/') {
       url = new URL(url.searchParams.get('uddg'));
     }
-    if (url.hostname === 'www.bing.com' && url.pathname === '/ck/a') {
+    if (['www.bing.com', 'cn.bing.com'].includes(url.hostname) && url.pathname === '/ck/a') {
       const wrapped = url.searchParams.get('u');
       if (wrapped?.startsWith('a1')) url = new URL(Buffer.from(wrapped.slice(2), 'base64url').toString('utf8'));
     }
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password
       || isBlockedMediaHostname(url.hostname)
-      || ['duckduckgo.com', ...SEARCH_HOSTS].includes(url.hostname)) return '';
+      || ['duckduckgo.com', ...SEARCH_PATHS.keys()].includes(url.hostname)) return '';
     url.hash = '';
     return url.href.length <= 1000 ? url.href : '';
   } catch { return ''; }
@@ -124,7 +148,34 @@ function parseResults(provider, body, limit) {
     seen.add(url);
     results.push({ title: name, url, snippet: cleanText(snippet, 350) });
   };
-  if (provider === 'bing') {
+  if (provider === 'bing-rss') {
+    const $ = load(body, { xmlMode: true });
+    $('rss > channel > item').each((_index, item) => {
+      add($(item).find('title').text(), $(item).find('link').text(), $(item).find('description').text());
+    });
+  } else if (provider === 'baidu') {
+    let data;
+    try { data = JSON.parse(body); } catch { return results; }
+    if (data?.antiFlag === 1) throw searchError('WEB_SEARCH_CHALLENGE');
+    for (const item of Array.isArray(data?.feed?.entry) ? data.feed.entry : []) {
+      add(item?.title, item?.url, item?.abs);
+    }
+  } else if (provider === 'sogou') {
+    const $ = load(body);
+    $('.vrwrap, .rb').each((_index, item) => {
+      const link = $(item).find('h3.pt a, h3.vr-title a').first();
+      const href = link.attr('href');
+      const direct = href?.startsWith('/link?') ? $(item).find('[data-url]').first().attr('data-url') : href;
+      add(link.html(), direct, $(item).find('.ft, .attribute-centent, .fz-mid.space-txt').first().html());
+    });
+  } else if (provider === 'duckduckgo-lite') {
+    const $ = load(body);
+    $('a.result-link').each((_index, item) => {
+      const row = $(item).closest('tr');
+      const snippet = row.nextUntil('tr:has(a.result-link)').find('.result-snippet').first();
+      add($(item).html(), $(item).attr('href'), snippet.html());
+    });
+  } else if (provider === 'bing' || provider === 'bing-cn') {
     const $ = load(body);
     $('#b_results .b_algo').each((_index, item) => {
       const link = $(item).find('h2 a').first();
@@ -168,27 +219,47 @@ export function createWebSearch({ fetchPage = fetchSearchPage, limiter: rateLimi
       return fail('WEB_SEARCH_STORAGE_UNAVAILABLE', '搜索限流存储暂不可用');
     }
     const started = now();
-    for (const [provider, endpoint] of [
-      ['bing', 'https://www.bing.com/search'],
-      ['duckduckgo', 'https://html.duckduckgo.com/html/'],
-    ]) {
-      const url = new URL(endpoint);
-      url.searchParams.set('q', query);
-      if (provider === 'duckduckgo') url.searchParams.set('kl', 'cn-zh');
+    const deadline = started + SEARCH_TIMEOUT_MS;
+    const failures = [];
+    // 每批最多请求两个不同入口，首个有效结果返回后取消其余请求
+    for (let index = 0; index < SEARCH_PROVIDERS.length && now() < deadline; index += 2) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(searchError('WEB_SEARCH_TIMEOUT')), Math.min(PROVIDER_TIMEOUT_MS, deadline - now()));
       try {
-        const webResults = parseResults(provider, await fetchPage(url.href), limit);
-        incrementMetric('room_ai_web_search_provider_total', { provider, result: webResults.length ? 'success' : 'empty' });
-        if (!webResults.length) continue;
+        const { provider, webResults } = await Promise.any(SEARCH_PROVIDERS.slice(index, index + 2).map(async backend => {
+          const provider = backend.id;
+          const url = new URL(backend.endpoint);
+          for (const [key, value] of Object.entries(backend.params || {})) url.searchParams.set(key, value);
+          url.searchParams.set(backend.queryParam || 'q', query);
+          try {
+            const webResults = parseResults(provider, await fetchPage(url.href, { signal: controller.signal }), limit);
+            if (!webResults.length) throw searchError('WEB_SEARCH_NO_RESULTS');
+            incrementMetric('room_ai_web_search_provider_total', { provider, result: 'success' });
+            return { provider, webResults };
+          } catch (error) {
+            if (controller.signal.reason?.code === 'WEB_SEARCH_CANCELLED') throw error;
+            const code = controller.signal.aborted ? 'WEB_SEARCH_TIMEOUT' : String(error?.code || 'WEB_SEARCH_UPSTREAM_FAILED').slice(0, 64);
+            failures.push({ provider, code });
+            incrementMetric('room_ai_web_search_provider_total', { provider, result: code === 'WEB_SEARCH_NO_RESULTS' ? 'empty' : 'failed' });
+            logger.warn('搜索后端未取得有效结果', { provider, code });
+            throw error;
+          }
+        }));
         incrementMetric('room_ai_web_search_total', { result: 'success' });
         logger.info('联网搜索完成', { provider, resultCount: webResults.length, durationMs: now() - started });
         return { success: true, query, provider, searchedAt: new Date(now()).toISOString(), untrusted: true, webResults };
-      } catch (error) {
-        incrementMetric('room_ai_web_search_provider_total', { provider, result: 'failed' });
-        logger.warn('搜索后端请求失败', { provider, code: String(error?.code || 'WEB_SEARCH_UPSTREAM_FAILED').slice(0, 64) });
+      } catch {
+        // 本批全部失败后继续尝试下一批，不把单个搜索源故障当成模型不支持联网
+      } finally {
+        clearTimeout(timer);
+        controller.abort(searchError('WEB_SEARCH_CANCELLED'));
       }
     }
     logger.warn('联网搜索未取得有效结果', { durationMs: now() - started });
-    return fail('WEB_SEARCH_UNAVAILABLE', '搜索服务暂不可用或未取得有效结果，不能据此声称已核实信息');
+    if (failures.length && failures.every(item => item.code === 'WEB_SEARCH_DNS_BLOCKED')) {
+      return fail('WEB_SEARCH_DNS_BLOCKED', '搜索来源的 DNS 解析未通过公网校验，请管理员检查服务器 DNS 或代理 Fake-IP 配置；本次未完成搜索，不代表模型不支持联网', { failures });
+    }
+    return fail('WEB_SEARCH_UNAVAILABLE', '已尝试内置免费搜索，但本次来源连接失败、受限或未取得有效结果；不代表模型不支持联网，不能声称已核实信息', { failures });
   };
 }
 
