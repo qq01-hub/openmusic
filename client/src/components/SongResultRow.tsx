@@ -10,7 +10,7 @@ import Tooltip from './Tooltip';
 import TruncateTip from './TruncateTip';
 import { immersiveGlassListRow } from '../lib/immersiveGlass';
 import { useSongPreviewState } from '../hooks/useSongPreviewState';
-import { seekSongPreview, stopSongPreview, toggleSongPreview } from '../lib/songPreviewPlayer';
+import { seekSongPreview, stopSongPreview, toggleSongPreview, type SongPreviewOwner } from '../lib/songPreviewPlayer';
 
 interface Props {
   song: SearchResult;
@@ -20,6 +20,7 @@ interface Props {
   played: boolean;
   favorited: boolean;
   glassRow?: boolean;
+  previewOwner?: SongPreviewOwner;
   onAdd: (song: SearchResult) => void;
   onRemove?: (song: SearchResult) => void;
   cancelDisabledReason?: string;
@@ -46,6 +47,7 @@ function SongResultRow({
   played,
   favorited,
   glassRow = false,
+  previewOwner = 'search',
   onAdd,
   onRemove,
   cancelDisabledReason,
@@ -74,8 +76,8 @@ function SongResultRow({
 
   const handlePreview = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
-    void toggleSongPreview(song);
-  }, [song]);
+    void toggleSongPreview(song, previewOwner);
+  }, [previewOwner, song]);
 
   const handleAdd = useCallback((e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -269,6 +271,7 @@ export default memo(SongResultRow, (prev, next) => {
     && prev.played === next.played
     && prev.favorited === next.favorited
     && prev.glassRow === next.glassRow
+    && prev.previewOwner === next.previewOwner
     && prev.onAdd === next.onAdd
     && prev.onAddNext === next.onAddNext
     && prev.onShare === next.onShare

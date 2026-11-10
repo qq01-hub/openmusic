@@ -28,14 +28,17 @@ function canUseAurora(): boolean {
 
 function StaticGlow() {
   return (
-    <>
-      <div className="absolute top-[-20%] left-[10%] h-[600px] w-[600px] rounded-full bg-netease-red/5 blur-[140px] mix-blend-screen" />
-      <div className="absolute bottom-[-10%] right-[10%] h-[500px] w-[500px] rounded-full bg-purple-600/5 blur-[120px] mix-blend-screen" />
-    </>
+    <div
+      className="absolute inset-0"
+      style={{
+        backgroundImage:
+          'radial-gradient(ellipse 75% 65% at 12% 0%, rgba(255,77,85,0.24), transparent 75%), radial-gradient(ellipse 70% 60% at 88% 0%, rgba(192,132,252,0.20), transparent 75%), radial-gradient(ellipse 55% 50% at 50% 0%, rgba(244,114,182,0.12), transparent 80%)',
+      }}
+    />
   );
 }
 
-/** 首页背景：React Bits Aurora。 */
+/** 首页背景保留静态渐变，动态极光仅作为增强层 */
 export default function HomeAuroraBackdrop({ paused = false, roomCount = 0 }: { paused?: boolean; roomCount?: number }) {
   const [enabled, setEnabled] = useState(false);
   const handleUnavailable = useCallback(() => setEnabled(false), []);
@@ -48,15 +51,14 @@ export default function HomeAuroraBackdrop({ paused = false, roomCount = 0 }: { 
 
   return (
     <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
-      {enabled && !paused && !overloaded ? (
-        <Suspense fallback={<StaticGlow />}>
+      <StaticGlow />
+      {enabled && !paused && !overloaded && (
+        <Suspense fallback={null}>
           <div className="absolute inset-0 opacity-[0.68]">
             <Aurora colorStops={BRAND_STOPS} amplitude={1.05} blend={0.62} speed={0.55} onUnavailable={handleUnavailable} />
           </div>
           <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#050505]/35 to-[#050505]/85" />
         </Suspense>
-      ) : (
-        <StaticGlow />
       )}
       <div
         className="absolute inset-0 opacity-[0.025]"

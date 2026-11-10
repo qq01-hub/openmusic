@@ -124,7 +124,7 @@ if (typeof window !== 'undefined') {
 }
 
 export function useFavorites() {
-  const { listFavorites, listFavoriteCategories, createFavoriteCategory, deleteFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
+  const { listFavorites, listFavoriteCategories, createFavoriteCategory, renameFavoriteCategory, deleteFavoriteCategory, setFavorite, setFavoriteCategory, importFavorites: importFavoritesOnServer } = useSocket();
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => sharedFavoriteIds);
   const [favoriteSongs, setFavoriteSongs] = useState<FavoriteSong[]>(() => sharedFavoriteSongs);
   const [syncState, setSyncState] = useState<FavoritesSyncState>(() => sharedSyncState);
@@ -358,6 +358,16 @@ export function useFavorites() {
     });
   }, [createFavoriteCategory]);
 
+  const renameCategory = useCallback(async (oldName: string, newName: string) => {
+    return runFavoriteRequest(() => renameFavoriteCategory(oldName, newName), (result, accountId) => {
+      if (result.favorites) updateSharedFavorites(result.favorites);
+      if (result.categories) {
+        if (accountId) removeCache(categoriesCacheKey(accountId));
+        updateSharedCategories(result.categories);
+      }
+    });
+  }, [renameFavoriteCategory]);
+
   const setCachedFavoriteCategory = useCallback(async (song: FavoriteSong, category: string) => {
     return runFavoriteRequest(() => setFavoriteCategory(song, category), (result) => {
       if (result.favorites) updateSharedFavorites(result.favorites);
@@ -398,6 +408,7 @@ export function useFavorites() {
     categories,
     listCategories: listCachedCategories,
     addCategory: addFavoriteCategory,
+    renameCategory,
     deleteCategory,
   };
 }

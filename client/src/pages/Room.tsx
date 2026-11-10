@@ -59,6 +59,7 @@ import SearchSkeleton, { RESULT_BODY_HEIGHT } from '../components/SearchSkeleton
 import SongResultList from '../components/SongResultList';
 import SongResultRow from '../components/SongResultRow';
 import SearchInputWithSuggestions, { type SelectedMusicSuggestion } from '../components/SearchInputWithSuggestions';
+import { addSearchHistory, readSearchHistory, writeSearchHistory, type SearchHistoryMode } from '../lib/searchHistory';
 import {
   getStoredSongResultPageSize,
   setStoredSongResultPageSize,
@@ -353,6 +354,7 @@ export default function Room() {
     categories: favoriteCategories,
     listCategories,
     addCategory,
+    renameCategory,
     deleteCategory,
   } = useFavorites();
   const { queueKeys, playedKeys } = useRoomSongKeySets();
@@ -402,6 +404,8 @@ export default function Room() {
   );
 
   const [query, setQuery] = useState('');
+  const [songSearchHistory, setSongSearchHistory] = useState<string[]>(() => readSearchHistory('song'));
+  const [playlistSearchHistory, setPlaylistSearchHistory] = useState<string[]>(() => readSearchHistory('playlist'));
 
   const [results, setResults] = useState<SearchResult[]>([]);
 
@@ -423,6 +427,12 @@ export default function Room() {
   const [activeSearchMode, setActiveSearchMode] = useState<SearchMode>('song');
   const [overlaySearchMode, setOverlaySearchMode] = useState<SearchMode>('song');
   const [overlayQuery, setOverlayQuery] = useState('');
+  const rememberSearch = useCallback((mode: SearchHistoryMode, keyword: string) => {
+    const setter = mode === 'song' ? setSongSearchHistory : setPlaylistSearchHistory;
+    setter((current) => addSearchHistory(current, keyword));
+  }, []);
+  useEffect(() => writeSearchHistory('song', songSearchHistory), [songSearchHistory]);
+  useEffect(() => writeSearchHistory('playlist', playlistSearchHistory), [playlistSearchHistory]);
   const prevOverlayOpenRef = useRef(false);
   const songSearchRequestRef = useRef(0);
   const songSearchAbortRef = useRef<AbortController | null>(null);
@@ -517,6 +527,27 @@ export default function Room() {
   const [favoritesImportProgress, setFavoritesImportProgress] = useState('');
   const [deletingFavoriteCategory, setDeletingFavoriteCategory] = useState<string | null>(null);
   const [deleteFavoriteCategoryTarget, setDeleteFavoriteCategoryTarget] = useState<string | null>(null);
+  const [renameFavoriteCategoryTarget, setRenameFavoriteCategoryTarget] = useState<string | null>(null);
+  const [renameFavoriteCategoryName, setRenameFavoriteCategoryName] = useState('');
+  const [renamingFavoriteCategory, setRenamingFavoriteCategory] = useState(false);
+  const renameFavoriteCategoryPendingRef = useRef(false);
+  const [replayedHistoryKeys, setReplayedHistoryKeys] = useState<Set<string>>(() => new Set());
+  const replayingHistoryRef = useRef(new Set<string>());
+
+  useEffect(() => {
+    setReplayedHistoryKeys(new Set());
+  }, [room?.id]);
+
+  useEffect(() => {
+    setReplayedHistoryKeys((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      for (const key of prev) {
+        if (queueKeys.has(key)) next.add(key);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [queueKeys]);
 
   useEffect(() => {
     setFavorites(cachedFavorites);
@@ -974,7 +1005,7 @@ export default function Room() {
   // 关闭收藏或在其上叠开分享弹框时主动收尾，避免看不见的弹框继续出声
   useEffect(() => {
     if (!favoritesOpen || favoriteShareOpen) return;
-    return () => stopSongPreview({ resumeRoom: true });
+    return () => stopSongPreview({ resumeRoom: true, owner: 'favorites' });
   }, [favoriteShareOpen, favoritesOpen]);
 
   const handleCreateFavoriteCategory = useCallback(async () => {
@@ -992,6 +1023,35 @@ export default function Room() {
     setNewFavoriteCategoryOpen(false);
     showToast('分类已创建', 'success');
   }, [addCategory, creatingFavoriteCategory, newFavoriteCategoryName, showToast]);
+
+  const handleRenameFavoriteCategory = useCallback(async () => {
+    const oldName = renameFavoriteCategoryTarget;
+    const nextName = renameFavoriteCategoryName.trim();
+    if (!oldName || !nextName || renameFavoriteCategoryPendingRef.current) return;
+    if (nextName === oldName) {
+      setRenameFavoriteCategoryTarget(null);
+      setRenameFavoriteCategoryName('');
+      return;
+    }
+    renameFavoriteCategoryPendingRef.current = true;
+    setRenamingFavoriteCategory(true);
+    const result = await renameCategory(oldName, nextName).finally(() => {
+      renameFavoriteCategoryPendingRef.current = false;
+      setRenamingFavoriteCategory(false);
+    });
+    if (!result.success) {
+      showToast(result.error || '分类改名失败', 'error');
+      return;
+    }
+    if (result.favorites) {
+      setFavorites(result.favorites);
+      applyFavorites(result.favorites);
+    }
+    setActiveFavoriteCategory(result.category || nextName);
+    setRenameFavoriteCategoryTarget(null);
+    setRenameFavoriteCategoryName('');
+    showToast('分类名称已修改', 'success');
+  }, [applyFavorites, renameCategory, renameFavoriteCategoryName, renameFavoriteCategoryTarget, showToast]);
 
   const handleDeleteFavoriteCategory = useCallback(async (category: string, keepSongs: boolean) => {
     if (deletingFavoriteCategory) return;
@@ -1687,6 +1747,7 @@ export default function Room() {
 
   const handleSearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
     const keyword = (selectedKeyword ?? query).trim();
+    if (keyword) rememberSearch(searchMode, keyword);
     const detectedPlatform = detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
@@ -1704,7 +1765,7 @@ export default function Room() {
     setPlaylistSearchTotal(0);
     setSearchedKeyword(keyword);
     void doSearch(keyword, searchFilterMode, suggestion);
-  }, [query, searchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
+  }, [query, searchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport, rememberSearch]);
 
   const handleSearchModeChange = useCallback((mode: SearchMode) => {
     if (mode === searchMode) return;
@@ -1743,6 +1804,7 @@ export default function Room() {
 
   const handleOverlaySearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
     const keyword = (selectedKeyword ?? overlayQuery).trim();
+    if (keyword) rememberSearch(overlaySearchMode, keyword);
     const detectedPlatform = detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
@@ -1760,7 +1822,7 @@ export default function Room() {
     setPlaylistSearchTotal(0);
     setSearchedKeyword(keyword);
     void doSearch(keyword, searchFilterMode, suggestion);
-  }, [overlayQuery, overlaySearchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport]);
+  }, [overlayQuery, overlaySearchMode, searchFilterMode, doPlaylistSearch, doSearch, handlePlaylistImport, rememberSearch]);
 
   const handleOverlaySearchModeChange = useCallback((mode: SearchMode) => {
     if (mode === overlaySearchMode) return;
@@ -1877,10 +1939,10 @@ export default function Room() {
     }
   }, [searchDetailOrigin, isPlaylistResults, playlistSearchBackup, handleBackToPlaylistSearch, clearSearchResults, resetRadioProgramState]);
 
-  const handleAdd = useCallback(async (song: SearchResult, jump = false) => {
+  const handleAdd = useCallback(async (song: SearchResult, jump = false): Promise<boolean> => {
     if (songRequestBlockReason) {
       showToast(songRequestBlockReason, 'error');
-      return;
+      return false;
     }
     const key = songKey(song);
     setAddingId(key);
@@ -1899,10 +1961,30 @@ export default function Room() {
     if (res.success) {
       lastSongRequestAtRef.current = Date.now();
       if (jump) showToast('已点歌并插队到下一首', 'success');
-    } else if (res.error) {
+      return true;
+    }
+    if (res.error) {
       showToast(res.error, 'error');
     }
+    return false;
   }, [songRequestBlockReason, addSong, showToast]);
+
+  const handleReplayHistorySong = useCallback(async (song: SongHistoryItem) => {
+    const key = songKey(song);
+    if (replayingHistoryRef.current.has(key)) return;
+    replayingHistoryRef.current.add(key);
+    const requestRoomId = useRoomStore.getState().room?.id;
+    const ok = await handleAdd(song as SearchResult).finally(() => replayingHistoryRef.current.delete(key));
+    if (useRoomStore.getState().room?.id !== requestRoomId) return;
+    if (ok) {
+      setReplayedHistoryKeys((prev) => {
+        if (prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.add(key);
+        return next;
+      });
+    }
+  }, [handleAdd]);
 
   const handleAddNext = useCallback((song: SearchResult) => {
     void handleAdd(song, true);
@@ -2937,6 +3019,7 @@ export default function Room() {
           value={query}
           onChange={setQuery}
           onSearch={handleSearch}
+          searchHistory={searchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
           placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
           searching={searching}
           suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
@@ -3074,6 +3157,7 @@ export default function Room() {
           value={overlayQuery}
           onChange={setOverlayQuery}
           onSearch={handleOverlaySearch}
+          searchHistory={overlaySearchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
           placeholder={overlaySearchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
           searching={overlaySearchMode === 'song' && searching}
           suggestionsEnabled={overlaySearchMode === 'song'}
@@ -3100,6 +3184,7 @@ export default function Room() {
           value={query}
           onChange={setQuery}
           onSearch={handleSearch}
+          searchHistory={searchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
           placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
           searching={searchMode === 'song' && searching}
           suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
@@ -4255,6 +4340,7 @@ export default function Room() {
                   {visibleSongHistoryItems.map((song: SongHistoryItem, idx: number) => {
                     const index = songHistoryVirtual.startIndex + idx;
                     const key = songKey(song);
+                    const isReplayed = queueKeys.has(key) || replayedHistoryKeys.has(key);
                     return (
                       <div
                         key={`${song.requestedAt}-${key}-${index}`}
@@ -4274,12 +4360,22 @@ export default function Room() {
                         <FavoriteButton song={song} favorited={favoriteIds.has(key)} onToggle={toggleFavorite} className="h-8 w-8 text-netease-muted hover:text-rose-300" />
                         <button
                           type="button"
-                          onClick={() => void handleAdd(song as SearchResult)}
-                          disabled={addingId === key}
-                          className="flex flex-shrink-0 items-center gap-1 rounded-full bg-netease-red/10 px-2.5 py-1 text-xs font-medium text-netease-red transition-all hover:bg-netease-red hover:text-white disabled:opacity-50"
+                          onClick={() => void handleReplayHistorySong(song)}
+                          disabled={addingId === key || isReplayed}
+                          className={`flex flex-shrink-0 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-all ${
+                            isReplayed
+                              ? 'cursor-default bg-white/10 text-white/60'
+                              : 'bg-netease-red/10 text-netease-red hover:bg-netease-red hover:text-white disabled:opacity-50'
+                          }`}
                         >
-                          {addingId === key ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                          复播
+                          {addingId === key ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : isReplayed ? (
+                            <Check className="h-4 w-4" />
+                          ) : (
+                            <Plus className="h-4 w-4" />
+                          )}
+                          {isReplayed ? '已点播' : '复播'}
                         </button>
                       </div>
                     );
@@ -4383,19 +4479,37 @@ export default function Room() {
                     <button
                       type="button"
                       onClick={() => { setActiveFavoriteCategory(category); setFavoritePage(1); }}
+                      aria-pressed={activeFavoriteCategory === category}
                       className={`rounded-lg px-2.5 py-1 text-xs transition-colors ${activeFavoriteCategory === category ? 'bg-netease-red text-white' : 'text-netease-muted hover:bg-white/10 hover:text-white'}`}
                     >
                       {category}
                     </button>
-                    {favoriteCategories.includes(category) && (
-                      <button
-                        type="button"
-                        onClick={() => setDeleteFavoriteCategoryTarget(category)}
-                        className="rounded-r-lg px-1.5 py-1 text-netease-muted hover:bg-rose-400/15 hover:text-rose-200"
-                        aria-label={`删除分类 ${category}`}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </button>
+                    {activeFavoriteCategory === category && favoriteCategories.includes(category) && (
+                      <>
+                        <Tooltip content="修改分类名称">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setRenameFavoriteCategoryTarget(category);
+                              setRenameFavoriteCategoryName(category);
+                            }}
+                            className="px-1.5 py-1 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
+                            aria-label={`修改分类 ${category} 名称`}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </Tooltip>
+                        <Tooltip content="删除分类">
+                          <button
+                            type="button"
+                            onClick={() => setDeleteFavoriteCategoryTarget(category)}
+                            className="rounded-r-lg px-1.5 py-1 text-netease-muted transition-colors hover:bg-rose-400/15 hover:text-rose-200"
+                            aria-label={`删除分类 ${category}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </Tooltip>
+                      </>
                     )}
                   </div>
                 ))}
@@ -4447,6 +4561,7 @@ export default function Room() {
                       played={playedKeys.has(key)}
                       favorited
                       glassRow={immersiveMode}
+                      previewOwner="favorites"
                       onAdd={handleAdd}
                       onRemove={handleRemoveFromSearch}
                       cancelDisabledReason={queueKeys.has(key) && !cancelableQueueKeys.has(key)
@@ -4657,6 +4772,80 @@ export default function Room() {
                 同时取消其中歌曲收藏
               </button>
               <button type="button" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} className="w-full rounded-lg py-2 text-sm text-netease-muted hover:bg-white/5 disabled:opacity-50">取消</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {renameFavoriteCategoryTarget && createPortal(
+        <div className="fixed inset-0 z-[110] flex items-center justify-center px-4">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+            disabled={renamingFavoriteCategory}
+            onClick={() => {
+              setRenameFavoriteCategoryTarget(null);
+              setRenameFavoriteCategoryName('');
+            }}
+            aria-label="关闭修改分类名称"
+          />
+          <div role="dialog" aria-modal="true" aria-labelledby="rename-favorite-category-title" className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 id="rename-favorite-category-title" className="text-sm font-medium text-white">修改分类名称</h2>
+              <button
+                type="button"
+                disabled={renamingFavoriteCategory}
+                onClick={() => {
+                  setRenameFavoriteCategoryTarget(null);
+                  setRenameFavoriteCategoryName('');
+                }}
+                aria-label="关闭"
+              >
+                <X className="h-5 w-5 text-netease-muted" />
+              </button>
+            </div>
+            <input
+              autoFocus
+              value={renameFavoriteCategoryName}
+              disabled={renamingFavoriteCategory}
+              aria-label="新的分类名称"
+              onChange={(event) => setRenameFavoriteCategoryName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void handleRenameFavoriteCategory();
+                }
+                if (event.key === 'Escape' && !renamingFavoriteCategory) {
+                  setRenameFavoriteCategoryTarget(null);
+                  setRenameFavoriteCategoryName('');
+                }
+              }}
+              maxLength={30}
+              placeholder="输入新的分类名称"
+              className="w-full rounded-xl border border-netease-border bg-netease-dark px-3 py-2.5 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={renamingFavoriteCategory}
+                onClick={() => {
+                  setRenameFavoriteCategoryTarget(null);
+                  setRenameFavoriteCategoryName('');
+                }}
+                className="rounded-lg px-3 py-2 text-sm text-netease-muted hover:bg-white/10 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleRenameFavoriteCategory()}
+                disabled={!renameFavoriteCategoryName.trim() || renamingFavoriteCategory}
+                className="rounded-lg bg-netease-red px-3 py-2 text-sm text-white disabled:opacity-50"
+              >
+                {renamingFavoriteCategory ? '保存中...' : '保存'}
+              </button>
             </div>
           </div>
         </div>,

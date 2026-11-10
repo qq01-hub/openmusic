@@ -1801,7 +1801,9 @@ body {
   letter-spacing: 0.35px;
   min-width: 86px;
   text-align: center;
+  font-family: "Segoe UI", "SF Pro Text", "PingFang SC", system-ui, -apple-system, sans-serif;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
 }
 
 /* 沉浸底栏时长已挪到进度条右侧，见 .mineradio-progress-row */
@@ -4317,4 +4319,158 @@ body.immersive-mode #hand-canvas {
 
 .account-manage-sections > .account-section-card { height: 100%; }
 
-.account-manage-sections > .account-section-card { height: 100%; }
+/* 播放时间标签强制使用支持等宽数字的西文字体族，避免 Windows 雅黑数字 1 偏窄引发相邻歌词区抖动 */
+.playback-time-tabular {
+  font-family: "Segoe UI", "SF Pro Text", "PingFang SC", system-ui, -apple-system, sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  white-space: nowrap;
+}
+
+/* 房间底栏双行歌词：换行纵向滚轮切换 + 单行超长横向平滑滚动 */
+.mini-lyric-stage {
+  position: relative;
+  height: 36px;
+  width: 100%;
+  overflow: hidden;
+}
+
+.mini-lyric-row {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 18px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  will-change: transform, opacity;
+  transition: color 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mini-lyric-row--current-static {
+  transform: translate3d(0, 0, 0);
+  opacity: 1;
+}
+
+.mini-lyric-row--next-static {
+  transform: translate3d(0, 18px, 0);
+  opacity: 1;
+}
+
+.mini-lyric-row--promote {
+  animation: mini-lyric-row-promote 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mini-lyric-row--next-in {
+  animation: mini-lyric-row-next-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mini-lyric-row--past-out {
+  pointer-events: none;
+  user-select: none;
+  animation: mini-lyric-row-past-out 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.mini-lyric-line-viewport {
+  width: 100%;
+  height: 18px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+.mini-lyric-line-viewport--mask-right {
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 16px), transparent 100%);
+}
+
+.mini-lyric-line-viewport--mask-both {
+  -webkit-mask-image: linear-gradient(90deg, transparent 0%, #000 8px, #000 calc(100% - 16px), transparent 100%);
+  mask-image: linear-gradient(90deg, transparent 0%, #000 8px, #000 calc(100% - 16px), transparent 100%);
+}
+
+.mini-lyric-scale-wrap {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  will-change: transform;
+  transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.mini-lyric-scale-wrap--current {
+  transform: scale(1);
+}
+
+.mini-lyric-scale-wrap--next {
+  transform: scale(0.86);
+}
+
+.mini-lyric-scroll-inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+  transform: translate3d(0, 0, 0);
+}
+
+.mini-lyric-scroll-inner--pan {
+  padding-inline: 2px;
+  animation: mini-lyric-pan var(--lyric-pan-duration, 2.6s) cubic-bezier(0.25, 0.1, 0.25, 1) var(--lyric-pan-delay, 0.42s) 1 normal both;
+}
+
+.mini-lyric-scroll-inner--loop {
+  padding-inline: 2px;
+  animation: mini-lyric-marquee-loop var(--lyric-pan-duration, 7.2s) ease-in-out var(--lyric-pan-delay, 0.8s) infinite;
+}
+
+@keyframes mini-lyric-row-promote {
+  0% {
+    transform: translate3d(0, 18px, 0);
+    opacity: 0.72;
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+}
+
+@keyframes mini-lyric-row-next-in {
+  0% {
+    transform: translate3d(0, 36px, 0);
+    opacity: 0;
+  }
+  100% {
+    transform: translate3d(0, 18px, 0);
+    opacity: 1;
+  }
+}
+
+@keyframes mini-lyric-row-past-out {
+  0% {
+    transform: translate3d(0, 0, 0);
+    opacity: 1;
+  }
+  100% {
+    transform: translate3d(0, -18px, 0);
+    opacity: 0;
+  }
+}
+
+@keyframes mini-lyric-pan {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(var(--lyric-pan-distance, 0px), 0, 0);
+  }
+}
+
+@keyframes mini-lyric-marquee-loop {
+  0%, 14% {
+    transform: translate3d(0, 0, 0);
+  }
+  46%, 60% {
+    transform: translate3d(var(--lyric-pan-distance, 0px), 0, 0);
+  }
+  92%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+}

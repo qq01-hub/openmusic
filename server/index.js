@@ -216,7 +216,7 @@ import { createNeteasePlaylistSearchHandler } from './neteasePlaylistSearch.js';
 import { getHotSongs } from './songHotRank.js';
 import { fetchMusicSuggestions } from './musicSuggestions.js';
 import { normalizeMetingFailure } from './metingError.js';
-import { hasRedisEnvConfig, createFavoriteShare, revokeFavoriteShare, importFavoriteShare, importFavoriteSongs, importFavoriteCategories, listFavoriteSongs, listFavoriteCategories, createFavoriteCategory, deleteFavoriteCategory, previewFavoriteShare, setFavoriteSong, setFavoriteCategory, getRedisClient, addRoomToAccountIndex, listRoomIdsForAccount, retainMigratedFavoriteSource } from './roomStorage.js';
+import { hasRedisEnvConfig, createFavoriteShare, revokeFavoriteShare, importFavoriteShare, importFavoriteSongs, importFavoriteCategories, listFavoriteSongs, listFavoriteCategories, createFavoriteCategory, renameFavoriteCategory, deleteFavoriteCategory, previewFavoriteShare, setFavoriteSong, setFavoriteCategory, getRedisClient, addRoomToAccountIndex, listRoomIdsForAccount, retainMigratedFavoriteSource } from './roomStorage.js';
 import { analyzeFavoritesMigration, filterFavoriteCategories } from './favoritesSync.js';
 import { sanitizeFavoriteSongInput } from './favoriteSongInput.js';
 import {
@@ -7316,6 +7316,23 @@ io.on('connection', (socket) => {
     if (!clean) return callback?.({ success: false, error: '收藏歌曲数据无效' });
     const result = await setFavoriteCategory(identity.userId, clean, category);
     callback?.(result.error ? { success: false, error: result.error } : { success: true, ...result });
+  });
+
+  socket.on('rename_favorite_category', async (payload, callback) => {
+    if (rejectRateLimited(socket, limitSocketAction, 'rename_favorite_category', callback)) return;
+    const identity = resolveIdentityFromCookies(socket.handshake?.headers?.cookie || '');
+    if (!identity?.userId) {
+      incrementMetric('favorite_category_rename_total', { outcome: 'auth_rejected' });
+      return callback?.({ success: false, error: '会话未就绪，请刷新页面后重试', code: 'AUTH_REQUIRED' });
+    }
+    const { oldName, newName } = socketPayload(payload);
+    if (typeof oldName !== 'string' || typeof newName !== 'string') {
+      incrementMetric('favorite_category_rename_total', { outcome: 'invalid_input' });
+      return callback?.({ success: false, error: '收藏分类参数无效', code: 'INVALID_FAVORITE_CATEGORY' });
+    }
+    const result = await renameFavoriteCategory(identity.userId, oldName, newName);
+    incrementMetric('favorite_category_rename_total', { outcome: result.error ? 'failed' : 'success' });
+    callback?.(result.error ? { success: false, error: result.error, code: result.code } : { success: true, ...result });
   });
 
   socket.on('delete_favorite_category', async (payload, callback) => {

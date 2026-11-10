@@ -65,6 +65,7 @@ const ACTION_EVENTS = new Set([
   'set_favorite',
   'set_favorite_category',
   'create_favorite_category',
+  'rename_favorite_category',
   'delete_favorite_category',
   'import_favorites',
   'create_favorite_share',

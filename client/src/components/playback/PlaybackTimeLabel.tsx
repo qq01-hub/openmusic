@@ -13,6 +13,12 @@ interface Props {
   mode?: 'both' | 'elapsed' | 'duration';
 }
 
+function mergeTimeClassName(className = '') {
+  return className
+    ? `playback-time-tabular tabular-nums whitespace-nowrap ${className}`
+    : 'playback-time-tabular tabular-nums whitespace-nowrap';
+}
+
 function PlaybackElapsedTime({
   song,
   className = '',
@@ -23,12 +29,13 @@ function PlaybackElapsedTime({
   const duration = useTrackDuration(song);
   const displayTime = clampPlaybackTime(currentTime, duration);
   const resolvedMode = mode ?? (showDuration ? 'both' : 'elapsed');
+  const mergedClassName = mergeTimeClassName(className);
 
   if (resolvedMode === 'elapsed') {
-    return <span className={className}>{formatDuration(displayTime)}</span>;
+    return <span className={mergedClassName}>{formatDuration(displayTime)}</span>;
   }
   return (
-    <span className={className}>
+    <span className={mergedClassName}>
       {formatDuration(displayTime)}
       {duration > 0 ? ` / ${formatDuration(duration)}` : ''}
     </span>
@@ -37,7 +44,7 @@ function PlaybackElapsedTime({
 
 function PlaybackDurationTime({ song, className = '' }: Pick<Props, 'song' | 'className'>) {
   const duration = useTrackDuration(song);
-  return <span className={className}>{duration > 0 ? formatDuration(duration) : '--:--'}</span>;
+  return <span className={mergeTimeClassName(className)}>{duration > 0 ? formatDuration(duration) : '--:--'}</span>;
 }
 
 const MemoPlaybackElapsedTime = memo(PlaybackElapsedTime);

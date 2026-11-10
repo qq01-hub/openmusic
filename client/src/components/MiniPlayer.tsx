@@ -315,7 +315,7 @@ export default memo(function MiniPlayer({
           </div>
 
           <div className="flex flex-shrink-0 items-center gap-1 sm:gap-2">
-            <span className="hidden text-[10px] text-transparent sm:block">0:00</span>
+            <span className="playback-time-tabular hidden min-w-[4.5rem] text-right text-[10px] text-transparent sm:block">0:00 / 0:00</span>
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10" aria-hidden>
               <Play className="ml-0.5 h-4 w-4 text-white/30" />
             </div>
@@ -402,7 +402,7 @@ export default memo(function MiniPlayer({
 
         <PlaybackTimeLabel
           song={current}
-          className="text-[10px] text-netease-muted hidden sm:block"
+          className="hidden min-w-[4.5rem] text-right text-[10px] text-netease-muted sm:block"
         />
 
 

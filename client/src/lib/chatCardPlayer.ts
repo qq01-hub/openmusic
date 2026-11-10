@@ -204,9 +204,11 @@ export function stopChatCardPlayback(options: { resumeRoom?: boolean } = {}) {
   abortController = null;
   stopProgressLoop();
 
-  if (cardAudio && activeState.cardKey) {
-    rememberProgress(activeState.cardKey, cardAudio.currentTime);
+  if (cardAudio) {
+    if (activeState.cardKey) rememberProgress(activeState.cardKey, cardAudio.currentTime);
     cardAudio.pause();
+    cardAudio.removeAttribute('src');
+    cardAudio.load();
   }
 
   const released = releaseAudio();
@@ -235,8 +237,8 @@ async function loadCardLyrics(song: ChatCardSong, cardKey: string, token: number
 }
 
 /** 等音频元数据就绪（用于恢复进度；超时或报错不阻塞播放） */
-function waitForCardMetadata(audio: HTMLAudioElement, timeoutMs = 4000): Promise<void> {
-  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve();
+function waitForCardMetadata(audio: HTMLAudioElement, signal: AbortSignal, timeoutMs = 4000): Promise<void> {
+  if (signal.aborted || audio.readyState >= HTMLMediaElement.HAVE_METADATA) return Promise.resolve();
   return new Promise((resolve) => {
     let settled = false;
     const finish = () => {
@@ -244,12 +246,14 @@ function waitForCardMetadata(audio: HTMLAudioElement, timeoutMs = 4000): Promise
       settled = true;
       audio.removeEventListener('loadedmetadata', finish);
       audio.removeEventListener('error', finish);
+      signal.removeEventListener('abort', finish);
       window.clearTimeout(timer);
       resolve();
     };
     const timer = window.setTimeout(finish, timeoutMs);
     audio.addEventListener('loadedmetadata', finish, { once: true });
     audio.addEventListener('error', finish, { once: true });
+    signal.addEventListener('abort', finish, { once: true });
   });
 }
 
@@ -328,7 +332,7 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
     applyChatCardVolume(useAudioStore.getState().volume);
     if (startAt > 0) {
       // 元数据就绪后才能准确 seek，否则浏览器会忽略
-      await waitForCardMetadata(audio);
+      await waitForCardMetadata(audio, abort.signal);
       if (!stillCurrent()) return;
       try {
         audio.currentTime = startAt;

@@ -111,7 +111,7 @@ export const GUIDE_STEPS: GuideStep[] = [
     id: 'room-search',
     scope: 'room',
     title: '搜索点歌',
-    body: '搜歌后点「+」点歌，点心形收藏',
+    body: '搜歌后点「+」点歌，点心形收藏；清空搜索框后点击输入框，可选最近 5 条搜索历史快速重搜，歌曲与歌单分别记录\n播放历史复播成功后显示「已点播」\n选中自定义收藏分类后显示笔和删除图标，点笔可改名',
     side: 'bottom',
   },
   {

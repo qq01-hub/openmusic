@@ -527,6 +527,58 @@ export async function createFavoriteCategory(userId, name) {
   } catch (error) { return { error: error.message || '分类保存失败' }; }
 }
 
+export async function renameFavoriteCategory(userId, oldName, newName) {
+  const id = String(userId || '').trim();
+  const rawOldName = typeof oldName === 'string' ? oldName.trim() : '';
+  const sourceCategory = normalizeFavoriteCategoryName(rawOldName);
+  const rawNewName = typeof newName === 'string' ? newName.trim() : '';
+  const targetCategory = normalizeFavoriteCategoryName(rawNewName);
+  if (!id) return { error: '用户身份无效', code: 'AUTH_REQUIRED' };
+  if (!sourceCategory || sourceCategory !== rawOldName || sourceCategory === '未分类' || sourceCategory === '全部收藏') {
+    return { error: '原收藏分类无效', code: 'INVALID_FAVORITE_CATEGORY' };
+  }
+  if (!targetCategory || targetCategory.length !== rawNewName.length) {
+    return { error: `分类名称需为 1-${MAX_FAVORITE_CATEGORY_NAME_LENGTH} 个字符`, code: 'INVALID_FAVORITE_CATEGORY' };
+  }
+  if (targetCategory === '未分类' || targetCategory === '全部收藏') {
+    return { error: `“${targetCategory}”是系统分类，不能使用该名称`, code: 'INVALID_FAVORITE_CATEGORY' };
+  }
+  try {
+    for (let attempt = 0; attempt < FAVORITES_CAS_RETRIES; attempt++) {
+      const [categorySnapshot, favoriteSnapshot] = await Promise.all([
+        readFavoriteCategorySnapshot(id), readFavoritesSnapshot(id),
+      ]);
+      const existingIndex = categorySnapshot.categories.findIndex(item => item.toLowerCase() === sourceCategory.toLowerCase());
+      if (existingIndex < 0) {
+        return { error: '原收藏分类不存在', code: 'FAVORITE_CATEGORY_NOT_FOUND' };
+      }
+      if (categorySnapshot.categories.some((item, idx) => idx !== existingIndex && item.toLowerCase() === targetCategory.toLowerCase())) {
+        return { error: '该分类已存在', code: 'FAVORITE_CATEGORY_EXISTS' };
+      }
+      if (categorySnapshot.categories[existingIndex] === targetCategory) {
+        return { category: targetCategory, categories: categorySnapshot.categories, favorites: favoriteSnapshot.items };
+      }
+      const categories = categorySnapshot.categories.map((item, idx) => (idx === existingIndex ? targetCategory : item));
+      const favorites = favoriteSnapshot.items.map(item => (
+        String(item.category || '').trim().toLowerCase() === sourceCategory.toLowerCase()
+          ? { ...item, category: targetCategory }
+          : item
+      ));
+      const success = await evalRedisScript(redisClient, FAVORITE_COLLECTION_CAS_SCRIPT, {
+        keys: [favoriteCategoriesKey(id), favoriteKey(id)],
+        arguments: [
+          categorySnapshot.raw === null ? '0' : '1', categorySnapshot.raw || '', JSON.stringify(categories),
+          favoriteSnapshot.raw === null ? '0' : '1', favoriteSnapshot.raw || '', JSON.stringify(favorites),
+        ],
+      });
+      if (Number(success) === 1) return { category: targetCategory, categories, favorites };
+    }
+    return { error: '收藏状态已被并发修改，请重试', code: 'FAVORITES_CONFLICT' };
+  } catch {
+    return { error: '分类改名失败，请稍后重试', code: 'FAVORITES_STORAGE_ERROR' };
+  }
+}
+
 export async function deleteFavoriteCategory(userId, name, keepSongs = true) {
   const id = String(userId || '').trim();
   const rawName = typeof name === 'string' ? name.trim() : '';

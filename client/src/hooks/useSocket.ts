@@ -1458,6 +1458,10 @@ export function useSocket() {
     return emitWithAck('create_favorite_category', { name }, { success: false, error: '分类创建超时，请重试' });
   }, []);
 
+  const renameFavoriteCategory = useCallback((oldName: string, newName: string): Promise<{ success: boolean; category?: string; categories?: string[]; favorites?: FavoriteSong[]; error?: string }> => {
+    return emitWithAck('rename_favorite_category', { oldName, newName }, { success: false, error: '分类改名超时，请重试' });
+  }, []);
+
   const setFavorite = useCallback((song: Song, favorite: boolean): Promise<{ success: boolean; favorites?: FavoriteSong[]; favorite?: boolean; error?: string }> => {
     return emitWithAck('set_favorite', { song, favorite }, { success: false, error: '连接超时，请重试' });
   }, []);
@@ -2149,6 +2153,7 @@ export function useSocket() {
     listFavorites,
     listFavoriteCategories,
     createFavoriteCategory,
+    renameFavoriteCategory,
 
     setFavorite,
     setFavoriteCategory,
