@@ -974,7 +974,7 @@ export default function Room() {
   // 关闭收藏或在其上叠开分享弹框时主动收尾，避免看不见的弹框继续出声
   useEffect(() => {
     if (!favoritesOpen || favoriteShareOpen) return;
-    return () => stopSongPreview({ resumeRoom: true });
+    return () => stopSongPreview({ resumeRoom: true, owner: 'favorites' });
   }, [favoriteShareOpen, favoritesOpen]);
 
   const handleCreateFavoriteCategory = useCallback(async () => {
@@ -4447,6 +4447,7 @@ export default function Room() {
                       played={playedKeys.has(key)}
                       favorited
                       glassRow={immersiveMode}
+                      previewOwner="favorites"
                       onAdd={handleAdd}
                       onRemove={handleRemoveFromSearch}
                       cancelDisabledReason={queueKeys.has(key) && !cancelableQueueKeys.has(key)

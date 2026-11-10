@@ -3,6 +3,7 @@ import { ChevronLeft, MessageCircle, Pin, PinOff } from 'lucide-react';
 import ChatPanel from './ChatPanel';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import Tooltip from './Tooltip';
+import { stopChatCardPlayback } from '../lib/chatCardPlayer';
 
 const CLOSE_DELAY_MS = 280;
 const PANEL_WIDTH = 360;
@@ -56,6 +57,11 @@ export default function PureModeChatDock() {
   }, [cancelClose]);
 
   useEffect(() => () => cancelClose(), [cancelClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    return () => stopChatCardPlayback();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;

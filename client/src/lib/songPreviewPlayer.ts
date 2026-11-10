@@ -17,6 +17,7 @@ import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
 
 export type SongPreviewStatus = 'idle' | 'loading' | 'playing' | 'error';
+export type SongPreviewOwner = 'search' | 'favorites';
 
 export type SongPreviewState = {
   key: string | null;
@@ -28,6 +29,7 @@ export type SongPreviewState = {
 
 let previewAudio: HTMLAudioElement | null = null;
 let activeKey: string | null = null;
+let activePreviewOwner: SongPreviewOwner | null = null;
 let status: SongPreviewStatus = 'idle';
 let lastError: string | null = null;
 let loadToken = 0;
@@ -108,6 +110,7 @@ function takeOverPreviewAudio() {
     }
     if (status !== 'idle' || activeKey !== null) {
       activeKey = null;
+      activePreviewOwner = null;
       status = 'idle';
       lastError = null;
       notify();
@@ -141,6 +144,7 @@ function finishPreview(options: { resumeRoom: boolean }) {
     audio.load();
   }
   activeKey = null;
+  activePreviewOwner = null;
   status = 'idle';
   lastError = null;
   const released = releaseAudio();
@@ -174,7 +178,8 @@ export function subscribeSongPreview(listener: () => void): () => void {
   };
 }
 
-export function stopSongPreview(options: { resumeRoom?: boolean } = {}) {
+export function stopSongPreview(options: { resumeRoom?: boolean; owner?: SongPreviewOwner } = {}) {
+  if (options.owner && activePreviewOwner !== options.owner) return;
   if (status === 'idle' && !activeKey) return;
   finishPreview({ resumeRoom: options.resumeRoom !== false });
 }
@@ -185,7 +190,7 @@ export function resetSongPreview(): void {
   resetRoomAudioPriority();
 }
 
-export async function toggleSongPreview(song: SearchResult): Promise<void> {
+export async function toggleSongPreview(song: SearchResult, owner: SongPreviewOwner = 'search'): Promise<void> {
   const key = songKey(song);
   const audio = getOrCreatePreviewAudio();
 
@@ -204,6 +209,7 @@ export async function toggleSongPreview(song: SearchResult): Promise<void> {
   const previewAbort = new AbortController();
   previewAbortController = previewAbort;
   activeKey = key;
+  activePreviewOwner = owner;
   status = 'loading';
   lastError = null;
   notify();

@@ -124,11 +124,11 @@ function SongResultList({
 
   // 翻页 / 换关键词 / 卸载时停掉试听，避免后台继续播
   useEffect(() => {
-    stopSongPreview({ resumeRoom: true });
+    stopSongPreview({ resumeRoom: true, owner: 'search' });
   }, [currentPage, keyword]);
 
   useEffect(() => () => {
-    stopSongPreview({ resumeRoom: true });
+    stopSongPreview({ resumeRoom: true, owner: 'search' });
   }, []);
 
   const handlePageSizeChange = useCallback((next: SongResultPageSize) => {

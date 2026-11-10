@@ -8,6 +8,8 @@ import {
 } from '../../lib/browserFullscreen';
 import QueueSystemToast, { UpcomingSongNotice } from '../QueueSystemToast';
 import Tooltip from '../Tooltip';
+import { stopSongPreview } from '../../lib/songPreviewPlayer';
+import { stopChatCardPlayback } from '../../lib/chatCardPlayer';
 
 type PanelId = 'search' | 'queue' | 'chat';
 
@@ -297,6 +299,16 @@ export default function RoomImmersiveShell({
   useEffect(() => {
     onPanelFocusChange?.(openPanel);
   }, [onPanelFocusChange, openPanel]);
+
+  // 面板收起只做离屏隐藏，试听必须跟随可见状态停止
+  useEffect(() => {
+    if (openPanel === 'search') {
+      return () => stopSongPreview({ resumeRoom: true, owner: 'search' });
+    }
+    if (openPanel === 'chat') {
+      return () => stopChatCardPlayback();
+    }
+  }, [openPanel]);
 
   useEffect(() => {
     if (!openPanel || settingsOpen) return;
