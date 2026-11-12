@@ -172,6 +172,24 @@ export default memo(function PlayerPage({ onClose }: Props) {
 
         <div className="flex-1" />
 
+        {canAdjustLyrics && (
+          <div className="mr-1 flex items-center">
+            <Tooltip side="bottom" content={`歌词提前 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
+              <button type="button" onClick={() => void handleAdjustLyrics(-0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset <= -30}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-white/75 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40 sm:h-10 sm:w-10" aria-label="歌词提前 0.5 秒">
+                <RotateCcw className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </Tooltip>
+            <span role="status" className="sr-only">{lyricOffset === 0 ? '歌词未调整' : `歌词${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`}</span>
+            <Tooltip side="bottom" content={`歌词延后 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
+              <button type="button" onClick={() => void handleAdjustLyrics(0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset >= 30}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-white/75 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40 sm:h-10 sm:w-10" aria-label="歌词延后 0.5 秒">
+                <RotateCw className="h-5 w-5" aria-hidden="true" />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+
         <Tooltip side="bottom" content={tvCopied ? '已复制 TV 链接' : 'TV 歌词'}>
           <button
             type="button"
@@ -311,23 +329,6 @@ export default memo(function PlayerPage({ onClose }: Props) {
 
         </div>
 
-        {canAdjustLyrics && (
-          <div className="mt-1 flex items-center justify-center gap-3">
-            <Tooltip content={`歌词提前 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
-              <button type="button" onClick={() => void handleAdjustLyrics(-0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset <= -30}
-                className="flex h-9 w-9 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40" aria-label="歌词提前 0.5 秒">
-                <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </Tooltip>
-            <span role="status" className="sr-only">{lyricOffset === 0 ? '歌词未调整' : `歌词${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`}</span>
-            <Tooltip content={`歌词延后 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
-              <button type="button" onClick={() => void handleAdjustLyrics(0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset >= 30}
-                className="flex h-9 w-9 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40" aria-label="歌词延后 0.5 秒">
-                <RotateCw className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </Tooltip>
-          </div>
-        )}
         {canAdjustLyrics && lyricError && <p role="alert" className="mt-1 text-center text-xs text-red-300">{lyricError}</p>}
 
 
