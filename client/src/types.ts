@@ -267,6 +267,8 @@ export interface RoomState {
   currentTime: number;
   /** 房间统一播放倍速，仅房主可修改 */
   playbackRate?: number;
+  /** 当前歌曲在本房间的歌词偏移，正数延后，单位秒 */
+  lyricOffsetSeconds?: number;
   users: RoomUser[];
   userCount: number;
   jumpRequests: JumpRequest[];

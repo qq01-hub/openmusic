@@ -789,6 +789,7 @@ export function snapshotRoomForStorage(room) {
     playbackVersion: room.playbackVersion ?? 0,
     playbackUpdatedAt: room.playbackUpdatedAt ?? Date.now(),
     playbackRate: normalizePlaybackRate(room.playbackRate),
+    lyricOffsets: { ...room.lyricOffsets },
     messages: room.messages.slice(-MAX_CHAT_MESSAGES).map(sanitizeMessageForStorage),
     knownUserIds: Array.from(room.knownUserIds || []),
     chatVisibleSinceByUserId: Object.fromEntries(room.chatVisibleSinceByUserId || []),
@@ -870,6 +871,11 @@ function restoreRoomFromStorage(data) {
   room.needsPasswordStorageMigration = Boolean(Object.hasOwn(data, 'passwordPlain'));
   room.queue = (data.queue || []).map(serializeQueueItemForRoom).filter(Boolean);
   room.current = serializeQueueItemForRoom(data.current) ?? null;
+  room.lyricOffsets = Object.fromEntries(
+    Object.entries(data.lyricOffsets && typeof data.lyricOffsets === 'object' && !Array.isArray(data.lyricOffsets) ? data.lyricOffsets : {})
+      .filter(([key, value]) => key.length <= 300 && typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 30 && Number.isInteger(value * 2))
+      .slice(0, 1000),
+  );
   room.isPlaying = Boolean(data.isPlaying);
   room.currentTime = data.currentTime ?? 0;
   room.playbackVersion = data.playbackVersion ?? 0;
@@ -1291,6 +1297,7 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     playbackVersion: 0,
     playbackUpdatedAt: Date.now(),
     playbackRate: DEFAULT_PLAYBACK_RATE,
+    lyricOffsets: {},
     playbackDriftAnchored: false,
     playbackDriftAnchorCooldownUntil: 0,
     /** 当前曲已解析的播放直链（内存态，不落盘；供进房成员免二次取链） */
@@ -3387,6 +3394,38 @@ export function setRoomMemberSettings(roomId, actorId, settings = {}, connection
     ...normalizeMemberSettings(room.memberSettings),
     ...settings,
   });
+  persistRoom(room);
+  return { room: serializeRoom(room) };
+}
+
+export function adjustRoomLyrics(roomId, actorId, payload, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在", code: "ROOM_NOT_FOUND" };
+  const denied = requireModerator(room, actorId, connectionId);
+  if (denied) return { ...denied, code: "LYRIC_OFFSET_FORBIDDEN" };
+  const { songId, source, queueId, delta, requestId } = payload || {};
+  if ((delta !== -0.5 && delta !== 0.5) || typeof requestId !== "string" || !requestId || requestId.length > 80) {
+    return { error: "歌词微调参数无效", code: "LYRIC_OFFSET_INVALID" };
+  }
+  const current = room.current;
+  if (!current || songId !== current.id || source !== (current.source || "netease") || queueId !== current.queueId) {
+    return { error: "歌曲已切换，请重新调整", code: "LYRIC_TRACK_CHANGED" };
+  }
+  const key = `${source}:${songId}`;
+  if (key.length > 300) return { error: "歌曲标识过长", code: "LYRIC_OFFSET_INVALID" };
+  const requests = room.lyricAdjustmentRequests ||= new Map();
+  const requestKey = `${actorId}:${requestId}`;
+  if (requests.has(requestKey)) return { room: serializeRoom(room) };
+  const offsets = room.lyricOffsets ||= {};
+  const next = (offsets[key] || 0) + delta;
+  if (Math.abs(next) > 30) return { error: "歌词最多提前或延后 30 秒", code: "LYRIC_OFFSET_LIMIT" };
+  if (!Object.hasOwn(offsets, key) && Object.keys(offsets).length >= 1000) {
+    return { error: "房间歌词微调记录已达上限", code: "LYRIC_OFFSET_CAPACITY" };
+  }
+  if (next === 0) delete offsets[key];
+  else offsets[key] = next;
+  requests.set(requestKey, true);
+  if (requests.size > 100) requests.delete(requests.keys().next().value);
   persistRoom(room);
   return { room: serializeRoom(room) };
 }
@@ -6673,6 +6712,7 @@ function serializeRoom(room, options = {}) {
     upcomingSong: serializeQueueItemForRoom(getUpcomingRoundRobinSong(room)),
     isPlaying: room.isPlaying,
     currentTime: getPlaybackTime(room),
+    lyricOffsetSeconds: room.current ? room.lyricOffsets?.[`${room.current.source || "netease"}:${room.current.id}`] || 0 : 0,
     playbackRate: normalizePlaybackRate(room.playbackRate),
     users: Array.from(room.users.values()).map((user) => serializeUser(user, { roomAvatarUrls: room.userAvatarUrls })),
     userCount: room.users.size,
@@ -6763,6 +6803,7 @@ export function prepareRoomBroadcast(roomId) {
     upcomingSong: serializeQueueItemForRoom(getUpcomingRoundRobinSong(room)),
     isPlaying: room.isPlaying,
     currentTime: getPlaybackTime(room),
+    lyricOffsetSeconds: room.current ? room.lyricOffsets?.[`${room.current.source || "netease"}:${room.current.id}`] || 0 : 0,
     playbackRate: normalizePlaybackRate(room.playbackRate),
     users: Array.from(room.users.values()).map((user) => serializeUser(user, { includeLocation: false, roomAvatarUrls: room.userAvatarUrls })),
     userCount: room.users.size,

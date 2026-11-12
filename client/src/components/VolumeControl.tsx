@@ -50,6 +50,20 @@ export default function VolumeControl({
   }, [volume]);
 
   useEffect(() => {
+    const root = rootRef.current;
+    if (!root || (compact && !expanded)) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.deltaY === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const audio = useAudioStore.getState();
+      audio.setVolume(Math.min(100, Math.max(0, Math.round(audio.volume * 100) + (event.deltaY < 0 ? 1 : -1))) / 100);
+    };
+    root.addEventListener('wheel', onWheel, { passive: false });
+    return () => root.removeEventListener('wheel', onWheel);
+  }, [compact, expanded]);
+
+  useEffect(() => {
     if (!compact || !expanded) return;
     const onPointerDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) {
@@ -85,7 +99,7 @@ export default function VolumeControl({
   if (compact) {
     return (
       <div ref={rootRef} className={`relative z-30 flex items-center ${className}`}>
-        <Tooltip content="音量（双击静音）">
+        <Tooltip content={`音量 ${pct}（展开后滚轮调节，双击静音）`}>
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -99,6 +113,7 @@ export default function VolumeControl({
         </Tooltip>
         {expanded && (
           <div className="pointer-events-auto absolute bottom-full left-1/2 z-[60] mb-2 flex -translate-x-1/2 flex-col items-center rounded-lg border border-netease-border/60 bg-netease-card px-2.5 py-3 shadow-lg">
+            <span className="mb-2 text-xs tabular-nums text-white/80">{pct}</span>
             {slider}
           </div>
         )}
@@ -107,7 +122,7 @@ export default function VolumeControl({
   }
 
   return (
-    <div className={`flex flex-col items-center gap-1.5 ${className}`}>
+    <div ref={rootRef} className={`flex flex-col items-center gap-1.5 ${className}`}>
       {slider}
       <button
         type="button"

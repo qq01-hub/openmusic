@@ -1,7 +1,7 @@
-import { memo, useState } from 'react';
+import { memo, useRef, useState } from 'react';
 
 import {
-  ChevronDown, Play, Pause, SkipForward, Loader2, Tv, Check,
+  ChevronDown, Play, Pause, SkipForward, Loader2, Tv, Check, RotateCcw, RotateCw,
 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import { copyToClipboard } from '../lib/copyToClipboard';
@@ -52,7 +52,14 @@ export default memo(function PlayerPage({ onClose }: Props) {
   const seekPlayback = useAudioStore((s) => s.seekPlayback);
   const localPlayback = useAudioStore((s) => s.localPlayback);
   const actualMediaByTrack = useAudioStore((s) => s.actualMediaByTrack);
-  const { togglePlay, skipSong, requestSkip } = useSocket();
+  const { togglePlay, skipSong, requestSkip, adjustRoomLyrics } = useSocket();
+  const isOwner = useRoomStore(s => s.isOwner);
+  const isAdmin = useRoomStore(s => s.isAdmin);
+  const canAdjustLyrics = isOwner || isAdmin;
+  const lyricAdjustmentPending = useRef(false);
+  const [adjustingLyrics, setAdjustingLyrics] = useState(false);
+  const [lyricError, setLyricError] = useState('');
+  const lyricOffset = room?.lyricOffsetSeconds ?? 0;
 
   const [skipError, setSkipError] = useState('');
   const [skipMsg, setSkipMsg] = useState('');
@@ -85,6 +92,22 @@ export default memo(function PlayerPage({ onClose }: Props) {
 
 
   const handleSeek = (time: number) => seekPlayback?.(time);
+
+  const handleAdjustLyrics = async (delta: number) => {
+    if (!current || !canAdjustLyrics || lyricAdjustmentPending.current) return;
+    lyricAdjustmentPending.current = true;
+    setAdjustingLyrics(true);
+    setLyricError('');
+    try {
+      const result = await adjustRoomLyrics(current, delta);
+      if (!result.success) setLyricError(result.error || '歌词微调失败，请重试');
+    } catch {
+      setLyricError('歌词微调失败，请检查连接后重试');
+    } finally {
+      lyricAdjustmentPending.current = false;
+      setAdjustingLyrics(false);
+    }
+  };
 
 
 
@@ -287,6 +310,25 @@ export default memo(function PlayerPage({ onClose }: Props) {
           />
 
         </div>
+
+        {canAdjustLyrics && (
+          <div className="mt-1 flex items-center justify-center gap-3">
+            <Tooltip content={`歌词提前 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
+              <button type="button" onClick={() => void handleAdjustLyrics(-0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset <= -30}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40" aria-label="歌词提前 0.5 秒">
+                <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Tooltip>
+            <span role="status" className="sr-only">{lyricOffset === 0 ? '歌词未调整' : `歌词${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`}</span>
+            <Tooltip content={`歌词延后 0.5 秒 · 当前${lyricOffset === 0 ? '未调整' : `${lyricOffset < 0 ? '提前' : '延后'} ${Math.abs(lyricOffset).toFixed(1)} 秒`} · 全房间同步并自动保存`}>
+              <button type="button" onClick={() => void handleAdjustLyrics(0.5)} disabled={adjustingLyrics || !lyrics.length || lyricOffset >= 30}
+                className="flex h-9 w-9 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-40" aria-label="歌词延后 0.5 秒">
+                <RotateCw className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </Tooltip>
+          </div>
+        )}
+        {canAdjustLyrics && lyricError && <p role="alert" className="mt-1 text-center text-xs text-red-300">{lyricError}</p>}
 
 
 

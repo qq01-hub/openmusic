@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useRoomLyricOffset } from './useRoomLyricOffset';
 import { getLyrics, getTranslatedLyricLines, parseLrc, getLrcFallbackDurationMs, getTrackKey } from '../api/music';
 import { useAudioStore } from '../stores/audioStore';
 import type { LyricLine, Song } from '../types';
@@ -6,6 +7,7 @@ import type { LyricLine, Song } from '../types';
 export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc' | 'duration'> & Partial<Pick<Song, 'artist' | 'album'>> & { queueId?: string }) | null | undefined) {
   const setLrcDuration = useAudioStore((s) => s.setLrcDuration);
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const offset = useRoomLyricOffset(song);
 
   useEffect(() => {
     if (!song) {
@@ -43,5 +45,5 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
     };
   }, [song?.id, song?.source, song?.queueId, song?.name, song?.lrc, song?.duration, setLrcDuration]);
 
-  return lyrics;
+  return useMemo(() => offset === 0 ? lyrics : lyrics.map(line => ({ ...line, time: line.time + offset })), [lyrics, offset]);
 }

@@ -11,7 +11,7 @@ import { useSongHistoryStore } from '../stores/songHistoryStore';
 import { useAudioStore } from '../stores/audioStore';
 import { songKey } from '../api/music';
 
-import type { ChatMention, ChatReplyRef, ChatMessage, FavoriteSong, PlaybackMediaShare, PlaybackState, RoomAiConfig, RoomState, Song, SongHistoryItem } from '../types';
+import type { ChatMention, ChatReplyRef, ChatMessage, FavoriteSong, PlaybackMediaShare, PlaybackState, QueueItem, RoomAiConfig, RoomState, Song, SongHistoryItem } from '../types';
 import { sanitizeIncomingChatMessage } from '../lib/chatAi';
 
 import { stopSharedAudio } from '../lib/audioElement';
@@ -1864,6 +1864,17 @@ export function useSocket() {
     });
   }, []);
 
+  const adjustRoomLyrics = useCallback((song: QueueItem, delta: number) => {
+    return emitWithAck<{ success: boolean; error?: string; code?: string; room?: RoomState }>(
+      'adjust_room_lyrics',
+      { songId: song.id, source: song.source || 'netease', queueId: song.queueId, delta, requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      { success: false, error: '连接超时，请确认当前偏移后重试' },
+    ).then(res => {
+      if (res.success && res.room && useRoomStore.getState().room?.id === res.room.id) applyRoomSnapshot(res.room);
+      return res;
+    });
+  }, []);
+
   const setRoomPlaybackRate = useCallback((playbackRate: number): Promise<{ success: boolean; error?: string; room?: RoomState; playbackRate?: number }> => {
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState; playbackRate?: number }>(
       'set_room_playback_rate',
@@ -2208,6 +2219,7 @@ export function useSocket() {
     setRoomAiSettings,
     setRoomMaxAdmins,
     setRoomPlaybackRate,
+    adjustRoomLyrics,
 
     setSongRequestEnabled,
 

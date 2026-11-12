@@ -3,6 +3,7 @@ import { getCoverUrl, getLyrics, getTrackKey, getTranslatedLyricLines, parseLrc 
 import { serializeLyricTranslations } from '../../lib/immersiveLyricLines';
 import { fetchWithTimeout } from '../../api/http';
 import { readLocalPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
+import { useRoomLyricOffset } from '../../hooks/useRoomLyricOffset';
 import { useAudioStore } from '../../stores/audioStore';
 import { useRoomStore } from '../../stores/roomStore';
 import { canSeekInRoom } from '../../lib/roomPermissions';
@@ -27,10 +28,11 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   const stageMounted = useRef(false);
   const failStage = useRef<(() => void) | null>(null);
   const key = song ? getTrackKey(song) : '';
-  const clock = useRef({ isPlaying, key });
+  const lyricOffsetSeconds = useRoomLyricOffset(song);
+  const clock = useRef({ isPlaying, key, lyricOffsetSeconds });
   const songRef = useRef(song);
   songRef.current = song;
-  clock.current = { isPlaying, key };
+  clock.current = { isPlaying, key, lyricOffsetSeconds };
   const send = (type: string, data: Record<string, unknown> = {}) => window.postMessage({ type, ...data }, location.origin);
   useEffect(() => {
     let disposed = false;
@@ -194,6 +196,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
         })) });
       }
       send('openmusic:folia-clock', { key: clock.current.key, time: readLocalPlaybackTime(songRef.current), playing: clock.current.isPlaying,
+        lyricOffsetSeconds: clock.current.lyricOffsetSeconds,
         bands: { ...bands, lowMid: bands.mid, power: bands.energy }, spectrum: getTopographyFrequencyBins512() });
     };
     raf = requestAnimationFrame(tick);

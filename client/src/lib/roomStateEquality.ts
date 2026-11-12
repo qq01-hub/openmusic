@@ -187,6 +187,7 @@ export function isRoomStateEquivalent(a: RoomState, b: RoomState): boolean {
     && roomQueueEqual(a.queue, b.queue)
     && currentSongEqual(a.current, b.current)
     && a.isPlaying === b.isPlaying
+    && (a.lyricOffsetSeconds ?? 0) === (b.lyricOffsetSeconds ?? 0)
     && roomUsersEqual(a.users, b.users)
     && a.userCount === b.userCount
     && jumpRequestsEqual(a.jumpRequests, b.jumpRequests)

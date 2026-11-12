@@ -165,7 +165,7 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
   const bass = useMotionValue(0), lowMid = useMotionValue(0), mid = useMotionValue(0), vocal = useMotionValue(0), treble = useMotionValue(0);
   const spectrum = useMotionValue(new Uint8Array(512));
   const bands = useMemo(() => ({ bass, lowMid, mid, vocal, treble, spectrum }), []);
-  const state = useRef({ key: '', lines: [] as Line[], index: -1, offset: 0, panel: false });
+  const state = useRef({ key: '', lines: [] as Line[], index: -1, offset: 0, roomOffset: 0, panel: false });
   state.current.offset = offset;
   state.current.panel = panel;
   useEffect(() => { localStorage.setItem('openmusic:folia-theme', JSON.stringify(customPalette)); }, [customPalette]);
@@ -179,6 +179,7 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
         state.current.key = data.song.key;
         state.current.lines = [];
         state.current.index = -1;
+        state.current.roomOffset = 0;
         beginBeatFxTrack(data.song.key);
         const preferences = useVisualizerSettingsStore.getState();
         if (preferences.randomVisualizerModePerSong && data.song.key && preferences.randomVisualizerModes.length) {
@@ -196,7 +197,9 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
           setStatus(parsed.lines.length ? (parsed.isWordByWord ? '逐字歌词' : '逐行歌词') : '暂无歌词');
         } catch { state.current.lines = []; setLines([]); setStatus('歌词解析失败'); }
       } else if (data?.type === 'openmusic:folia-clock' && data.key === state.current.key && Number.isFinite(data.time)) {
-        const time = Math.max(0, data.time + state.current.offset);
+        state.current.roomOffset = typeof data.lyricOffsetSeconds === 'number' && Number.isFinite(data.lyricOffsetSeconds)
+          ? Math.max(-30, Math.min(30, data.lyricOffsetSeconds)) : 0;
+        const time = Math.max(0, data.time + state.current.offset - state.current.roomOffset);
         currentTime.set(time); setPaused(!data.playing);
         tickBeatFx({ currentTime: data.time, paused: !data.playing, ended: false }, null);
         const active = findFoliaLyricIndex(state.current.lines, time);
@@ -318,7 +321,7 @@ function Stage({ stagePortal }: { stagePortal: HTMLElement }) {
       lyricsFontScale={scale} showSubtitleTranslation={translation} hideTranslationSubtitle={!translation}
       showText showHarmonySubtitle isPlayerChromeHidden={!controlsOpen} isPanelOpen={controlsOpen}
       cappellaCustomEmojiImages={assets.cappellaCustomEmojiImages} cappellaCustomAvatarImages={assets.cappellaCustomAvatarImages}
-      monetPortraitImage={assets.monetPortraitImage} onBack={close} onLyricLineSeek={time => send('openmusic:folia-seek', { time: Math.max(0, time - offset) })} />
+      monetPortraitImage={assets.monetPortraitImage} onBack={close} onLyricLineSeek={time => send('openmusic:folia-seek', { time: Math.max(0, time - offset + state.current.roomOffset) })} />
     </VisualizerBoundary>
     {!lines.length && <div className="folia-empty" role="status"><p>{song.name || '音乐即将开始'}</p><span>{status}</span></div>}
     {settingsHost ? createPortal(<SheetLayerContext.Provider value={settingsHost.portal}>{controls}</SheetLayerContext.Provider>, settingsHost.content) : panel ? controls : null}
