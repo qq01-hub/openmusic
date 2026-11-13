@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:openmusic/core/config.dart';
 import 'package:openmusic/features/web/web_shell_page.dart';
 

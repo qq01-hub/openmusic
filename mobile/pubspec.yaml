@@ -9,6 +9,7 @@ dependencies:
   flutter:
     sdk: flutter
   flutter_inappwebview: ^6.1.5
+  material_ui: ^1.0.0
 dev_dependencies:
   flutter_test:
     sdk: flutter
