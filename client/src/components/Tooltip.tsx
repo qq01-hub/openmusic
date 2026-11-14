@@ -223,7 +223,7 @@ function TooltipOverlay({
       id={tipId}
       role="tooltip"
       style={style}
-      className="pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] animate-fade-in rounded-lg border border-white/10 bg-[#1a1a1a]/95 px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl backdrop-blur-md"
+      className="pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-white/10 bg-[#1a1a1a] px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl"
     >
       {content}
     </div>,
@@ -242,11 +242,14 @@ export default function Tooltip({
 }: TooltipProps) {
   const anchorRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
+  const interactionRef = useRef(false);
   const shouldShowRef = useRef(shouldShow);
   shouldShowRef.current = shouldShow;
   const [open, setOpen] = useState(false);
 
   const enabled = !disabled && hasTooltipContent(content);
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
   const show = useCallback((immediate = false) => {
     if (!enabled) return;
@@ -254,11 +257,14 @@ export default function Tooltip({
     if (!anchor || !anchor.isConnected) return;
     if (shouldShowRef.current && !shouldShowRef.current(anchor)) return;
     clearTimeout(timerRef.current);
+    interactionRef.current = true;
     if (immediate) {
       setOpen(true);
       return;
     }
     timerRef.current = setTimeout(() => {
+      timerRef.current = undefined;
+      if (!enabledRef.current || !interactionRef.current) return;
       const currentAnchor = anchorRef.current;
       if (!currentAnchor || !currentAnchor.isConnected) return;
       if (shouldShowRef.current && !shouldShowRef.current(currentAnchor)) return;
@@ -268,7 +274,18 @@ export default function Tooltip({
 
   const hide = useCallback(() => {
     clearTimeout(timerRef.current);
+    timerRef.current = undefined;
+    interactionRef.current = false;
     setOpen((prev) => (prev ? false : prev));
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) hide();
+  }, [enabled, hide]);
+
+  useEffect(() => () => {
+    clearTimeout(timerRef.current);
+    interactionRef.current = false;
   }, []);
 
   if (!isValidElement(children)) return children;

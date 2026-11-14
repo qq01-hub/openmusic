@@ -25,8 +25,8 @@ export default function RoomFmModeBadge({ fmMode, fmSource = 'netease', playlist
           clickable ? 'hover:border-white/20 hover:bg-white/[0.07] hover:text-white' : 'cursor-default'
         } ${className}`}
       >
-        <span className="font-medium text-[#ec4141]">漫游</span>
-        <span className="text-white/75">{isPlaylistRoaming ? '指定歌单' : `${label} / ${getFmSourceLabel(fmSource)}`}</span>
+        <span className="shrink-0 font-medium text-[#ec4141]">漫游</span>
+        <span className="min-w-0 truncate text-white/75">{isPlaylistRoaming ? '指定歌单' : `${label} / ${getFmSourceLabel(fmSource)}`}</span>
       </button>
     </Tooltip>
   );

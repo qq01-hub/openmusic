@@ -3815,10 +3815,33 @@ export default function Room() {
                 {!pureMode && (
                   <>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="inline-flex h-5 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/70">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/85" aria-hidden="true" />
-                        <span>{room.userCount} 人在线</span>
-                      </span>
+                      <div className="flex min-w-0 max-w-full items-center gap-1.5">
+                        <span className="inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/70">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/85" aria-hidden="true" />
+                          <span>{room.userCount} 人在线</span>
+                        </span>
+                        <RoomFmModeBadge
+                          className="min-w-0"
+                          fmMode={room.neteaseFmMode}
+                          fmSource={room.fmSource}
+                          playlistRoamingCount={room.playlistRoaming?.playlists.length || 0}
+                          clickable={isOwner}
+                          onClick={() => {
+                            markGuideFeatureUsed('room-header');
+                            setSettingsInitialTab('fm');
+                            setSettingsOpen(true);
+                            void refreshQualityCapabilities();
+                          }}
+                        />
+                        <RoomQualityBadge
+                          compact
+                          className="shrink-0 px-2"
+                          onClick={() => {
+                            markGuideFeatureUsed('room-header');
+                            setQualityOpen(true);
+                          }}
+                        />
+                      </div>
                       {(room.songRequestMaxPerUser ?? 0) > 0 && (
                         <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/55">
                           每人最多 {room.songRequestMaxPerUser} 首待播
@@ -3846,28 +3869,6 @@ export default function Room() {
                       )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <RoomFmModeBadge
-                        fmMode={room.neteaseFmMode}
-                        fmSource={room.fmSource}
-                        playlistRoamingCount={room.playlistRoaming?.playlists.length || 0}
-                        clickable={isOwner}
-                        onClick={() => {
-                          markGuideFeatureUsed('room-header');
-                          setSettingsInitialTab('fm');
-                          setSettingsOpen(true);
-                          void refreshQualityCapabilities();
-                        }}
-                      />
-                      <RoomQualityBadge
-                        compact
-                        className="px-2"
-                        onClick={() => {
-                          markGuideFeatureUsed('room-header');
-                          setQualityOpen(true);
-                        }}
-                      />
-                    </div>
                   </>
                 )}
               </div>
