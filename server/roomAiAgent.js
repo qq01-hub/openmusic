@@ -515,11 +515,12 @@ export function buildQuoteRelationSummary(roomId, speakerUserId, speakerNickname
 }
 
 const STICKER_LEAK_MARKER_RE = /[\[［【]\s*(?:贴纸|貼紙|sticker|表情包?)\s*[:：]\s*[^\]］】]+?\s*[\]］】]/giu;
+const TOOL_EXECUTION_RECORD_RE = /【工具执行记录】[^\r\n]*/gu;
 const INFRA_ERROR_STRONG_RE = /(?:LLM\s*响应错误|All\s+chat\s+models\s+failed|APIStatusError|APIConnectionError|APITimeoutError|InternalServerError|RateLimitError|Traceback\s*\(most\s+recent\s+call\s+last\))/i;
 const INFRA_ERROR_WEAK_TOKENS = ['INSUFFICIENT_BALANCE', 'traceId', 'retryAfterSeconds', 'Error code:', "'code':", "'message':"];
 
 /**
- * 仅做最小必要的安全协议归一化（拦截上游原始异常栈、剥除未渲染的 [贴纸:xx] 标记、归一化 [qqface:id]），
+ * 仅做最小必要的安全协议归一化（拦截上游原始异常栈、剥除内部工具执行记录与未渲染的 [贴纸:xx] 标记、归一化 [qqface:id]），
  * 不强制篡改或替换模型的自然语言与表情选择，由模型结合系统提示词与工具箱自主决策。
  */
 export function sanitizeOutgoingAiText(rawText) {
@@ -529,7 +530,7 @@ export function sanitizeOutgoingAiText(rawText) {
     || INFRA_ERROR_WEAK_TOKENS.filter((token) => text.includes(token)).length >= 2) {
     return '';
   }
-  text = text.replace(STICKER_LEAK_MARKER_RE, '').replace(/\s{2,}/g, ' ').trim();
+  text = text.replace(TOOL_EXECUTION_RECORD_RE, '').replace(STICKER_LEAK_MARKER_RE, '').replace(/\s{2,}/g, ' ').trim();
   return normalizeAiQqFaceText(text);
 }
 

@@ -148,7 +148,8 @@ export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, 
       }
       if (detail?.action === 'lyrics') showLyrics?.();
       if (detail?.action === 'toggleMode' && canControlPlayback) {
-        const next = nextPlayMode(playMode);
+        let next = nextPlayMode(playMode);
+        if (next === 'artist-shuffle' && !useRoomStore.getState().room?.artistShuffle) next = nextPlayMode(next);
         void setRoomPlayMode(next).then((res) => {
           window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
             detail: {

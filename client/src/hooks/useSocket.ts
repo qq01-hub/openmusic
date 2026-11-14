@@ -1747,11 +1747,13 @@ export function useSocket() {
     });
   }, []);
 
-  const setRoomPlayMode = useCallback((mode: string): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+  const setRoomPlayMode = useCallback((mode: string, artistShuffle?: NonNullable<RoomState['artistShuffle']>): Promise<{ success: boolean; error?: string; room?: RoomState }> => {
+    const config = artistShuffle ?? (mode === 'artist-shuffle' ? useRoomStore.getState().room?.artistShuffle : undefined);
     return emitWithAck<{ success: boolean; error?: string; room?: RoomState }>(
       'set_room_play_mode',
-      { mode },
+      { mode, ...(config ? { artistShuffle: config } : {}) },
       { success: false, error: '连接超时，请重试' },
+      mode === 'artist-shuffle' ? 50_000 : SOCKET_ACK_TIMEOUT_MS,
     ).then((res) => {
       if (res.success && res.room) {
         applyRoomSnapshot(res.room);

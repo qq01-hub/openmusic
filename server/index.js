@@ -133,6 +133,7 @@ import {
   setRoomFmMode,
   setQishuiProxyEnabled,
   setRoomPlayMode,
+  setRoomArtistShuffle,
   setRoomMusicAccountsCache,
   patchRoomMusicAccountCache,
   mergeSharedMusicAccount,
@@ -5971,7 +5972,8 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
-  socket.on('set_room_play_mode', ({ mode }, callback) => {
+  socket.on('set_room_play_mode', async (payload, callback) => {
+    const { mode, artistShuffle } = payload && typeof payload === 'object' ? payload : {};
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_play_mode', callback)) return;
 
@@ -5981,9 +5983,11 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const result = setRoomPlayMode(roomId, getSocketUserId(socket), mode, socket.id);
+    const result = mode === 'artist-shuffle'
+      ? await setRoomArtistShuffle(roomId, getSocketUserId(socket), artistShuffle, socket.id)
+      : setRoomPlayMode(roomId, getSocketUserId(socket), mode, socket.id);
     if (result.error) {
-      callback?.({ success: false, error: result.error });
+      callback?.({ success: false, error: result.error, code: result.code });
       return;
     }
 

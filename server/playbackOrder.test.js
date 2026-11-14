@@ -88,7 +88,7 @@ test('高赞离房用户仍遵守在线成员优先设置', () => {
 
 const roomSource = readFileSync(new URL('./roomManager.js', import.meta.url), 'utf8');
 
-for (const mode of ['order', 'shuffle', 'user-round-robin', 'favorite-shuffle', 'loop-one', 'loop-all', 'shuffle-loop']) {
+for (const mode of ['order', 'shuffle', 'user-round-robin', 'favorite-shuffle', 'artist-shuffle', 'loop-one', 'loop-all', 'shuffle-loop']) {
   for (const priorityBy of ['', '管理员']) {
     const behavior = mode === 'loop-one' ? '保持单曲循环' : '先播优先歌曲';
     test(`${mode} 下有${priorityBy || '房主'}优先歌曲时${behavior}`, async () => {
@@ -99,6 +99,7 @@ for (const mode of ['order', 'shuffle', 'user-round-robin', 'favorite-shuffle', 
         getRuntimeConfig: () => ({}),
         filterSongPayloadByArtist: (songs) => songs,
         isSongArtistBlocked: () => false,
+        isSongBanned: () => false,
         recordSongPlay() {},
         clearNextRandom() {},
         ensureNextRandom() {},

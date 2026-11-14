@@ -9,6 +9,7 @@ interface Props {
   audioQuality?: RoomAudioQuality | null;
   className?: string;
   onClick?: () => void;
+  compact?: boolean;
 }
 
 function shortenQualityLabel(label: string, source: 'netease' | 'tencent' | 'kugou' | 'qishui'): string {
@@ -33,7 +34,7 @@ function shortenQualityLabel(label: string, source: 'netease' | 'tencent' | 'kug
   return map[label] || getQualityLabel(label, source);
 }
 
-export default function RoomQualityBadge({ audioQuality, className = '', onClick }: Props) {
+export default function RoomQualityBadge({ audioQuality, className = '', onClick, compact = false }: Props) {
   const roomQuality = useRoomStore((s) => s.room?.audioQuality);
   // 订阅本机音质，保证「我的音质」改完后左上角即时同步
   const userQuality = useUserQualityStore((s) => s.quality);
@@ -90,14 +91,19 @@ export default function RoomQualityBadge({ audioQuality, className = '', onClick
     return <div className={baseClass}>{content}</div>;
   }
 
-  return (
+  const button = (
     <button
       type="button"
       onClick={onClick}
       className={`${baseClass} transition-colors hover:border-white/20 hover:bg-white/[0.07] hover:text-white`}
       aria-label="设置我的音质"
     >
-      {content}
+      {compact ? <><AudioLines className="h-3 w-3" aria-hidden /><span>音质</span></> : content}
     </button>
   );
+  return compact ? (
+    <Tooltip content={`网易：${neteaseLabel} / QQ：${tencentLabel} / 酷狗：${kugouLabel} / 汽水：${qishuiLabel}`}>
+      {button}
+    </Tooltip>
+  ) : button;
 }

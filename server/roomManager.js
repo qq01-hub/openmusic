@@ -63,6 +63,8 @@ import { normalizeAiQqFaceText, hasInvalidAiQqFaceTokens } from "./qqFaces.js";
 import { isSongArtistBlocked, filterSongPayloadByArtist } from "./songArtistFilter.js";
 import { incrementMetric } from "./logger.js";
 import { resolveAdminOwnerLastJoinedAt } from "./adminRoomUtils.js";
+import { fetchArtistShuffleSongs, matchesShuffleArtist, normalizeArtistShuffleOptions, normalizeArtistShuffleSongs, selectArtistShuffleSong, MAX_ARTIST_SHUFFLE_SONGS } from "./artistShuffle.js";
+import { isMusicSourceEnabled } from "./musicSources.js";
 
 const generateRoomId = customAlphabet("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", 6);
 const generateId = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 12);
@@ -246,7 +248,7 @@ const MAX_RANDOM_PREFETCH_ATTEMPTS = 20;
 const MIN_REPORTABLE_DURATION_MS = 1000;
 
 /** 播放顺序：顺序 / 乱序 / 收藏随机 / 单曲循环 / 列表循环 / 列表内随机 */
-export const PLAY_MODES = ["order", "shuffle", "user-round-robin", "favorite-shuffle", "loop-one", "loop-all", "shuffle-loop"];
+export const PLAY_MODES = ["order", "shuffle", "user-round-robin", "favorite-shuffle", "artist-shuffle", "loop-one", "loop-all", "shuffle-loop"];
 export const DEFAULT_PLAY_MODE = "order";
 
 export function normalizePlayMode(value) {
@@ -813,6 +815,9 @@ export function snapshotRoomForStorage(room) {
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     musicAccountSecrets: normalizeMusicAccountSecrets(room.musicAccountSecrets),
     playMode: normalizePlayMode(room.playMode),
+    artistShuffle: room.artistShuffle || null,
+    artistShuffleSongs: room.artistShuffleSongs || [],
+    artistShufflePlayedKeys: Array.from(room.artistShufflePlayedKeys || []).slice(-MAX_ARTIST_SHUFFLE_SONGS),
     lastPlaybackRequesterId: room.lastPlaybackRequesterId || null,
     playbackRequesterOrder: Array.isArray(room.playbackRequesterOrder) ? room.playbackRequesterOrder : [],
     favoriteShuffleUserId: room.favoriteShuffleUserId || null,
@@ -923,6 +928,10 @@ function restoreRoomFromStorage(data) {
   room.musicAccounts = normalizeMusicAccounts(data.musicAccounts);
   room.musicAccountSecrets = normalizeMusicAccountSecrets(data.musicAccountSecrets);
   room.playMode = normalizePlayMode(data.playMode);
+  room.artistShuffle = normalizeArtistShuffleOptions(data.artistShuffle);
+  room.artistShuffleSongs = normalizeArtistShuffleSongs(data.artistShuffleSongs, room.artistShuffle?.source);
+  room.artistShufflePlayedKeys = new Set((Array.isArray(data.artistShufflePlayedKeys) ? data.artistShufflePlayedKeys : []).filter((key) => typeof key === 'string').slice(-MAX_ARTIST_SHUFFLE_SONGS));
+  if (room.playMode === 'artist-shuffle' && (!room.artistShuffle || !room.artistShuffleSongs.length)) room.playMode = DEFAULT_PLAY_MODE;
   room.lastPlaybackRequesterId = String(data.lastPlaybackRequesterId || "").trim() || null;
   room.playbackRequesterOrder = Array.isArray(data.playbackRequesterOrder) ? data.playbackRequesterOrder.map(String) : [];
   room.favoriteShuffleUserId = String(data.favoriteShuffleUserId || "").trim() || null;
@@ -1346,6 +1355,9 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     /** 房间私有音源凭证（不广播；仅开启共享时同步到 Meting 池） */
     musicAccountSecrets: { netease: null, tencent: null, kugou: null, qishui: null },
     playMode: DEFAULT_PLAY_MODE,
+    artistShuffle: null,
+    artistShuffleSongs: [],
+    artistShufflePlayedKeys: new Set(),
     /** 用户轮转模式上一次实际播放的用户，用于保证跨轮次公平 */
     lastPlaybackRequesterId: null,
     playbackRequesterOrder: [],
@@ -3286,6 +3298,10 @@ export function setRoomPlayMode(roomId, actorId, mode, connectionId = null) {
   }
 
   const nextMode = normalizePlayMode(mode);
+  if (nextMode === 'artist-shuffle' && (!room.artistShuffle || !room.artistShuffleSongs?.length)) {
+    return { error: '请先填写有效歌手', code: 'INVALID_ARTIST' };
+  }
+  room.playModeRequestVersion = (room.playModeRequestVersion || 0) + 1;
   const sameMode = normalizePlayMode(room.playMode) === nextMode;
   room.playMode = nextMode;
   if (room.playMode !== "user-round-robin") {
@@ -3293,13 +3309,57 @@ export function setRoomPlayMode(roomId, actorId, mode, connectionId = null) {
     room.playbackRequesterOrder = [];
   }
   room.favoriteShuffleUserId = nextMode === "favorite-shuffle" ? String(actorId || "").trim() || null : null;
-  if (sameMode && nextMode !== "favorite-shuffle") {
+  if (sameMode && !['favorite-shuffle', 'artist-shuffle'].includes(nextMode)) {
     return { room: serializeRoom(room) };
   }
   clearNextRandom(room);
   room.randomBatch = [];
+  if (nextMode === 'artist-shuffle' && !room.current) {
+    room.randomLoading = true;
+    room.randomError = '';
+    room.lastRandomRetryAt = 0;
+  }
   persistRoom(room);
   return { room: serializeRoom(room) };
+}
+
+export async function setRoomArtistShuffle(roomId, actorId, options, connectionId = null) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: '房间不存在', code: 'ROOM_NOT_FOUND' };
+  if (!isControllerConnection(room, actorId, connectionId)) return { error: '仅房主或管理员可切换播放顺序', code: 'FORBIDDEN' };
+  const config = normalizeArtistShuffleOptions(options);
+  if (!config) return { error: '请填写有效歌手，名称最多 80 个字符', code: 'INVALID_ARTIST' };
+  if (!isMusicSourceEnabled(config.source, getRuntimeConfig().musicSourcesEnabled)) return { error: '该音乐源未开启', code: 'SOURCE_DISABLED' };
+  if (room.artistShuffleLookupPending) return { error: '正在查找歌手歌曲，请稍候', code: 'ARTIST_LOOKUP_BUSY' };
+  const version = (room.playModeRequestVersion || 0) + 1;
+  room.playModeRequestVersion = version;
+  room.artistShuffleLookupPending = true;
+  try {
+    const songs = await runWithMetingRequestContext({ roomId, roomName: room.name || roomId }, () => fetchArtistShuffleSongs(config));
+    if (rooms.get(roomId) !== room || !isControllerConnection(room, actorId, connectionId)) return { error: '会话无效，请重新加入房间', code: 'FORBIDDEN' };
+    if (room.playModeRequestVersion !== version) return { error: '播放模式已更改，请重新设置', code: 'PLAY_MODE_CHANGED' };
+    const allowed = filterSongPayloadByArtist(songs, getRuntimeConfig().blockedArtistKeywords)
+      .filter((song) => !isSongBanned(room, song) && matchesShuffleArtist(song, config));
+    if (!allowed.length) {
+      incrementMetric('artist_shuffle_total', { result: 'invalid' });
+      return { error: '歌手无效，未找到可播放歌曲，请检查歌手名或更换音源', code: 'INVALID_ARTIST' };
+    }
+    const sameArtist = room.artistShuffle?.artist === config.artist && room.artistShuffle?.source === config.source;
+    room.artistShuffle = config;
+    room.artistShuffleSongs = songs;
+    if (!sameArtist) room.artistShufflePlayedKeys = new Set();
+    if (room.current?.source === config.source && matchesShuffleArtist(room.current, config)) {
+      room.artistShufflePlayedKeys.add(songIdentity(room.current.source, room.current.id));
+    }
+    const result = setRoomPlayMode(roomId, actorId, 'artist-shuffle', connectionId);
+    incrementMetric('artist_shuffle_total', { result: 'success' });
+    return result;
+  } catch {
+    incrementMetric('artist_shuffle_total', { result: 'upstream_error' });
+    return { error: '查找歌手歌曲失败，请稍后重试', code: 'ARTIST_LOOKUP_FAILED' };
+  } finally {
+    room.artistShuffleLookupPending = false;
+  }
 }
 
 function releaseFavoriteShuffle(room, userId) {
@@ -3914,6 +3974,8 @@ export function banRoomSong(roomId, actorId, song, connectionId = null) {
 
   const bannedName = normalizeBannedSongName(entry.name);
   room.queue = room.queue.filter((item) => normalizeBannedSongName(item.name) !== bannedName);
+  if (isSongBanned(room, room.nextRandom)) clearNextRandom(room);
+  room.randomBatch = (room.randomBatch || []).filter((item) => !isSongBanned(room, item));
 
   persistRoom(room);
   return { room: serializeRoom(room) };
@@ -4804,9 +4866,16 @@ export function selectPlaylistRoamingSong(songs, currentSong = null, playedKeys 
 }
 
 async function fetchRandomForRoom(room) {
+  if (normalizePlayMode(room.playMode) === 'artist-shuffle') {
+    if (!room.artistShuffle || !isMusicSourceEnabled(room.artistShuffle.source, getRuntimeConfig().musicSourcesEnabled)) return null;
+    const songs = filterSongPayloadByArtist(room.artistShuffleSongs || [], getRuntimeConfig().blockedArtistKeywords)
+      .filter((song) => !isSongBanned(room, song));
+    const song = selectArtistShuffleSong(songs, room.artistShuffle, room.current, room.artistShufflePlayedKeys);
+    return song ? { ...song, requestedBy: '歌手随机', requestedById: '' } : null;
+  }
   if (room.playlistRoaming && room.playlistRoaming.enabled !== false) {
     const song = selectPlaylistRoamingSong(
-      getPlaylistRoamingSongs(room.playlistRoaming),
+      getPlaylistRoamingSongs(room.playlistRoaming).filter((song) => !isSongBanned(room, song)),
       room.current,
       room.randomPlayedKeys,
       Math.random,
@@ -4818,7 +4887,7 @@ async function fetchRandomForRoom(room) {
   if ((!room.playlistRoaming || room.playlistRoaming.enabled === false) && normalizePlayMode(room.playMode) === "favorite-shuffle") {
     if (!room.favoriteShuffleUserId) return null;
     const favorites = await listFavoriteSongs(room.favoriteShuffleUserId);
-    const song = selectRandomFavoriteSong(favorites, room.current, room.randomPlayedKeys);
+    const song = selectRandomFavoriteSong(favorites.filter((song) => !isSongBanned(room, song)), room.current, room.randomPlayedKeys);
     if (!song) return null;
     return {
       ...song,
@@ -4841,7 +4910,8 @@ async function fetchRandomForRoom(room) {
     }
     persistRoom(room);
   }
-  room.randomBatch = filterSongPayloadByArtist(room.randomBatch || [], getRuntimeConfig().blockedArtistKeywords);
+  room.randomBatch = filterSongPayloadByArtist(room.randomBatch || [], getRuntimeConfig().blockedArtistKeywords)
+    .filter((song) => !isSongBanned(room, song));
   if (room.randomBatch.length > 0) {
     return room.randomBatch.shift();
   }
@@ -4869,7 +4939,8 @@ async function fetchRandomForRoom(room) {
       notifyRoomStructureChanged(room.id);
     },
   });
-  const allowedSongs = filterSongPayloadByArtist(Array.isArray(songs) ? songs : [], getRuntimeConfig().blockedArtistKeywords);
+  const allowedSongs = filterSongPayloadByArtist(Array.isArray(songs) ? songs : [], getRuntimeConfig().blockedArtistKeywords)
+    .filter((song) => !isSongBanned(room, song));
   if (allowedSongs.length === 0) return null;
   room.randomBatch = allowedSongs.slice(1);
   return allowedSongs[0];
@@ -4881,7 +4952,7 @@ async function ensureNextRandom(room) {
     return;
   }
   // 漫游已关闭：不预取，队列放空后自然停止
-  if ((!room.playlistRoaming || room.playlistRoaming.enabled === false) && normalizePlayMode(room.playMode) !== "favorite-shuffle" && (room.neteaseFmMode || DEFAULT_FM_MODE) === FM_MODE_OFF) {
+  if ((!room.playlistRoaming || room.playlistRoaming.enabled === false) && !['favorite-shuffle', 'artist-shuffle'].includes(normalizePlayMode(room.playMode)) && (room.neteaseFmMode || DEFAULT_FM_MODE) === FM_MODE_OFF) {
     clearNextRandom(room);
     return;
   }
@@ -4893,11 +4964,12 @@ async function ensureNextRandom(room) {
         const song = await fetchRandomForRoom(room);
         if (room.nextRandomPromise !== task) return;
         if (!song) break;
+        if (isSongBanned(room, song) || isSongArtistBlocked(song, getRuntimeConfig().blockedArtistKeywords)) continue;
 
         const key = songIdentity(song.source, song.id);
         const currentKey = room.current ? songIdentity(room.current.source, room.current.id) : '';
         const nextKey = room.nextRandom ? songIdentity(room.nextRandom.source, room.nextRandom.id) : '';
-        if (key === currentKey || key === nextKey || (normalizeFmSource(room.fmSource) !== 'tencent'
+        if ((key === currentKey && normalizePlayMode(room.playMode) !== 'artist-shuffle') || key === nextKey || (normalizePlayMode(room.playMode) !== 'artist-shuffle' && normalizeFmSource(room.fmSource) !== 'tencent'
           && (!room.playlistRoaming || room.playlistRoaming.enabled === false) && room.randomPlayedKeys.has(key))) continue;
 
         room.nextRandom = buildPendingRandomItem(song, song.requestedBy || "私人漫游", song.requestedById || "");
@@ -4957,6 +5029,11 @@ function setCurrentSong(room, song) {
     delete next.jumpNext;
   }
   room.current = next;
+  if (song?.id && room.playMode === 'artist-shuffle' && song.source === room.artistShuffle?.source && matchesShuffleArtist(song, room.artistShuffle)) {
+    room.artistShufflePlayedKeys ||= new Set();
+    room.artistShufflePlayedKeys.add(songIdentity(song.source, song.id));
+    if (room.artistShufflePlayedKeys.size > MAX_ARTIST_SHUFFLE_SONGS) room.artistShufflePlayedKeys.delete(room.artistShufflePlayedKeys.values().next().value);
+  }
   if ((song?.requestedBy === '私人漫游' || song?.requestedBy === '收藏随机' || song?.requestedBy === '指定歌单') && song?.id) {
     const key = songIdentity(song.source, song.id);
     room.randomPlayedKeys.delete(key);
@@ -5067,8 +5144,8 @@ function recycleFinishedSongToQueue(room, finishedSong) {
 async function playNextUnlocked(room, options = {}) {
   const { allowFetchRandom = false, finishedSong = null, forceAdvance = false } = options;
   const keywords = getRuntimeConfig().blockedArtistKeywords;
-  room.queue = filterSongPayloadByArtist(room.queue, keywords);
-  if (isSongArtistBlocked(room.nextRandom, keywords)) room.nextRandom = null;
+  room.queue = filterSongPayloadByArtist(room.queue, keywords).filter((song) => !isSongBanned(room, song));
+  if (isSongArtistBlocked(room.nextRandom, keywords) || isSongBanned(room, room.nextRandom)) room.nextRandom = null;
 
   // 平台热榜：仅统计用户主动点播且真正播放完成的歌曲，随机/漫游（requestedById 为空）不计入
   if (finishedSong && finishedSong.requestedById) {
@@ -5078,13 +5155,13 @@ async function playNextUnlocked(room, options = {}) {
   const hasPrioritySong = room.queue.some((item) => Number(item.ownerPriority || 0) > 0);
 
   // 单曲循环：自然播完时重播当前曲；手动切歌 forceAdvance 仍前进
-  if (!forceAdvance && !isSongArtistBlocked(finishedSong || room.current, keywords)
+  if (!forceAdvance && !isSongArtistBlocked(finishedSong || room.current, keywords) && !isSongBanned(room, finishedSong || room.current)
     && !room.queue.some((item) => item.jumpNext === true)
     && normalizePlayMode(room.playMode) === "loop-one" && (finishedSong || room.current)) {
     if (restartCurrentSong(room)) return;
   }
 
-  if (!isSongArtistBlocked(finishedSong || room.current, keywords)) {
+  if (!isSongArtistBlocked(finishedSong || room.current, keywords) && !isSongBanned(room, finishedSong || room.current)) {
     recycleFinishedSongToQueue(room, finishedSong || room.current);
   }
 
@@ -5115,13 +5192,37 @@ async function playNextUnlocked(room, options = {}) {
         favorite = null;
       }
     }
-    if (favorite && !isSongArtistBlocked(favorite, getRuntimeConfig().blockedArtistKeywords)) {
+    if (favorite && !isSongArtistBlocked(favorite, getRuntimeConfig().blockedArtistKeywords) && !isSongBanned(room, favorite)) {
       setCurrentSong(room, buildPendingRandomItem(favorite, "收藏随机") || favorite);
       void ensureNextRandom(room);
       return;
     }
     favoriteShuffle = room.playMode === "favorite-shuffle" && room.users.has(room.favoriteShuffleUserId);
     // 收藏为空时不丢弃房间队列，退回普通队列播放。
+  }
+
+  if (room.playMode === 'artist-shuffle') {
+    const config = room.artistShuffle;
+    if (room.nextRandomPromise) await room.nextRandomPromise;
+    let song = room.artistShuffle === config && room.playMode === 'artist-shuffle' ? room.nextRandom : null;
+    room.nextRandom = null;
+    if (!song && room.artistShuffle === config && room.playMode === 'artist-shuffle') song = await fetchRandomForRoom(room);
+    if (room.artistShuffle !== config || room.playMode !== 'artist-shuffle') return;
+    if (song && !isSongBanned(room, song) && !isSongArtistBlocked(song, getRuntimeConfig().blockedArtistKeywords)) {
+      setCurrentSong(room, buildPendingRandomItem(song, '歌手随机'));
+      void ensureNextRandom(room);
+      return;
+    }
+    clearNextRandom(room);
+    room.current = null;
+    room.isPlaying = false;
+    room.currentTime = 0;
+    room.startedAt = null;
+    room.randomLoading = false;
+    room.randomError = '该歌手暂无可播放歌曲，请更换歌手或播放模式';
+    clearSharedPlaybackMedia(room);
+    bumpPlaybackState(room);
+    return;
   }
 
   if (room.queue.length > 0) {
@@ -5137,13 +5238,14 @@ async function playNextUnlocked(room, options = {}) {
 
   let random = room.nextRandom;
   room.nextRandom = null;
-  if (isSongArtistBlocked(random, getRuntimeConfig().blockedArtistKeywords)) random = null;
+  if (isSongArtistBlocked(random, getRuntimeConfig().blockedArtistKeywords) || isSongBanned(room, random)) random = null;
 
   const shouldFetchRandom = !favoriteShuffle && !random && (allowFetchRandom || room.queue.length === 0);
   if (shouldFetchRandom) {
     room.randomLoading = true;
     bumpPlaybackState(room);
     random = await fetchRandomForRoom(room);
+    if (isSongArtistBlocked(random, getRuntimeConfig().blockedArtistKeywords) || isSongBanned(room, random)) random = null;
     if (random && !random.queueId) {
       random = buildPendingRandomItem(random, random.requestedBy || "私人漫游", random.requestedById || "");
     }
@@ -6731,6 +6833,7 @@ function serializeRoom(room, options = {}) {
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),
+    artistShuffle: room.artistShuffle ? { ...room.artistShuffle } : null,
     lastPlaybackRequesterId: room.lastPlaybackRequesterId || null,
     announcementEnabled: Boolean(room.announcementEnabled),
     announcementText: String(room.announcementText || "").slice(0, MAX_ANNOUNCEMENT_LENGTH),
@@ -6821,6 +6924,7 @@ export function prepareRoomBroadcast(roomId) {
     playlistRoaming: normalizePlaylistRoaming(room.playlistRoaming),
     musicAccounts: normalizeMusicAccounts(room.musicAccounts),
     playMode: normalizePlayMode(room.playMode),
+    artistShuffle: room.artistShuffle ? { ...room.artistShuffle } : null,
     lastPlaybackRequesterId: room.lastPlaybackRequesterId || null,
     announcementEnabled: Boolean(room.announcementEnabled),
     announcementText: String(room.announcementText || "").slice(0, MAX_ANNOUNCEMENT_LENGTH),

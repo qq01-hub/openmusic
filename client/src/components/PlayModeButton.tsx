@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react';
 import { createPortal } from 'react-dom';
-import { Check } from 'lucide-react';
+import { ArrowLeft, Check, ChevronRight } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
 import {
@@ -14,6 +14,8 @@ import {
 } from '../lib/playMode';
 import { isMobileDevice } from '../lib/audioUnlock';
 import Tooltip from './Tooltip';
+import { useSiteFeaturesStore } from '../stores/siteFeaturesStore';
+import { getFmSourceLabel, normalizeFmSource, type FmSource } from '../api/music/fmMode';
 
 interface Props {
   className?: string;
@@ -22,8 +24,8 @@ interface Props {
 
 type MenuPosition = { left: number; top: number };
 
-const PLAY_MODE_MENU_WIDTH = 240;
-const PLAY_MODE_MENU_HEIGHT = 320;
+const PLAY_MODE_MENU_WIDTH = 280;
+const PLAY_MODE_MENU_HEIGHT = 400;
 const PLAY_MODE_MENU_GAP = 8;
 const MOBILE_DOUBLE_CLICK_DELAY = 280;
 
@@ -66,10 +68,18 @@ export default function PlayModeButton({
 }: Props) {
   const playMode = useRoomStore((s) => normalizePlayMode(s.room?.playMode));
   const canControl = useRoomStore((s) => s.canControlPlayback);
+  const artistShuffle = useRoomStore((s) => s.room?.artistShuffle);
+  const fmSource = useRoomStore((s) => s.room?.fmSource);
+  const enabledSources = useSiteFeaturesStore((s) => s.musicSourcesEnabled);
   const { setRoomPlayMode } = useSocket();
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  const [artistEditorOpen, setArtistEditorOpen] = useState(false);
+  const [artist, setArtist] = useState('');
+  const [artistSource, setArtistSource] = useState<FmSource>('netease');
+  const [includeCollaborations, setIncludeCollaborations] = useState(false);
+  const [artistError, setArtistError] = useState('');
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const pendingClickRef = useRef<number | null>(null);
@@ -92,12 +102,14 @@ export default function PlayModeButton({
 
   const openMenuAtPoint = useCallback((x: number, y: number) => {
     if (busy) return;
+    setArtistEditorOpen(false);
     setMenuPosition(getMenuPositionAtPoint(x, y));
     setMenuOpen(true);
   }, [busy]);
 
   const openMenuForButton = useCallback(() => {
     if (busy || !buttonRef.current) return;
+    setArtistEditorOpen(false);
     setMenuPosition(getMenuPositionForButton(buttonRef.current));
     setMenuOpen(true);
   }, [busy]);
@@ -105,6 +117,17 @@ export default function PlayModeButton({
   const selectPlayMode = useCallback(async (value: unknown) => {
     const mode = resolvePlayModeSelection(value);
     if (!mode || !canControl || busy) return;
+    if (mode === 'artist-shuffle') {
+      const preferredSource = normalizeFmSource(artistShuffle?.source || fmSource);
+      setArtist(artistShuffle?.artist || '');
+      setArtistSource(enabledSources[preferredSource] ? preferredSource : ((Object.keys(enabledSources) as FmSource[]).find((source) => enabledSources[source]) || preferredSource));
+      setIncludeCollaborations(artistShuffle?.includeCollaborations === true);
+      setArtistError('');
+      setArtistEditorOpen(true);
+      if (!menuOpen && buttonRef.current) setMenuPosition(getMenuPositionForButton(buttonRef.current));
+      setMenuOpen(true);
+      return;
+    }
 
     setMenuOpen(false);
     setMenuPosition(null);
@@ -121,7 +144,30 @@ export default function PlayModeButton({
     } finally {
       setBusy(false);
     }
-  }, [busy, canControl, setRoomPlayMode]);
+  }, [artistShuffle, busy, canControl, enabledSources, fmSource, menuOpen, setRoomPlayMode]);
+
+  const submitArtist = async () => {
+    if (!canControl || busy) return;
+    if (!artist.trim()) {
+      setArtistError('请填写歌手名称');
+      return;
+    }
+    setArtistError('');
+    setBusy(true);
+    try {
+      const res = await setRoomPlayMode('artist-shuffle', { artist: artist.trim(), source: artistSource, includeCollaborations });
+      if (!res.success) {
+        setArtistError(res.error || '歌手无效，未找到可播放歌曲');
+        return;
+      }
+      closeMenu();
+      showPlayModeToast(`歌手随机：${artist.trim()}`, 'success');
+    } catch {
+      setArtistError('查找歌手歌曲失败，请稍后重试');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const handleCycle = useCallback(() => {
     void selectPlayMode(nextMode);
@@ -186,7 +232,7 @@ export default function PlayModeButton({
   }, [closeMenu, menuOpen]);
 
   const tip = canControl
-    ? `当前：${meta.label}，点击切换为${nextMeta.label}；${isMobile ? '双击展开选项' : '右键展开选项'}`
+    ? `当前：${meta.label}${playMode === 'artist-shuffle' && artistShuffle ? `（${artistShuffle.artist}）` : ''}，点击切换为${nextMeta.label}；${isMobile ? '双击展开选项' : '右键展开选项'}`
     : `当前：${meta.label}（仅房主或管理员可切换）`;
 
   return (
@@ -220,13 +266,40 @@ export default function PlayModeButton({
       {menuOpen && menuPosition && createPortal(
         <div
           ref={menuRef}
-          role="menu"
-          aria-label="播放顺序选项"
+          role={artistEditorOpen ? 'dialog' : 'menu'}
+          aria-label={artistEditorOpen ? '歌手随机设置' : '播放顺序选项'}
           tabIndex={-1}
-          className="fixed z-[230] max-h-[calc(100vh-16px)] w-[240px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-white/10 bg-[#17191f]/[.98] p-1.5 text-white shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in"
+          className="fixed z-[230] max-h-[calc(100vh-16px)] w-[280px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-white/10 bg-[#17191f]/[.98] p-1.5 text-white shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in"
           style={{ left: menuPosition.left, top: menuPosition.top }}
           onContextMenu={(event) => event.preventDefault()}
         >
+          {artistEditorOpen ? (
+            <form className="space-y-3 p-2.5" onSubmit={(event) => { event.preventDefault(); void submitArtist(); }}>
+              <div className="flex items-center gap-2">
+                <button type="button" aria-label="返回播放模式" disabled={busy} onClick={() => setArtistEditorOpen(false)} className="rounded-md p-1.5 text-white/70 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-netease-red disabled:opacity-50">
+                  <ArrowLeft className="h-4 w-4" />
+                </button>
+                <p className="text-sm font-medium">歌手随机</p>
+              </div>
+              <label className="block text-xs text-white/75">
+                歌手名称
+                <input autoFocus value={artist} onChange={(event) => { setArtist(event.target.value); setArtistError(''); }} maxLength={80} disabled={!canControl || busy} placeholder="填写完整歌手名" aria-invalid={Boolean(artistError)} aria-describedby={artistError ? 'artist-shuffle-error' : undefined} className="mt-1.5 min-h-10 w-full rounded-lg border border-white/20 bg-white/5 px-3 text-sm text-white placeholder:text-white/55 focus:border-netease-red focus:outline-none disabled:opacity-50" />
+              </label>
+              <label className="block text-xs text-white/75">
+                音乐源
+                <select value={artistSource} onChange={(event) => setArtistSource(event.target.value as FmSource)} disabled={!canControl || busy} className="mt-1.5 min-h-10 w-full rounded-lg border border-white/20 bg-[#17191f] px-2 text-sm text-white focus:border-netease-red focus:outline-none disabled:opacity-50">
+                  {(Object.keys(enabledSources) as FmSource[]).filter((source) => enabledSources[source]).map((source) => <option key={source} value={source}>{getFmSourceLabel(source)}</option>)}
+                </select>
+              </label>
+              <label className="flex min-h-10 cursor-pointer items-center gap-2 text-[13px] text-white/90">
+                <input type="checkbox" checked={includeCollaborations} onChange={(event) => setIncludeCollaborations(event.target.checked)} disabled={!canControl || busy} className="h-4 w-4 accent-netease-red" />
+                包含其他歌手合唱
+              </label>
+              <p className="text-xs leading-relaxed text-white/65">默认只选该歌手独唱，禁播歌曲自动排除，已播放歌曲降低权重，全部播过后重置</p>
+              {artistError && <p id="artist-shuffle-error" role="alert" className="text-xs leading-relaxed text-red-300">{artistError}</p>}
+              <button type="submit" disabled={!canControl || busy || !artist.trim() || !enabledSources[artistSource]} aria-busy={busy} className="min-h-10 w-full rounded-lg bg-netease-red px-3 text-sm font-medium text-white hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70 disabled:cursor-not-allowed disabled:opacity-50">{busy ? '正在查找歌曲…' : '开启歌手随机'}</button>
+            </form>
+          ) : <>
           <div className="border-b border-white/10 px-2.5 pb-2 pt-1">
             <p className="text-[13px] font-medium text-white/95">播放顺序</p>
             <p className="mt-0.5 text-[11px] text-white/45">
@@ -255,10 +328,12 @@ export default function PlayModeButton({
                   <OptionIcon className={`h-4 w-4 shrink-0 ${active ? 'text-netease-red' : 'text-white/50'}`} />
                   <span className="min-w-0 flex-1 truncate">{option.label}</span>
                   {active && <Check className="h-4 w-4 shrink-0 text-netease-red" />}
+                  {mode === 'artist-shuffle' && <ChevronRight className="h-4 w-4 shrink-0 text-white/60" />}
                 </button>
               );
             })}
           </div>
+          </>}
         </div>,
         document.body,
       )}

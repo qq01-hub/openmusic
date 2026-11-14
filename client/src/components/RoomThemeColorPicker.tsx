@@ -7,6 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { Palette, RotateCcw, X } from 'lucide-react';
+import Tooltip from './Tooltip';
 import {
   DEFAULT_THEME_COLOR,
   applyRoomThemeColor,
@@ -197,19 +198,21 @@ export default function RoomThemeColorPicker() {
   const brightHue = themeRgbToHex(hsvToRgb({ ...hsv, v: 1 }));
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((value) => !value)}
-        className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-netease-card ${
-          open ? 'text-netease-red' : 'text-netease-muted hover:text-white'
-        }`}
-        aria-label="修改主题色"
-        aria-expanded={open}
-      >
-        <Palette className="h-4 w-4" />
-        <span className="hidden sm:inline">主题色</span>
-      </button>
+    <div ref={rootRef} className="relative shrink-0">
+      <Tooltip side="bottom" content="修改主题色" disabled={open}>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-white/[0.08] min-[1200px]:px-2.5 ${
+            open ? 'bg-white/[0.08] text-netease-red' : 'text-netease-muted hover:text-white'
+          }`}
+          aria-label="修改主题色"
+          aria-expanded={open}
+        >
+          <Palette className="h-4 w-4 shrink-0" />
+          <span className="hidden min-[1200px]:inline">主题色</span>
+        </button>
+      </Tooltip>
 
       {open && (
         <div

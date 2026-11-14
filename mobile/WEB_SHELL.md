@@ -35,6 +35,12 @@ flutter run --dart-define=OM_SERVER_URL=https://your-host
 
 当前房间页通过 `flutter_inappwebview` bridge 自动报送 Android 通知栏媒体状态，并响应 `play`、`pause`、`seek`、`next`、`lyrics`、`toggleMode`、`toggleFavorite`。通知栏的按钮、进度拖动与模式切换都依赖网页同步的权限字段；网页和服务端仍负责最终权限校验。Android 13 及以上首次播放需允许通知权限；悬浮歌词还需要系统悬浮窗权限。
 
+播放模式追加 `artist-shuffle`，房间快照追加可选 `artistShuffle: { artist, source, includeCollaborations }`，由网页的播放模式菜单填写歌手与音源，合唱默认关闭，仅房主或正式管理员可提交 `set_room_play_mode` 的同名附加字段，未找到符合歌手、合唱及禁播规则的歌曲时返回 `INVALID_ARTIST` 并保留原模式，上游失败返回 `ARTIST_LOOKUP_FAILED`
+
+歌手曲库通过现有音乐搜索分页获取，以音源可返回的结果为准，重复页停止，查询最多 40 秒、2000 条搜索结果，达到上限时拒绝切换，避免把截断结果当作完整曲库；已播歌曲权重为未播的十分之一，全部可选歌曲播过后重置，曲库和本轮记录仅保存在服务端现有 Redis 房间快照，不向客户端广播曲库
+
+歌手随机保留普通队列，插队与优先歌曲继续生效，无可播放歌手歌曲时显示错误而不回退私人漫游；原生 `toggleMode` 沿用网页权限，未配置歌手时跳过该模式，已有配置时复用配置，桥接字段和命令名不变，先升级服务端再刷新网页，旧客户端忽略附加字段，回滚旧服务端会将该新模式恢复为顺序播放，无需迁移或修改环境变量
+
 用户轮播的房间快照与 `room_update` 追加可选 `upcomingSong`，由服务端按现有插队、轮次、点赞与离线置后规则计算，只包含既有公开歌曲字段，不消费队列或推进轮次；网页在播放剩余 20 秒时于队列顶部用切歌同款黑色气泡预告下一首歌名、歌手和点歌人，持续显示 10 秒且不展示倒计时，暂停或没有预告歌曲时隐藏，原生桥接命令不变，旧网页忽略新字段，新网页连接旧服务端时不显示预告，先升级服务端再刷新网页资源
 
 AI 桌宠调用新增服务端到网页的 Socket 事件 `room_ai_desk_pet`，仅发送到发起聊天的已认证连接，payload 为 `requestId / roomId / userId / expiresAt / command / args`，`command` 仅为 `get_state` 或 `control`；网页核对成员、房间、开关、过期时间与动作白名单并幂等执行，ack 返回同一 `requestId` 和 `success`，成功附状态或 `status: started|shown|unchanged`，失败附 `code / error`

@@ -7,7 +7,7 @@ import { filterCrossPlatformDuplicates, type FavoriteDuplicateMode } from '../li
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle } from 'lucide-react';
+import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle, Megaphone } from 'lucide-react';
 import { isSongInRoomQueue } from '../lib/roomSongStatus';
 
 import { searchAllSongs, getAvailableSources, listRooms, type SearchFilterMode } from '../api/music';
@@ -496,8 +496,8 @@ export default function Room() {
   const [visualFxDragging, setVisualFxDragging] = useState(false);
   const isLgUp = useMediaQuery('(min-width: 1024px)');
   const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1023px)');
-  const isSmUp = useMediaQuery('(min-width: 640px)');
-  const canUseImmersive = (isLgUp || isTablet) && !pureMode;
+  const isMdUp = isLgUp || isTablet;
+  const canUseImmersive = isMdUp && !pureMode;
   const showImmersiveEntry = canUseImmersive;
   const [favoritesOpen, setFavoritesOpen] = useState(false);
   const [songHistoryOpen, setSongHistoryOpen] = useState(false);
@@ -3641,11 +3641,11 @@ export default function Room() {
           immersiveMode || visualFxDragging ? 'pointer-events-none opacity-0' : ''
         }`}
       >
-      <header className={`relative z-30 flex-shrink-0 border-b px-3 py-2.5 sm:px-4 sm:py-3 safe-top ${ambientGlassClass}`} data-guide="room-header">
+      <header className={`relative z-30 flex-shrink-0 border-b px-3 py-2 sm:px-4 sm:py-2.5 safe-top ${ambientGlassClass}`} data-guide="room-header">
 
-        <div className="max-w-[1680px] mx-auto flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mx-auto flex max-w-[1680px] flex-col gap-2 md:flex-row md:items-center md:justify-between md:gap-4">
 
-          <div className="flex items-center justify-between gap-2 min-w-0">
+          <div className="flex min-w-0 items-start justify-between gap-2.5 md:flex-1 md:items-center md:justify-start md:gap-3.5">
 
             {(headerCoverSong || isCreator) && !pureMode && (
               <Tooltip side="bottom" content={isCreator ? (room.customCoverUrl ? '自定义封面（点击修改）' : '设置房间封面') : undefined}>
@@ -3661,10 +3661,10 @@ export default function Room() {
                         <SongCover
                           song={headerCoverSong}
                           eager
-                          className="h-11 w-11 rounded-xl border border-white/10 bg-surface-raised object-cover shadow-lg shadow-black/30 transition-opacity group-hover:opacity-80"
+                          className="h-14 w-14 rounded-xl border border-white/10 bg-surface-raised object-cover shadow-lg shadow-black/30 transition-opacity group-hover:opacity-80"
                         />
                       ) : (
-                        <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-dashed border-white/20 bg-surface-raised text-netease-muted transition-colors group-hover:border-white/40 group-hover:text-white">
+                        <span className="flex h-14 w-14 items-center justify-center rounded-xl border border-dashed border-white/20 bg-surface-raised text-netease-muted transition-colors group-hover:border-white/40 group-hover:text-white">
                           <ImagePlus className="h-4 w-4" />
                         </span>
                       )}
@@ -3676,7 +3676,7 @@ export default function Room() {
                     <SongCover
                       song={headerCoverSong}
                       eager
-                      className="h-11 w-11 rounded-xl border border-white/10 bg-surface-raised object-cover shadow-lg shadow-black/30"
+                      className="h-14 w-14 rounded-xl border border-white/10 bg-surface-raised object-cover shadow-lg shadow-black/30"
                     />
                   ) : null}
                   {room.isPlaying && headerCoverSong && (
@@ -3695,14 +3695,12 @@ export default function Room() {
               </Tooltip>
             )}
 
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
 
-              <div className="flex items-center gap-2">
+              <div className="flex min-w-0 items-center gap-1.5 sm:gap-2">
 
-                <h1 className="text-base sm:text-lg font-semibold truncate">
-
+                <h1 className="min-w-0 truncate text-base font-semibold leading-snug sm:text-lg">
                   <span className="truncate">{room.name}</span>
-
                 </h1>
 
                 {isCreator && (
@@ -3711,7 +3709,7 @@ export default function Room() {
                       <button
                         type="button"
                         onClick={openRenameModal}
-                        className="flex-shrink-0 rounded-lg p-1 text-netease-muted hover:bg-white/10 hover:text-white transition-colors"
+                        className="flex-shrink-0 rounded-lg p-1 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
                         aria-label="修改房间名"
                       >
                         <Pencil className="w-3.5 h-3.5" />
@@ -3791,97 +3789,117 @@ export default function Room() {
 
               </div>
 
-              <p className="text-xs text-netease-muted mt-0.5">
-                房间号 <span className="text-netease-red">{room.id}</span>
-                {pureMode && (
-                  <span className="ml-2 text-[10px] text-white/35">Esc 隐藏/显示播放器</span>
-                )}
-              </p>
+              <div className="mt-1 flex flex-col gap-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="inline-flex h-5 items-center gap-1 whitespace-nowrap text-xs leading-none text-netease-muted">
+                    <span>房间号</span>
+                    <span className="font-mono font-medium tracking-wide text-netease-red">{room.id}</span>
+                  </span>
+                  {!pureMode && room.announcementEnabled && room.announcementText?.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => setAnnouncementPopupOpen(true)}
+                      className="inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full border border-amber-400/25 bg-amber-400/10 px-2 text-[10px] font-medium leading-none text-amber-300 transition-colors hover:border-amber-400/45 hover:bg-amber-400/18 hover:text-amber-200"
+                    >
+                      <Megaphone className="h-2.5 w-2.5 shrink-0" aria-hidden="true" />
+                      <span>查看公告</span>
+                    </button>
+                  )}
+                  {pureMode && (
+                    <span className="whitespace-nowrap text-[10px] leading-none text-white/35">
+                      Esc 隐藏/显示播放器
+                    </span>
+                  )}
+                </div>
 
-              {!pureMode && (
-              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
-                <span className="inline-flex h-5 items-center whitespace-nowrap text-[10px] leading-none text-netease-muted">
-                  {room.userCount} 人在线
-                </span>
-                <RoomFmModeBadge
-                  fmMode={room.neteaseFmMode}
-                  fmSource={room.fmSource}
-                  playlistRoamingCount={room.playlistRoaming?.playlists.length || 0}
-                  clickable={isOwner}
-                  onClick={() => {
-                    setSettingsOpen(true);
-                    void refreshQualityCapabilities();
-                  }}
-                />
-                <RoomQualityBadge
-                  onClick={() => {
-                    markGuideFeatureUsed('room-header');
-                    setQualityOpen(true);
-                  }}
-                />
-                {room.songRequestEnabled === false && (
-                  <span className="inline-flex h-5 items-center text-[10px] leading-none text-amber-400/90 bg-amber-400/10 px-1.5 rounded-full">禁止点歌</span>
-                )}
-                {(room.songRequestMinStaySec ?? 0) > 0 && (
-                  <span className="inline-flex h-5 items-center text-[10px] leading-none text-white/45 bg-white/5 px-1.5 rounded-full">
-                    进房 {Math.ceil((room.songRequestMinStaySec ?? 0) / 60)} 分钟后可点歌
-                  </span>
-                )}
-                {(room.songRequestMaxPerUser ?? 0) > 0 && (
-                  <span className="inline-flex h-5 items-center text-[10px] leading-none text-white/45 bg-white/5 px-1.5 rounded-full">
-                    每人最多 {room.songRequestMaxPerUser} 首待播
-                  </span>
-                )}
-                {(room.songRequestCooldownSec ?? 0) > 0 && (
-                  <span className="inline-flex h-5 items-center text-[10px] leading-none text-white/45 bg-white/5 px-1.5 rounded-full">
-                    点歌冷却 {room.songRequestCooldownSec} 秒
-                  </span>
-                )}
-                {(room.queueMaxLength ?? 200) < 200 && (
-                  <span className="inline-flex h-5 items-center text-[10px] leading-none text-white/45 bg-white/5 px-1.5 rounded-full">
-                    队列上限 {room.queueMaxLength} 首
-                  </span>
-                )}
-                {room.announcementEnabled && room.announcementText?.trim() && (
-                  <button
-                    type="button"
-                    onClick={() => setAnnouncementPopupOpen(true)}
-                    className="inline-flex h-5 items-center text-[10px] leading-none text-amber-400/90 bg-amber-400/10 px-1.5 rounded-full hover:bg-amber-400/15"
-                  >
-                    查看公告
-                  </button>
+                {!pureMode && (
+                  <>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="inline-flex h-5 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/70">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/85" aria-hidden="true" />
+                        <span>{room.userCount} 人在线</span>
+                      </span>
+                      {(room.songRequestMaxPerUser ?? 0) > 0 && (
+                        <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/55">
+                          每人最多 {room.songRequestMaxPerUser} 首待播
+                        </span>
+                      )}
+                      {(room.queueMaxLength ?? 200) < 200 && (
+                        <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/55">
+                          队列上限 {room.queueMaxLength} 首
+                        </span>
+                      )}
+                      {room.songRequestEnabled === false && (
+                        <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-amber-400/10 px-2 text-[10px] leading-none text-amber-400/90">
+                          禁止点歌
+                        </span>
+                      )}
+                      {(room.songRequestMinStaySec ?? 0) > 0 && (
+                        <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/55">
+                          进房 {Math.ceil((room.songRequestMinStaySec ?? 0) / 60)} 分钟后可点歌
+                        </span>
+                      )}
+                      {(room.songRequestCooldownSec ?? 0) > 0 && (
+                        <span className="inline-flex h-5 items-center whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/55">
+                          点歌冷却 {room.songRequestCooldownSec} 秒
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <RoomFmModeBadge
+                        fmMode={room.neteaseFmMode}
+                        fmSource={room.fmSource}
+                        playlistRoamingCount={room.playlistRoaming?.playlists.length || 0}
+                        clickable={isOwner}
+                        onClick={() => {
+                          markGuideFeatureUsed('room-header');
+                          setSettingsInitialTab('fm');
+                          setSettingsOpen(true);
+                          void refreshQualityCapabilities();
+                        }}
+                      />
+                      <RoomQualityBadge
+                        compact
+                        className="px-2"
+                        onClick={() => {
+                          markGuideFeatureUsed('room-header');
+                          setQualityOpen(true);
+                        }}
+                      />
+                    </div>
+                  </>
                 )}
               </div>
-              )}
 
             </div>
 
-            {room && !isSmUp && (
-            <div className="flex-shrink-0">
-              <OnlineUsers
-                users={room.users}
-                creatorId={room.creatorId}
-                memberTiers={room.memberTiers}
-                onNotice={showToast}
-              />
-            </div>
+            {room && !isMdUp && (
+              <div className="flex-shrink-0 pt-0.5">
+                <OnlineUsers
+                  users={room.users}
+                  creatorId={room.creatorId}
+                  memberTiers={room.memberTiers}
+                  onNotice={showToast}
+                />
+              </div>
             )}
 
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2 sm:gap-3">
+          <div className="flex shrink-0 items-center justify-end gap-2">
 
-            <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex w-full shrink-0 items-center justify-between gap-0.5 rounded-xl border border-white/[0.08] bg-white/[0.03] px-1.5 py-1 sm:w-auto sm:justify-start sm:px-1">
 
               {isMobileDevice() && (
                 <Tooltip side="bottom" content="下载客户端">
                   <button
                     type="button"
                     onClick={() => setDownloadModalOpen(true)}
-                    className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-netease-muted transition-colors hover:bg-netease-card hover:text-white"
+                    className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs text-netease-muted transition-colors hover:bg-white/[0.08] hover:text-white"
                     aria-label="下载客户端"
                   >
-                    <Smartphone className="h-4 w-4" />
+                    <Smartphone className="h-4 w-4 shrink-0" />
                   </button>
                 </Tooltip>
               )}
@@ -3889,23 +3907,23 @@ export default function Room() {
               <RoomThemeColorPicker />
 
               {!isMobileDevice() && (
-              <Tooltip side="bottom" content={pureMode ? '退出纯净模式（电脑端右侧滑入聊天）' : '纯净模式：隐藏动效与热榜，保留搜索与播放队列；标签页低调伪装'}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    markGuideFeatureUsed('room-header');
-                    handlePureModeToggle();
-                  }}
-                  className={`flex items-center gap-1.5 text-xs transition-colors px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-netease-card ${
-                    pureMode ? 'text-sky-400' : 'text-netease-muted hover:text-white'
-                  }`}
-                  aria-label={pureMode ? '退出纯净模式' : '开启纯净模式'}
-                  aria-pressed={pureMode}
-                >
-                  <Shield className="w-4 h-4" />
-                  <span className="hidden sm:inline">{pureMode ? '纯净中' : '纯净模式'}</span>
-                </button>
-              </Tooltip>
+                <Tooltip side="bottom" content={pureMode ? '退出纯净模式（电脑端右侧滑入聊天）' : '纯净模式：隐藏动效与热榜，保留搜索与播放队列；标签页低调伪装'}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      markGuideFeatureUsed('room-header');
+                      handlePureModeToggle();
+                    }}
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-white/[0.08] min-[1200px]:px-2.5 ${
+                      pureMode ? 'bg-sky-400/12 text-sky-300' : 'text-netease-muted hover:text-white'
+                    }`}
+                    aria-label={pureMode ? '退出纯净模式' : '开启纯净模式'}
+                    aria-pressed={pureMode}
+                  >
+                    <Shield className="h-4 w-4 shrink-0" />
+                    <span className="hidden min-[1200px]:inline">{pureMode ? '纯净中' : '纯净模式'}</span>
+                  </button>
+                </Tooltip>
               )}
 
               {showImmersiveEntry ? (
@@ -3917,49 +3935,55 @@ export default function Room() {
                       handleImmersiveToggle();
                     }}
                     disabled={Boolean(immersiveTransition)}
-                    className={`flex items-center gap-1.5 text-xs transition-colors px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-netease-card disabled:opacity-50 disabled:pointer-events-none ${
-                      immersiveMode ? 'text-violet-300' : 'text-netease-muted hover:text-white'
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-white/[0.08] disabled:pointer-events-none disabled:opacity-50 min-[1200px]:px-2.5 ${
+                      immersiveMode ? 'bg-violet-400/12 text-violet-300' : 'text-netease-muted hover:text-white'
                     }`}
                     aria-label={immersiveMode ? '退出沉浸模式' : '进入沉浸模式'}
                     aria-pressed={immersiveMode}
                   >
-                    <Maximize2 className="h-4 w-4" />
-                    <span className="hidden sm:inline">{immersiveMode ? '沉浸中' : '沉浸模式'}</span>
+                    <Maximize2 className="h-4 w-4 shrink-0" />
+                    <span className="hidden min-[1200px]:inline">{immersiveMode ? '沉浸中' : '沉浸模式'}</span>
                   </button>
                 </Tooltip>
               ) : null}
 
+              <span aria-hidden="true" className="mx-0.5 hidden h-3.5 w-px shrink-0 bg-white/10 sm:block" />
+
               <Tooltip side="bottom" content="分享房间">
                 <button
+                  type="button"
                   onClick={() => {
                     markGuideFeatureUsed('room-header');
                     handleOpenRoomShare();
                   }}
-                  className="flex items-center gap-1.5 text-xs text-netease-muted hover:text-white transition-colors px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-netease-card"
+                  className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs text-netease-muted transition-colors hover:bg-white/[0.08] hover:text-white min-[1200px]:px-2.5"
+                  aria-label="分享房间"
                 >
-                  <Share2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">分享房间</span>
+                  <Share2 className="h-4 w-4 shrink-0" />
+                  <span className="hidden min-[1200px]:inline">分享房间</span>
                 </button>
               </Tooltip>
 
-              <div ref={roomSwitcherRef} className="relative">
-                <Tooltip side="bottom" content="切换房间">
+              <div ref={roomSwitcherRef} className="relative shrink-0">
+                <Tooltip side="bottom" content="切换房间" disabled={roomSwitcherOpen}>
                   <button
                     type="button"
                     onClick={handleRoomSwitcherToggle}
-                    className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs transition-colors hover:bg-netease-card ${roomSwitcherOpen ? 'text-white bg-netease-card' : 'text-netease-muted hover:text-white'}`}
+                    className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-white/[0.08] min-[1200px]:px-2.5 ${
+                      roomSwitcherOpen ? 'bg-white/[0.1] text-white' : 'text-netease-muted hover:text-white'
+                    }`}
                     aria-label="切换房间"
                     aria-haspopup="menu"
                     aria-expanded={roomSwitcherOpen}
                   >
-                    <MoreHorizontal className="h-4 w-4" />
-                    <span className="hidden sm:inline">更多房间</span>
+                    <MoreHorizontal className="h-4 w-4 shrink-0" />
+                    <span className="hidden min-[1200px]:inline">更多房间</span>
                   </button>
                 </Tooltip>
 
                 {roomSwitcherOpen && (
                   <div
-                    className="room-switcher-menu fixed right-3 top-[calc(env(safe-area-inset-top)+7rem)] z-50 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-white/10 shadow-2xl shadow-black/40 sm:absolute sm:right-0 sm:top-[calc(100%+0.6rem)]"
+                    className="room-switcher-menu fixed right-3 top-[calc(env(safe-area-inset-top)+8.25rem)] z-50 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-white/10 shadow-2xl shadow-black/40 sm:absolute sm:right-0 sm:top-[calc(100%+0.6rem)]"
                     role="menu"
                     aria-label="房间选项"
                   >
@@ -4026,23 +4050,26 @@ export default function Room() {
                 )}
               </div>
 
+              <span aria-hidden="true" className="mx-0.5 hidden h-3.5 w-px shrink-0 bg-white/10 sm:block" />
 
               <Tooltip side="bottom" content="退出房间">
                 <button
+                  type="button"
                   onClick={() => {
                     leaveRoom();
                     navigate('/');
                   }}
-                  className="flex items-center gap-1.5 text-xs text-netease-muted hover:text-white transition-colors px-2.5 sm:px-3 py-1.5 rounded-lg hover:bg-netease-card"
+                  className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2 py-1.5 text-xs text-netease-muted transition-colors hover:bg-red-500/12 hover:text-red-300 min-[1200px]:px-2.5"
+                  aria-label="退出房间"
                 >
-                  <LogOut className="w-4 h-4" />
-                  <span className="hidden sm:inline">退出房间</span>
+                  <LogOut className="h-4 w-4 shrink-0" />
+                  <span className="hidden min-[1200px]:inline">退出房间</span>
                 </button>
               </Tooltip>
 
             </div>
 
-            {room && isSmUp && (
+            {room && isMdUp && (
               <OnlineUsers
                 users={room.users}
                 creatorId={room.creatorId}

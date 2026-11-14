@@ -302,15 +302,15 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, o
   const canToggleAdmin = (user: DisplayUser) => isOwner && user.id !== mySocketId && user.id !== creatorId && !user.readOnly;
 
   return (
-    <div className="relative" ref={panelRef}>
-      <Tooltip content="查看房间用户" side="bottom">
+    <div className="relative shrink-0" ref={panelRef}>
+      <Tooltip content="查看房间用户" side="bottom" disabled={open}>
         <button
           type="button"
           onClick={() => setOpen((value) => !value)}
-          className="flex items-center gap-2 rounded-xl px-2 py-1.5 text-xs text-netease-muted hover:bg-netease-card hover:text-white transition-colors"
+          className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-white/[0.08] bg-white/[0.03] px-2 py-1 text-xs text-netease-muted transition-colors hover:border-white/15 hover:bg-white/[0.07] hover:text-white"
           aria-label="查看房间用户"
         >
-          <Users className="w-4 h-4" />
+          <Users className="h-3.5 w-3.5 shrink-0" />
           <div className="flex -space-x-2">
             {orderedUsers.slice(0, 5).map((user) => (
               <Tooltip key={user.id} content={user.id === creatorId ? `${user.nickname}（房主）` : user.nickname} side="bottom">
@@ -340,7 +340,7 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, o
               </div>
             )}
           </div>
-          <span className="hidden sm:inline">共 {visibleUsers.length} 人</span>
+          <span className="hidden 2xl:inline">共 {visibleUsers.length} 人</span>
         </button>
       </Tooltip>
 

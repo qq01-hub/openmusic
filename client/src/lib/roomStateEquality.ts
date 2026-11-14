@@ -200,6 +200,9 @@ export function isRoomStateEquivalent(a: RoomState, b: RoomState): boolean {
     && a.randomError === b.randomError
     && audioQualityEqual(a.audioQuality, b.audioQuality)
     && a.playMode === b.playMode
+    && a.artistShuffle?.artist === b.artistShuffle?.artist
+    && a.artistShuffle?.source === b.artistShuffle?.source
+    && a.artistShuffle?.includeCollaborations === b.artistShuffle?.includeCollaborations
     && a.neteaseFmMode === b.neteaseFmMode
     && a.announcementEnabled === b.announcementEnabled
     && a.announcementText === b.announcementText

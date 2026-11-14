@@ -61,7 +61,7 @@ export const statusLabel = (status: AccountStatus) => STATUS_OPTIONS.find(entry 
 export const statusColor = (status: AccountStatus) => status === 'blocked' ? 'red' : status === 'watch' ? 'orange' : 'green';
 export const riskColor = (score: number) => score >= 60 ? 'red' : score >= 30 ? 'orange' : 'green';
 export const riskLabel = (score: number) => score >= 60 ? '高风险' : score >= 30 ? '待关注' : '低风险';
-export const queueScore = (account: RiskAccount) => account.queueScore ?? account.sampledScore ?? account.score;
+export const currentRiskScore = (account: RiskAccount) => account.score ?? account.queueScore ?? account.sampledScore;
 export const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
 export const RiskHelpContext = createContext(false);
