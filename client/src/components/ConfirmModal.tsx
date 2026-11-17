@@ -1,5 +1,6 @@
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { modalEventBoundary } from './Modal';
 
 interface Props {
   title: string;
@@ -27,10 +28,10 @@ export default function ConfirmModal({
     : 'bg-amber-500 hover:bg-amber-400 text-black';
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+    <div className="pointer-events-auto fixed inset-0 z-[100] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm"
         onClick={onCancel}
         aria-label="关闭"
       />

@@ -1,6 +1,23 @@
 import { createPortal } from 'react-dom';
+import type { SyntheticEvent } from 'react';
 
 export const MODAL_ROOT_ATTR = 'data-modal-root';
+
+const stopModalEvent = (event: SyntheticEvent) => event.stopPropagation();
+
+// Portal 的事件仍会沿 React 父级冒泡，弹窗必须接住完整手势，避免触发页面操作
+export const modalEventBoundary = {
+  [MODAL_ROOT_ATTR]: '',
+  onPointerDown: stopModalEvent,
+  onPointerUp: stopModalEvent,
+  onMouseDown: stopModalEvent,
+  onMouseUp: stopModalEvent,
+  onTouchStart: stopModalEvent,
+  onTouchEnd: stopModalEvent,
+  onClick: stopModalEvent,
+  onDoubleClick: stopModalEvent,
+  onContextMenu: stopModalEvent,
+};
 
 interface Props {
   open: boolean;
@@ -31,13 +48,13 @@ export default function Modal({
 }: Props) {
   if (!open) return null;
 
-  const maskClassName = 'modal-mask absolute inset-0 bg-black/70 backdrop-blur-sm';
+  const maskClassName = 'modal-mask pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm';
 
   return createPortal(
     <div
       className={containerClassName}
-      style={{ zIndex }}
-      {...{ [MODAL_ROOT_ATTR]: '' }}
+      style={{ zIndex, pointerEvents: 'auto' }}
+      {...modalEventBoundary}
     >
       {mask && (
         closeOnMaskClick && onClose ? (

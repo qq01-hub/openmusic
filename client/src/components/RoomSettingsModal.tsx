@@ -7,6 +7,7 @@ import type { BannedSong, ForbiddenWord, RoomUser, RoomMusicAccounts } from '../
 import type { DislikeSkipMode } from '../lib/dislikeSkip';
 import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
+import { modalEventBoundary } from './Modal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
 import { useDeskPetStore } from '../stores/deskPetStore';
 import { useChatNotificationStore } from '../stores/chatNotificationStore';
@@ -727,10 +728,10 @@ export default function RoomSettingsModal({
   return (
     <>
       {createPortal(
-    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
+    <div className="pointer-events-auto fixed inset-0 z-[80] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm"
         onClick={onClose}
         aria-label="关闭"
       />
