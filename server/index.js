@@ -5078,7 +5078,7 @@ io.on('connection', (socket) => {
       const ip = getClientIpFromHeaders(socket.handshake.headers, socket.handshake.address);
       const music = ['skip_song', 'finish_song', 'music_account_qr_create', 'music_account_qr_check', 'music_account_bind', 'set_room_fm_mode', 'set_room_playlist_roaming'].includes(event);
       const operation = event.startsWith('music_account_qr') ? 'qr' : 'queue';
-      const result = await riskControl.consume(session.account, { ip, kind: 'socket', operation: music ? operation : '', music, userAgent: socket.handshake.headers['user-agent'] || '' });
+      const result = await riskControl.consume(session.account, { ip, kind: 'socket', operation: music ? operation : '', eventName: event, music, userAgent: socket.handshake.headers['user-agent'] || '' });
       incrementMetric('account_request_total', { kind: 'socket', outcome: result.allowed ? 'allowed' : result.code });
       if (!result.allowed) {
         const callback = typeof packet?.[packet.length - 1] === 'function' ? packet[packet.length - 1] : null;

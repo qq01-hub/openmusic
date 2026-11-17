@@ -61,6 +61,7 @@ import {
   shouldProxyQishuiTrack,
 } from '../lib/songPreloadCache';
 import { resolveQishuiLocalPlaybackUrl, retainQishuiPlaybackUrl } from '../lib/qishuiLocalPlayback';
+import { cacheSongAudio, getCachedSongAudio, releaseSongAudioSource, setSongAudioSource, songAudioCacheKey } from '../lib/songAudioCache';
 import { seekAudioTo, isExpectedAudioSeek, finishAudioSeek } from '../lib/audioSeek';
 import { refreshSignedApiUrl, resolveSignedApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
 import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../lib/mediaProxyUrl';
@@ -383,6 +384,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const resolveFailCountRef = useRef<{ queueId: string; count: number } | null>(null);
   /** 当前曲目本地汽水解密任务；切歌时立即终止，避免旧曲继续占用浏览器 CPU/带宽。 */
   const qishuiLocalAbortRef = useRef<AbortController | null>(null);
+  const audioCacheAbortRef = useRef<AbortController | null>(null);
   const currentLoudnessRef = useRef<{ loudness?: { gain?: number; peak?: number; lra?: number }; source?: string }>({});
 
   const shouldSkipForEndedTrackKey = useCallback((song: QueueItem, audio: HTMLAudioElement): boolean => {
@@ -1096,6 +1098,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     const current = room?.current;
 
     if (!current) {
+      audioCacheAbortRef.current?.abort();
       loadGeneration.current += 1;
       loadLockRef.current = EMPTY_LOAD_LOCK;
       suppressAutoResumeRef.current = false;
@@ -1103,6 +1106,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       controller.enqueue(() => {
         const audio = controller.audio;
         audio.pause();
+        releaseSongAudioSource(audio);
         clearAudioQueueBinding(audio);
         audio.removeAttribute('src');
         audio.load();
@@ -1126,6 +1130,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
 
     if (prevQueueIdRef.current && prevQueueIdRef.current !== current.queueId) {
+      audioCacheAbortRef.current?.abort();
       loadGeneration.current += 1;
       loadLockRef.current = EMPTY_LOAD_LOCK;
       justSkippedRef.current = true;
@@ -1141,6 +1146,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       controller.enqueue(() => {
         const audio = controller.audio;
         audio.pause();
+        releaseSongAudioSource(audio);
         clearAudioQueueBinding(audio);
         audio.removeAttribute('src');
         audio.load();
@@ -1186,6 +1192,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     loadLockRef.current = { queueId, gen };
     qishuiLocalAbortRef.current?.abort();
     qishuiLocalAbortRef.current = null;
+    audioCacheAbortRef.current?.abort();
+    const audioCacheAbort = new AbortController();
+    audioCacheAbortRef.current = audioCacheAbort;
 
     const loadTrack = async () => {
       const loadStartedAt = performance.now();
@@ -1218,6 +1227,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         let loudness: { gain?: number; peak?: number; lra?: number } | undefined;
         let duration: number | undefined;
         let qishuiWebAudio = false;
+        let cachedAudio: Blob | null = null;
+        let audioCacheKey = '';
         try {
           if (isHumanCheckPending()) return;
           let timeoutId = 0;
@@ -1235,6 +1246,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           url = (await resolveSignedApiUrl(resolved.url)) || resolved.url;
           if (gen !== loadGeneration.current) return;
           playbackUrl = url;
+          audioCacheKey = songAudioCacheKey(current, resolved.qualityLabel || getUserPlaybackQuality(current.source || 'netease'));
+          // 先走既有取链和权限链路，再复用完整音频，跨源兜底不冒充原平台缓存
+          if (!resolved.crossSource && !isTrackCrossSource(current) && !isCachedUrlCrossSource(current)) {
+            cachedAudio = await getCachedSongAudio(audioCacheKey);
+            if (gen !== loadGeneration.current) return;
+          }
           debugLog('track_resolve_done', debugLine({
             queueId,
             elapsedMs: Math.round(performance.now() - loadStartedAt),
@@ -1242,11 +1259,12 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             proxied: Boolean(url && isProxiedMediaUrl(url)),
             quality: resolved.qualityLabel || null,
             crossSource: Boolean(resolved.crossSource),
+            cachedAudio: Boolean(cachedAudio),
           }));
           let resolvedMeta = resolved;
           // 仅汽水播放会话需要本地解密。跨源成功后 current.source 仍是 qishui，
           // 但 resolved.url 已是网易/QQ 直链，不能再误送进汽水解密器。
-          if (current.source === 'qishui' && /\/api\/qishui-source(?:\?|$)/i.test(url)) {
+          if (!cachedAudio && current.source === 'qishui' && /\/api\/qishui-source(?:\?|$)/i.test(url)) {
             const localAbort = new AbortController();
             qishuiLocalAbortRef.current = localAbort;
             const proxyQishui = shouldProxyQishuiTrack(current, Boolean(useRoomStore.getState().room?.qishuiProxyEnabled), Number(useRoomStore.getState().room?.qishuiProxyPercent ?? 100));
@@ -1291,6 +1309,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             || getTrackCrossSourceFrom(current);
           loudness = resolvedMeta.loudness;
           duration = resolvedMeta.duration;
+          audioCacheKey = songAudioCacheKey(current, qualityLabel || getUserPlaybackQuality(current.source || 'netease'));
           if (crossSource) markTrackCrossSource(current, crossSourceFrom);
           if (resolveFailCountRef.current?.queueId === queueId) {
             resolveFailCountRef.current = null;
@@ -1337,6 +1356,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         const effectiveSource = crossSourceFrom || current.source || 'netease';
         const useWebAudioOutput = isIOS()
           || qishuiWebAudio
+          || (Boolean(cachedAudio) && shouldProxySongPlaybackUrl())
           || (shouldProxySongPlaybackUrl() && isProxiedMediaUrl(playbackUrl))
           || (isIOS() && effectiveSource === 'kugou' && isProxiedMediaUrl(playbackUrl));
         setSharedAudioRouting(useWebAudioOutput);
@@ -1366,8 +1386,17 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               : Math.max(0, Number(useRoomStore.getState().room?.currentTime) || 0);
             snapSmoothPlaybackTime(justSkippedRef.current ? 0 : previewTime);
           }
-          retainQishuiPlaybackUrl(playbackUrl);
-          audio.src = playbackUrl;
+          retainQishuiPlaybackUrl(cachedAudio ? '' : playbackUrl);
+          const recoverQishui = current.source === 'qishui' && /\/api\/qishui-source(?:\?|$)/i.test(url)
+            ? async () => {
+              const proxy = shouldProxyQishuiTrack(current, Boolean(useRoomStore.getState().room?.qishuiProxyEnabled));
+              const local = await resolveQishuiLocalPlaybackUrl(url, audioCacheAbort.signal, { proxy });
+              if (local.status !== 'ok') throw new Error('汽水缓存回退失败');
+              retainQishuiPlaybackUrl(local.url);
+              return local.url;
+            }
+            : undefined;
+          setSongAudioSource(audio, playbackUrl, cachedAudio, audioCacheKey, recoverQishui);
           bindAudioQueueId(audio, current.queueId);
           audio.load();
           debugLog('track_audio_bound', debugLine({
@@ -1425,6 +1454,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }));
 
         // 仅缓存/同步服务端地址；blob: 只属于当前浏览器，不能发给房间内其他用户。
+        if (!cachedAudio && !crossSource) {
+          void cacheSongAudio(audioCacheKey, playbackUrl, audioCacheAbort.signal);
+        }
         rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);
         if (duration && duration > 0) {
           const live = useRoomStore.getState().room;
@@ -1990,6 +2022,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       loadGeneration.current += 1;
       qishuiLocalAbortRef.current?.abort();
       qishuiLocalAbortRef.current = null;
+      audioCacheAbortRef.current?.abort();
+      // 共享 audio 跨房间页和电视页复用，Blob 在换源或清空曲目时释放
       loadLockRef.current = EMPTY_LOAD_LOCK;
       if (readyRecoveryTimer.current) {
         window.clearTimeout(readyRecoveryTimer.current);

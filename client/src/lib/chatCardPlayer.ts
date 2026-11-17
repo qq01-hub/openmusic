@@ -23,6 +23,8 @@ import { useRoomStore } from '../stores/roomStore';
 import { applyIndependentAudioVolume, getSharedAudio } from './audioElement';
 import { getAudioController } from './audioController';
 import type { LyricLine } from '../types';
+import { getUserPlaybackQuality } from '../api/music/quality';
+import { cacheSongAudio, getCachedSongAudio, playSongAudio, releaseSongAudioSource, setSongAudioSource, songAudioCacheKey } from './songAudioCache';
 
 type ChatCardPlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
 
@@ -207,6 +209,7 @@ export function stopChatCardPlayback(options: { resumeRoom?: boolean } = {}) {
   if (cardAudio) {
     if (activeState.cardKey) rememberProgress(activeState.cardKey, cardAudio.currentTime);
     cardAudio.pause();
+    releaseSongAudioSource(cardAudio);
     cardAudio.removeAttribute('src');
     cardAudio.load();
   }
@@ -321,14 +324,21 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
     if (!stillCurrent()) return;
     let url = resolved.url;
     if (!url) throw new Error('empty url');
-    if (song.source === 'qishui' && isQishuiLocalPlaybackUrl(url)) {
-      const local = await resolveQishuiLocalPlaybackUrl(url, abort.signal);
-      if (local.status === 'aborted' || !stillCurrent()) return;
-      if (local.status !== 'ok') throw new Error('汽水本地解密失败');
-      url = local.url;
-    }
+    const cacheKey = songAudioCacheKey(song, resolved.qualityLabel || getUserPlaybackQuality(song.source || 'netease'));
+    const cachedAudio = await getCachedSongAudio(cacheKey);
+    if (!stillCurrent()) return;
+    const sourceUrl = url;
+    const recoverLocal = song.source === 'qishui' && isQishuiLocalPlaybackUrl(sourceUrl)
+      ? async () => {
+        const local = await resolveQishuiLocalPlaybackUrl(sourceUrl, abort.signal);
+        if (local.status !== 'ok') throw new Error('汽水本地解密失败');
+        return local.url;
+      }
+      : undefined;
+    if (!cachedAudio && recoverLocal) url = await recoverLocal();
+    if (!stillCurrent()) return;
 
-    audio.src = url;
+    setSongAudioSource(audio, url, cachedAudio, cacheKey, recoverLocal);
     applyChatCardVolume(useAudioStore.getState().volume);
     if (startAt > 0) {
       // 元数据就绪后才能准确 seek，否则浏览器会忽略
@@ -340,8 +350,9 @@ export async function toggleChatCardPlayback(song: ChatCardSong, messageId: stri
         // 无法 seek 时从头播放
       }
     }
-    await audio.play();
+    await playSongAudio(audio);
     if (!stillCurrent()) return;
+    if (!cachedAudio) void cacheSongAudio(cacheKey, url, abort.signal);
     const mediaDuration = Number(audio.duration);
     publish({
       status: 'playing',

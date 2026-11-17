@@ -21,6 +21,23 @@ function normalizeRelevanceText(text: string): string {
     .trim();
 }
 
+const ARTIST_CREDIT_SEPARATOR = /\s*(?:[/、,，;&＆]|\bfeat\.?\s+|\bft\.?\s+|\bfeaturing\s+)\s*/iu;
+
+function artistCredits(value: string): string[] {
+  return String(value || '').split(ARTIST_CREDIT_SEPARATOR).map(normalizeRelevanceText).filter(Boolean);
+}
+
+/** 歌手入口只按歌手署名筛选，避免同名歌名抢到结果前面 */
+export function filterSearchResultsByArtist(
+  songs: SearchResult[],
+  artist: string,
+): SearchResult[] {
+  const target = normalizeRelevanceText(artist);
+  if (!target) return [];
+  return songs.filter((song) => normalizeRelevanceText(song.artist) === target
+    || artistCredits(song.artist).includes(target));
+}
+
 /** 最长连续公共子串长度 */
 function longestCommonSubstringLength(a: string, b: string): number {
   if (!a || !b) return 0;
@@ -56,15 +73,19 @@ function titleStronglyMatchesKeyword(keyword: string, name: string): boolean {
 }
 
 /**
- * 前两首歌名都匹配不到关键词 → 视为搜歌手。
- * 仅看列表最前面的样本（上游/合并后的前排），避免误伤歌名搜索。
+ * 精确命中歌手署名时优先展示该歌手作品
+ * 其余情况以前两首歌名是否匹配关键词判断搜索意图
  */
 export function shouldPreferArtistMatch(
-  songs: Array<Pick<SearchResult, 'name'>>,
+  songs: Array<Pick<SearchResult, 'name' | 'artist'>>,
   keyword: string,
 ): boolean {
   const kw = normalizeRelevanceText(keyword);
   if (!kw || songs.length === 0) return false;
+  // 关键词同时是歌名和歌手名时，歌手是更明确的搜索意图
+  if (songs.some((song) => normalizeRelevanceText(song.artist) === kw || artistCredits(song.artist).includes(kw))) {
+    return true;
+  }
   const sample = songs.slice(0, 2);
   return sample.every((song) => !titleStronglyMatchesKeyword(kw, song.name));
 }
@@ -123,7 +144,7 @@ export function scoreTitleRelevance(
   if (!name && !artist) return 0;
 
   if (options.preferArtist) {
-    const artistScore = scoreArtistPrimary(kw, artist);
+    const artistScore = Math.max(scoreArtistPrimary(kw, artist), ...artistCredits(song.artist).map(credit => scoreArtistPrimary(kw, credit)));
     if (artistScore > 0) {
       return artistScore + titleBonusForArtistMode(kw, name);
     }

@@ -2,7 +2,7 @@ import type { MusicSource, RoomCheckResult, RoomSummary, SearchResult, Song } fr
 import { getSourceShortLabel } from '../../lib/sourceLabels';
 import type { MusicProviderMeta, MusicSearchOptions } from './types';
 import { providers, getAllSources } from './sources';
-import { interleaveSearchResults } from './merge';
+import { filterSearchResultsByArtist, interleaveSearchResults } from './merge';
 import { hasValidLrc } from './lrcFallback';
 import { fetchWithTimeout } from '../http';
 import { toProxiedMediaUrl, toLocalMetingPicUrl, shouldProxyPlaybackUrl } from '../../lib/mediaProxyUrl';
@@ -60,6 +60,8 @@ export type SearchFilterMode = 'smart' | MusicSource;
 export interface SearchAllSongsOptions {
   filterMode?: SearchFilterMode;
   suggestion?: Pick<SearchResult, 'name' | 'artist'>;
+  /** 歌手入口的严格筛选，不影响普通关键词搜索 */
+  artist?: string;
   signal?: AbortSignal;
 }
 
@@ -72,15 +74,19 @@ export async function searchAllSongs(
   if (!keyword.trim()) return [];
 
   const filterMode = options.filterMode ?? 'smart';
+  const artist = options.artist?.trim() || '';
   const allSources = (sourceList ?? getAllSources()).filter((s) => s.supportsSearch);
 
   if (filterMode !== 'smart') {
     const meta = allSources.find((s) => s.id === filterMode);
     if (!meta) return [];
     try {
-      const songs = await searchSongs(filterMode, keyword, { allPages: filterMode === 'netease', signal: options.signal });
+      const songs = await searchSongs(filterMode, keyword, {
+        allPages: filterMode === 'netease',
+        signal: options.signal,
+      });
       return interleaveSearchResults(
-        { [filterMode]: songs },
+        { [filterMode]: artist ? filterSearchResultsByArtist(songs, artist) : songs },
         { sourceOnly: filterMode, keyword, suggestion: options.suggestion },
       );
     } catch {
@@ -89,14 +95,19 @@ export async function searchAllSongs(
   }
 
   const batches = await Promise.allSettled(
-    allSources.map((meta) => searchSongs(meta.id, keyword, { signal: options.signal })),
+    allSources.map((meta) => searchSongs(meta.id, keyword, {
+      allPages: Boolean(artist && meta.id === 'netease'),
+      signal: options.signal,
+    })),
   );
 
   const groups: Partial<Record<MusicSource, SearchResult[]>> = {};
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     if (batch.status === 'fulfilled') {
-      groups[allSources[i].id] = batch.value;
+      groups[allSources[i].id] = artist
+        ? filterSearchResultsByArtist(batch.value, artist)
+        : batch.value;
     }
   }
 

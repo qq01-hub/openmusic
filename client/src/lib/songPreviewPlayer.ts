@@ -15,6 +15,8 @@ import {
 } from './roomAudioPriority';
 import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
+import { getUserPlaybackQuality } from '../api/music/quality';
+import { cacheSongAudio, getCachedSongAudio, playSongAudio, releaseSongAudioSource, setSongAudioSource, songAudioCacheKey } from './songAudioCache';
 
 export type SongPreviewStatus = 'idle' | 'loading' | 'playing' | 'error';
 export type SongPreviewOwner = 'search' | 'favorites';
@@ -105,6 +107,7 @@ function takeOverPreviewAudio() {
     previewAbortController = null;
     if (previewAudio) {
       previewAudio.pause();
+      releaseSongAudioSource(previewAudio);
       previewAudio.removeAttribute('src');
       previewAudio.load();
     }
@@ -140,6 +143,7 @@ function finishPreview(options: { resumeRoom: boolean }) {
   const audio = previewAudio;
   if (audio) {
     audio.pause();
+    releaseSongAudioSource(audio);
     audio.removeAttribute('src');
     audio.load();
   }
@@ -221,17 +225,25 @@ export async function toggleSongPreview(song: SearchResult, owner: SongPreviewOw
     if (token !== loadToken || activeKey !== key) return;
     let url = resolved.url;
     if (!url) throw new Error('empty url');
-    if (song.source === 'qishui' && isQishuiLocalPlaybackUrl(url)) {
-      const local = await resolveQishuiLocalPlaybackUrl(url, previewAbort.signal);
-      if (local.status === 'aborted' || token !== loadToken || activeKey !== key) return;
-      if (local.status !== 'ok') throw new Error('汽水试听解密失败');
-      url = local.url;
-    }
-
-    audio.src = url;
-    syncPreviewVolume();
-    await audio.play();
+    const cacheKey = songAudioCacheKey(song, resolved.qualityLabel || getUserPlaybackQuality(song.source || 'netease'));
+    const cachedAudio = await getCachedSongAudio(cacheKey);
     if (token !== loadToken || activeKey !== key) return;
+    const sourceUrl = url;
+    const recoverLocal = song.source === 'qishui' && isQishuiLocalPlaybackUrl(sourceUrl)
+      ? async () => {
+        const local = await resolveQishuiLocalPlaybackUrl(sourceUrl, previewAbort.signal);
+        if (local.status !== 'ok') throw new Error('汽水试听解密失败');
+        return local.url;
+      }
+      : undefined;
+    if (!cachedAudio && recoverLocal) url = await recoverLocal();
+    if (token !== loadToken || activeKey !== key) return;
+
+    setSongAudioSource(audio, url, cachedAudio, cacheKey, recoverLocal);
+    syncPreviewVolume();
+    await playSongAudio(audio);
+    if (token !== loadToken || activeKey !== key) return;
+    if (!cachedAudio) void cacheSongAudio(cacheKey, url, previewAbort.signal);
     status = 'playing';
     lastError = null;
     notify();

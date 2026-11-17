@@ -436,6 +436,7 @@ export default function Room() {
   const prevOverlayOpenRef = useRef(false);
   const songSearchRequestRef = useRef(0);
   const songSearchAbortRef = useRef<AbortController | null>(null);
+  const songArtistFilterRef = useRef<string | undefined>(undefined);
   useEffect(() => () => {
     songSearchRequestRef.current += 1;
     songSearchAbortRef.current?.abort();
@@ -1424,8 +1425,10 @@ export default function Room() {
     keyword: string,
     filterMode = searchFilterMode,
     suggestion?: SelectedMusicSuggestion,
+    artistFilter?: string,
   ) => {
     const requestId = ++songSearchRequestRef.current;
+    songArtistFilterRef.current = artistFilter;
     songSearchAbortRef.current?.abort();
     const controller = new AbortController();
     songSearchAbortRef.current = controller;
@@ -1452,7 +1455,12 @@ export default function Room() {
     try {
 
       // 音源配置还在加载时不能传空数组，否则 searchAllSongs 会直接返回空结果。
-      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, { filterMode, suggestion, signal: controller.signal });
+      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, {
+        filterMode,
+        suggestion,
+        artist: artistFilter,
+        signal: controller.signal,
+      });
 
       if (requestId === songSearchRequestRef.current) setResults(songs);
 
@@ -1472,7 +1480,7 @@ export default function Room() {
     if (isPlaylistResults || isRadioResults) return;
     setSearchFilterMode(next);
     if (searchedKeyword.trim()) {
-      doSearch(searchedKeyword, next);
+      doSearch(searchedKeyword, next, undefined, songArtistFilterRef.current);
     }
   }, [isPlaylistResults, isRadioResults, searchedKeyword, doSearch]);
 
@@ -1742,8 +1750,8 @@ export default function Room() {
     setQuery(keyword);
     setOverlayQuery(keyword);
     setSearchedKeyword(keyword);
-    void doSearch(keyword);
-  }, [doSearch]);
+    void doSearch(keyword, searchFilterMode, undefined, keyword);
+  }, [doSearch, searchFilterMode]);
 
   const handleSearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
     const keyword = (selectedKeyword ?? query).trim();
@@ -1861,6 +1869,7 @@ export default function Room() {
   }, [overlaySearchMode, overlayQuery, searchedKeyword, playlistSearchBackup, doPlaylistSearch, doSearch]);
 
   const clearSearchResults = useCallback(() => {
+    songArtistFilterRef.current = undefined;
     songSearchRequestRef.current += 1;
     songSearchAbortRef.current?.abort();
     resetRadioProgramState();

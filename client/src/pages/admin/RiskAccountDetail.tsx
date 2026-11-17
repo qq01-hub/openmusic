@@ -1,11 +1,51 @@
 import RiskSessions from './RiskSessions';
 import { adminFetch } from './utils';
-import RiskMusicResponses, { MusicResponseSummary } from './RiskMusicResponses';
+import { MusicResponseSummary } from './RiskMusicResponses';
 import { useState } from 'react';
 import RiskProfileOverview from './RiskProfileOverview';
 import { Alert, App, Button, Collapse, Descriptions, Empty, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Switch } from 'antd';
-import { count, hasDailyActivity, RiskHelpContext, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type MusicResponse, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
+import { count, hasDailyActivity, RiskHelpContext, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
 import RiskErrorBreakdown from './RiskErrorBreakdown';
+
+const SOCKET_EVENTS: Record<string, string> = {
+  skip_song: '跳过歌曲', finish_song: '结束歌曲', set_room_fm_mode: '设置漫游模式',
+  set_room_playlist_roaming: '设置歌单漫游', music_account_qr_create: '创建音乐账号二维码',
+  music_account_qr_check: '检查音乐账号二维码', music_account_bind: '绑定音乐账号',
+  send_chat: '发送聊天消息', recall_chat: '撤回聊天消息', toggle_chat_reaction: '切换聊天反应',
+  add_song: '添加歌曲', remove_song: '移除歌曲', reorder_queue: '调整播放队列',
+  set_room_play_mode: '设置播放模式', set_room_audio_quality: '设置播放音质',
+  adjust_room_lyrics: '调整歌词偏移', set_room_announcement: '设置房间公告',
+  join_room: '进入房间', leave_room: '离开房间', disconnect: '断开连接',
+  rename_user: '修改昵称', set_user_avatar: '设置头像', rename_room: '修改房间名',
+  ack_error_report_solution: '确认问题处理结果', set_room_lock: '设置房间密码',
+  apply_room_permanent: '申请常驻房间', cancel_room_permanent: '取消常驻申请',
+  ack_room_permanent_decision: '确认常驻审核结果', set_room_qishui_proxy: '设置汽水代理',
+  music_account_list: '查看音乐账号', music_account_set_shared: '设置会员共享',
+  music_account_unbind: '解绑音乐账号', set_room_custom_cover: '设置房间封面',
+  set_room_chat_history: '设置聊天历史可见性', set_room_chat_avatars: '设置聊天头像显示',
+  set_room_hide_ip_location: '设置归属地显示', set_room_join_notice: '设置入房提醒',
+  set_room_ai_settings: '设置房间助手与桌宠', set_room_playback_rate: '设置播放速度',
+  set_room_max_admins: '设置管理员数量', set_room_song_request: '设置点歌规则',
+  ban_room_song: '禁播歌曲', unban_room_song: '解除歌曲禁播',
+  add_room_forbidden_word: '添加违禁词', remove_room_forbidden_word: '删除违禁词',
+  set_room_member_tier: '设置贵宾标识', remove_room_member_tier: '移除贵宾标识',
+  set_room_admin_self_manage_member_tier: '设置管理员贵宾自管理',
+  set_room_member_settings: '设置成员规则', set_chat_mute: '设置聊天禁言',
+  kick_user: '移出成员', transfer_owner: '转让房主', destroy_room: '解散房间',
+  set_room_admin: '设置管理员', add_songs: '批量添加歌曲', clear_queue: '清空播放队列',
+  report_playback_media: '同步播放音源', report_track_duration: '上报歌曲时长',
+  request_jump: '申请插队', approve_jump: '同意插队', reject_jump: '拒绝插队',
+  request_skip: '申请切歌', approve_skip: '同意切歌', reject_skip: '拒绝切歌',
+  toggle_queue_like: '调整歌曲点赞', toggle_current_dislike: '调整当前歌曲踩票',
+  share_song_to_chat: '分享歌曲到聊天', load_chat_history: '查看聊天历史',
+  load_song_history: '查看播放历史', list_favorites: '查看收藏歌曲',
+  list_favorite_categories: '查看收藏分类', create_favorite_category: '创建收藏分类',
+  set_favorite_category: '设置歌曲收藏分类', rename_favorite_category: '重命名收藏分类',
+  delete_favorite_category: '删除收藏分类', set_favorite: '调整歌曲收藏',
+  create_favorite_share: '创建收藏分享', revoke_favorite_share: '撤销收藏分享',
+  preview_favorite_share: '预览收藏分享', import_favorite_share: '导入分享收藏',
+  import_favorites: '批量导入收藏', toggle_play: '切换播放或暂停', seek: '调整播放进度',
+};
 
 const OPERATIONS: Record<string, string> = {
   search: '音乐搜索', url: '播放地址', lrc: '歌词', pic: '封面', playlist: '歌单', song: '歌曲信息',
@@ -60,6 +100,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   const [human, setHuman] = useState(detail.humanChallenge);
   const [humanSaving, setHumanSaving] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
+  const [recordSections, setRecordSections] = useState<string[]>(['identity']);
   const [matchedOnly, setMatchedOnly] = useState(true);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetReason, setResetReason] = useState('');
@@ -68,9 +109,17 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   const [operationFilter, setOperationFilter] = useState('');
   const [requestPage, setRequestPage] = useState(1);
   const [requestPageSize, setRequestPageSize] = useState(10);
-  const requestRows = (detail.requestEvents || []).filter(event => !operationFilter || event.operation === operationFilter);
+  const evidence = new Map((detail.requestEvents || []).map(event => [event.id, event]));
+  for (const response of detail.musicResponses || []) {
+    if (!evidence.has(response.requestId)) evidence.set(response.requestId, { id: response.requestId, at: response.at, ip: response.ip, kind: 'music', operation: response.operation, response });
+  }
+  const requestRows = [...evidence.values()].sort((a, b) => b.at - a.at).filter(event => !operationFilter || (operationFilter === 'socket' ? event.kind === 'socket' : event.operation === operationFilter));
   const changeOperation = (value: string) => { setOperationFilter(value); setRequestPage(1); };
-  const inspect = (tab: string, operation = '') => { changeOperation(operation); setActiveTab(tab); };
+  const inspect = (tab: string, operation = '') => {
+    changeOperation(operation);
+    if (['identity', 'rooms', 'network'].includes(tab)) { setRecordSections([tab]); setActiveTab('records'); }
+    else setActiveTab(tab === 'requests' ? 'overview' : tab);
+  };
   const confirmDecision = (values: Decision) => {
     modal.confirm({
       title: `确认将账户设为「${statusLabel(values.status)}」？`,
@@ -310,6 +359,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
 
   const requestsTab = (
     <div className="risk-tab-content">
+      <Collapse className="risk-request-statistics" items={[{ key: 'network-counts', label: 'IP 请求统计与网络切换', children: <div className="risk-tab-content">
       <RiskSection title="按 IP 查看请求" description="从升级后开始记录，每个账户保留近 90 天最近活跃的 200 个 IP，各列累计计数，歌曲类 WebSocket 同时归入歌曲列和 WebSocket 列，封面单独统计，不计入歌曲额度与 IP 切换因子">
         <Table
           size="small"
@@ -326,7 +376,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
             },
             { title: '总请求', dataIndex: 'total', render: (val: number) => <Tag color="blue">{count(val)}</Tag> },
             { title: '歌曲请求', dataIndex: 'music', render: (val: number) => val > 0 ? <Tag color="purple">{count(val)}</Tag> : <span className="risk-muted">0</span> },
-            { title: 'WebSocket', dataIndex: 'socket', render: (val: number) => val > 0 ? <Tag color="geekblue">{count(val)}</Tag> : <span className="risk-muted">0</span> },
+            { title: '实时操作', dataIndex: 'socket', render: (val: number) => val > 0 ? <Tag>{count(val)}</Tag> : <span className="risk-muted">0</span> },
             { title: '封面', dataIndex: 'image', render: (val: number) => val > 0 ? <Tag>{count(val)}</Tag> : <span className="risk-muted">0</span> },
             { title: '其他接口', dataIndex: 'api', render: (val: number) => val > 0 ? <Tag>{count(val)}</Tag> : <span className="risk-muted">0</span> },
             { title: '最近请求', dataIndex: 'lastSeenAt', render: time, width: 180 },
@@ -339,11 +389,9 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           <Tag color={(detail.musicIpChanges || 0) >= 10 ? 'orange' : 'blue'}>切换 {count(detail.musicIpChanges)} 次</Tag>
         </div>
       </RiskSection>
-      <RiskSection title="最近重要请求" description="保留近 24 小时最近 200 条歌曲和 WebSocket 请求，包含被拒绝的尝试，封面仅保留分组计数">
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Tag color="geekblue">操作筛选</Tag>
-          <Select aria-label="筛选请求操作" value={operationFilter} style={{ width: 180 }} onChange={changeOperation} options={[{ value: '', label: '全部操作' }, ...Object.entries(OPERATIONS).map(([value, label]) => ({ value, label }))]} />
-        </Space>
+      </div> }]} />
+      <RiskSection title="请求与响应记录" description="近 24 小时各保留最多 200 条重要请求与音乐响应，合并同一请求，配对仅核对同 IP、同平台、同歌曲在 10 分钟内的正常响应，不根据缺少配对判定异常">
+        <Select aria-label="筛选请求操作" value={operationFilter} style={{ width: 180, marginBottom: 12 }} onChange={changeOperation} options={[{ value: '', label: '全部操作' }, ...Object.entries(OPERATIONS).map(([value, label]) => ({ value, label }))]} />
         <Table
           size="small"
           rowKey="id"
@@ -354,19 +402,19 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
             total: requestRows.length,
             showSizeChanger: true,
             pageSizeOptions: [10, 20, 50],
-            showTotal: total => `已留存 ${count(total)} 条，最多 200 条`,
+            showTotal: total => `已留存 ${count(total)} 条`,
             onChange: (page, size) => { setRequestPage(size === requestPageSize ? page : 1); setRequestPageSize(size); },
           }}
-          scroll={{ x: 1120 }}
+          scroll={{ x: 860 }}
           columns={[
-            { title: '北京时间', dataIndex: 'at', render: time, width: 180 },
-            { title: 'IP', dataIndex: 'ip', width: 180, render: (val: string) => <Tag color="cyan">{val || '—'}</Tag> },
-            { title: '类别', dataIndex: 'kind', width: 120, render: (value: string) => <Tag color={value === 'socket' ? 'purple' : 'blue'}>{value === 'socket' ? 'WebSocket' : '歌曲请求'}</Tag> },
-            { title: '操作', dataIndex: 'operation', width: 140, render: (value: string) => <Tag color="geekblue">{OPERATIONS[value] || value}</Tag> },
-            { title: '响应歌曲与结果', dataIndex: 'response', width: 380, render: (response: MusicResponse | undefined) => <MusicResponseSummary response={response} /> },
+            { title: '北京时间', dataIndex: 'at', render: time, width: 170 },
+            { title: 'IP', dataIndex: 'ip', width: 150, render: (val: string) => <code className="risk-code-pill">{val || '—'}</code> },
+            { title: '操作', width: 160, render: (_, row) => <span>{row.kind === 'socket' ? SOCKET_EVENTS[row.event || ''] || '历史实时操作' : OPERATIONS[row.operation] || '其他请求'}</span> },
+            { title: '目标与响应', render: (_, row) => row.response ? <MusicResponseSummary response={row.response} responses={detail.musicResponses} /> : <span className="risk-muted">{row.kind === 'socket' ? '收到操作请求，未采集执行结果' : '未采集响应，可能被拒绝、中断或仍在处理'}</span> },
           ]}
         />
       </RiskSection>
+      <Collapse items={[{ key: 'statistics', label: '操作分布、额度与历史统计', children: <div className="risk-tab-content">
       <RiskSection title="今日操作分布" description="按已认证请求计数，包含被额度或处置拒绝的尝试，不等同于成功业务操作数">
         {operations.length ? (
           <div className="risk-operation-grid">
@@ -394,7 +442,6 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
       <RiskSection title="最近 14 天" description="按北京时间 00:00–24:00 汇总，仅展示有活动的日期">
         <DailyTable days={detail.days || []} />
       </RiskSection>
-      <RiskMusicResponses detail={detail} />
       <RiskErrorBreakdown detail={detail} />
       {!!detail.legacyDays?.length && (
         <Collapse
@@ -422,6 +469,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           }]}
         />
       )}
+      </div> }]} />
     </div>
   );
 
@@ -689,8 +737,8 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           <h2>{detail.displayName || '账户画像'}</h2>
           <Space size={[6, 6]} wrap>
             <code className="risk-code-pill">{detail.id}</code>
-            {detail.email && <Tag color="geekblue">{detail.email}</Tag>}
-            {detail.nickname && detail.nickname !== detail.displayName && <Tag color="cyan">昵称 · {detail.nickname}</Tag>}
+            {detail.email && <span>{detail.email}</span>}
+            {detail.nickname && detail.nickname !== detail.displayName && <span>昵称 · {detail.nickname}</span>}
             {(detail.tags || []).map(tag => <Tag key={tag} color="purple">{tag}</Tag>)}
           </Space>
         </div>
@@ -698,7 +746,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           <Tag color={riskColor(detail.score)}>{detail.score} 分 · {riskLabel(detail.score)}</Tag>
           <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
           <Tag color={detail.humanChallenge?.bypass ? 'green' : detail.humanChallenge?.pending ? 'orange' : detail.lastHumanVerifiedAt ? 'blue' : 'default'}>
-            {detail.humanChallenge?.bypass ? '验证码已放行' : detail.humanChallenge?.pending ? '验证码待通过' : detail.lastHumanVerifiedAt ? '人机已验证' : '无验证记录'}
+            {human?.bypass ? '验证码已放行' : human?.pending ? '验证码待通过' : detail.lastHumanVerifiedAt ? '有验证通过记录' : '无验证记录'}
           </Tag>
           <Button type="text" aria-pressed={showHelp} onClick={() => setShowHelp(value => !value)}>{showHelp ? '隐藏说明' : '显示说明'}</Button>
         </Space>
@@ -712,12 +760,13 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'overview', label: '画像概览', children: <RiskProfileOverview detail={detail} onInspect={inspect} onOpenRoom={onOpenRoom} onOpenIp={onOpenIp} /> },
-          { key: 'identity', label: '身份与风险', children: identityTab },
-          { key: 'rooms', label: '房间与昵称', children: roomsTab },
-          { key: 'requests', label: '请求与配额', children: requestsTab },
-          { key: 'network', label: '登录与网络', children: networkTab },
-          { key: 'decision', label: '标记与处置', children: decisionTab },
+          { key: 'overview', label: '行为证据', children: <div className="risk-tab-content"><RiskProfileOverview detail={detail} onInspect={inspect} onOpenRoom={onOpenRoom} onOpenIp={onOpenIp} />{requestsTab}</div> },
+          { key: 'records', label: '身份与记录', children: <Collapse activeKey={recordSections} onChange={keys => setRecordSections(typeof keys === 'string' ? [keys] : keys)} items={[
+            { key: 'identity', label: '账户身份与评分规则', children: identityTab },
+            { key: 'rooms', label: '房间与昵称记录', children: roomsTab },
+            { key: 'network', label: '登录、会话与网络记录', children: networkTab },
+          ]} /> },
+          { key: 'decision', label: '复核处置', children: decisionTab },
         ]}
       />
     </RiskHelpContext.Provider>

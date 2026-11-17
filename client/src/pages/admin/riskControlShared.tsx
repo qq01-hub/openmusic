@@ -38,7 +38,7 @@ export type MusicResponse = {
 export type MusicResponseAnalysis = { sampleCount: number; targetedResponses: number; distinctSongs: number; topSongs: { id: string; source: string; name: string; artist: string; requests: number }[] };
 export type AccountDetail = RiskAccount & {
   ipRequests?: { ip: string; total: number; music: number; socket: number; image: number; api: number; firstSeenAt: number; lastSeenAt: number }[];
-  requestEvents?: { id: string; at: number; ip: string; kind: string; operation: string; response?: MusicResponse }[];
+  requestEvents?: { id: string; at: number; ip: string; kind: string; operation: string; event?: string; response?: MusicResponse }[];
   musicResponses?: MusicResponse[]; musicResponseAnalysis?: MusicResponseAnalysis;
   errorBreakdown?: ErrorBreakdown;
   ips: { ip: string; lastSeenAt: number }[];

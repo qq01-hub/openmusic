@@ -209,3 +209,28 @@
   .risk-toolbar { justify-content: flex-start; }
   .risk-response-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 }
+.risk-response-evidence { display: grid; gap: 6px; line-height: 1.7; overflow-wrap: anywhere; }
+.risk-response-error { color: #b42318; }
+.risk-review-links { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 20px; }
+.risk-request-statistics { order: 2; }
+.risk-detail .risk-section { padding: 22px; border-radius: 10px; box-shadow: none; }
+.risk-detail .risk-profile-metric { cursor: auto; box-shadow: none; background: #f8fafc; border-radius: 8px; }
+.risk-detail .risk-profile-metric:hover { background: #f8fafc; border-color: var(--risk-border); box-shadow: none; }
+.risk-detail .risk-profile-metric > span { font-size: 14px; }
+.risk-detail .risk-profile-metric strong { font-size: 24px; }
+.risk-detail .ant-tag:not(.ant-tag-red):not(.ant-tag-orange):not(.ant-tag-volcano):not(.ant-tag-green) { color: #334155; background: transparent; border-color: transparent; padding-inline: 0; }
+.risk-detail .risk-kv-grid .ant-descriptions-item-label, .risk-detail .ant-table-thead > tr > th, .risk-detail .risk-operation-grid span { font-size: 14px; }
+.risk-detail .risk-code-pill { background: transparent; border: 0; padding-inline: 0; font-size: 14px; }
+.risk-detail .risk-evidence-list li { border: 0; border-radius: 0; border-bottom: 1px solid var(--risk-border); background: transparent; padding: 12px 0; }
+.risk-detail .risk-evidence-list { margin-top: 0; }
+.risk-detail .ant-collapse-header { font-weight: 600; }
+.risk-detail .risk-sensitive-action .ant-btn { min-width: 112px; }
+@media (max-width: 760px) {
+  .risk-detail .risk-section { padding: 16px; }
+  .risk-detail .risk-profile-metric { padding: 12px; }
+  .risk-detail .risk-profile-metric strong { font-size: 22px; }
+  .risk-detail .risk-review-links > .ant-btn { width: 100%; }
+  .risk-detail .risk-decision-actions > .ant-btn { width: 100%; }
+  .risk-detail .ant-descriptions-item-container { flex-wrap: wrap; }
+  .risk-detail .risk-kv-grid .ant-descriptions-item-content { text-align: left; justify-content: flex-start; }
+}

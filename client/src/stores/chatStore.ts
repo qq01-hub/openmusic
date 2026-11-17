@@ -2,6 +2,9 @@ import { create } from 'zustand';
 import type { ChatMessage } from '../types';
 import { sanitizeIncomingChatMessage } from '../lib/chatAi';
 import { useRoomStore } from './roomStore';
+import { useChatNotificationStore } from './chatNotificationStore';
+import { notifyChatMessage } from '../lib/chatNotifications';
+import { getClientId } from '../lib/clientId';
 import {
   DEFAULT_MEMBER_SETTINGS,
   normalizeWelcomeCooldownSec,
@@ -180,6 +183,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       ? nextMessages.slice(nextMessages.length - 400)
       : nextMessages;
     set({ messages: trimmed });
+    const live = useRoomStore.getState();
+    if (live.room && live.room.id === state.roomId) {
+      const roomId = live.room.id;
+      void notifyChatMessage(safe, {
+        roomId,
+        roomName: live.room.name,
+        userIds: [getClientId(), ...(live.mySocketId ? [live.mySocketId] : [])],
+        nickname: live.nickname,
+        allMessages: useChatNotificationStore.getState().allMessages,
+        isCurrent: () => useRoomStore.getState().room?.id === roomId && get().roomId === roomId,
+      });
+    }
   },
 
   prependOlder: (messages, hasMoreOlder) => {

@@ -9,6 +9,8 @@ import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
 import { useDeskPetStore } from '../stores/deskPetStore';
+import { useChatNotificationStore } from '../stores/chatNotificationStore';
+import { requestChatNotificationPermission } from '../lib/chatNotifications';
 import {
   AI_PERSONA_PRESETS as aiPersonaPresets,
   MAX_CUSTOM_ROOM_AI_PERSONA_LENGTH,
@@ -201,6 +203,7 @@ function Toggle({
       <button
         type="button"
         role="switch"
+        aria-label={label}
         aria-checked={checked}
         disabled={disabled}
         onClick={() => onChange(!checked)}
@@ -483,6 +486,26 @@ export default function RoomSettingsModal({
   const deskPetSizeScale = useDeskPetStore((s) => s.sizeScale);
   const updateDeskPetPref = useDeskPetStore((s) => s.updatePref);
   const resetDeskPetPrefs = useDeskPetStore((s) => s.resetPrefs);
+  const allMessageNotifications = useChatNotificationStore((s) => s.allMessages);
+  const setAllMessageNotifications = useChatNotificationStore((s) => s.setAllMessages);
+  const [notificationSaving, setNotificationSaving] = useState(false);
+  const [notificationError, setNotificationError] = useState('');
+
+  const handleAllMessageNotifications = async (enabled: boolean) => {
+    setNotificationError('');
+    if (!enabled) {
+      setAllMessageNotifications(false);
+      return;
+    }
+    setNotificationSaving(true);
+    const error = await requestChatNotificationPermission();
+    setNotificationSaving(false);
+    if (error) {
+      setNotificationError(error);
+      return;
+    }
+    setAllMessageNotifications(true);
+  };
 
   const hasMusicAccountPlatform = (enabledMusicAccountPlatforms?.length ?? 4) > 0;
 
@@ -501,7 +524,7 @@ export default function RoomSettingsModal({
       items.push({ id: 'chat', label: '聊天' });
       items.push({ id: 'songRequest', label: '点歌' });
     } else {
-      items.push({ id: 'chat', label: 'AI / 桌宠' });
+      items.push({ id: 'chat', label: '聊天' });
     }
     // 非房主仅用于找回身份
     if (!isOwner && anonymousLoginEnabled && (wechatUinEnabled || linuxdoEnabled || githubEnabled)) {
@@ -1534,6 +1557,17 @@ export default function RoomSettingsModal({
           {activeTab === 'chat' && (
             <section>
               <div className="space-y-3">
+                <div className="space-y-2">
+                  <Toggle
+                    checked={allMessageNotifications}
+                    disabled={notificationSaving}
+                    onChange={(enabled) => { void handleAllMessageNotifications(enabled); }}
+                    label="所有消息提醒"
+                    description="默认关闭，开启后每条新聊天消息都会发送浏览器通知，仅影响本机，所有房间通用，关闭后仍保留 @ 提醒"
+                  />
+                  {notificationSaving && <p role="status" className="text-xs text-netease-muted">请在浏览器中允许通知…</p>}
+                  {notificationError && <p role="alert" className="text-xs text-netease-red">{notificationError}</p>}
+                </div>
                 {canModerate && (
                   <Toggle
                     checked={chatHistoryVisibleOnJoin}

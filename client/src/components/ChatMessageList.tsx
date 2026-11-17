@@ -15,13 +15,6 @@ import type { ChatCardActions } from './chatCardActions';
 import Tooltip from './Tooltip';
 import ChatMessageRow, { type ChatRoomMeta } from './ChatMessageRow';
 import { fireWelcomeConfetti } from '../lib/confettiBurst';
-import {
-  compactReplyText,
-  compactSongCardsText,
-  hasMentionAllInText,
-  hasMentionInText,
-} from '../lib/chatPanelUtils';
-import { getClientId } from '../lib/clientId';
 import { useRoomStore } from '../stores/roomStore';
 import {
   normalizeWelcomeCooldownSec,
@@ -37,8 +30,6 @@ const WELCOME_CONFETTI_MAX_AGE_MS = 30 * 1000;
 interface Props {
   roomMeta: ChatRoomMeta;
   myUserId: string;
-  mySocketId: string | null;
-  nickname: string;
   pureMode: boolean;
   chatMuted: boolean;
   canModerate?: boolean;
@@ -204,8 +195,6 @@ function VirtualChatRow({ index, style, data }: ListChildComponentProps<VirtualR
 const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMessageList({
   roomMeta,
   myUserId,
-  mySocketId,
-  nickname,
   pureMode,
   chatMuted,
   canModerate = false,
@@ -248,7 +237,6 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const stickToBottomRef = useRef(true);
   const loadingOlderRef = useRef(false);
   const reactionPickerOpenRef = useRef(false);
-  const notifiedMessageIdsRef = useRef<Set<string>>(new Set());
   const welcomeConfettiIdsRef = useRef(new Set<string>());
   const welcomeConfettiCooldownRef = useRef(new Map<string, number>());
   const pendingWelcomeConfettiRef = useRef(false);
@@ -390,7 +378,6 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     stickToBottomRef.current = true;
     setShowScrollToBottom(false);
     setShowLoadOlderHint(false);
-    notifiedMessageIdsRef.current.clear();
     welcomeConfettiIdsRef.current.clear();
     welcomeConfettiCooldownRef.current.clear();
     pendingWelcomeConfettiRef.current = false;
@@ -541,39 +528,6 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     if (scrollbarHideTimerRef.current !== null) window.clearTimeout(scrollbarHideTimerRef.current);
     if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
   }, []);
-
-  useEffect(() => {
-    if (!messages.length || typeof Notification === 'undefined') return;
-    const uid = mySocketId || getClientId();
-    const myName = nickname.trim();
-    const latestMessages = messages.slice(-5);
-
-    for (const msg of latestMessages) {
-      if (notifiedMessageIdsRef.current.has(msg.id) || msg.userId === uid) continue;
-      const mentionedById = msg.mentions?.some((mention) => mention.id === uid);
-      const mentionedByName = myName ? hasMentionInText(msg.text, myName) : false;
-      const mentionedByAll = hasMentionAllInText(msg.text);
-      if (!mentionedById && !mentionedByName && !mentionedByAll) continue;
-
-      notifiedMessageIdsRef.current.add(msg.id);
-      const notify = () => {
-        if (Notification.permission !== 'granted') return;
-        const notification = new Notification(`${msg.nickname} 提到了你`, {
-          body: compactReplyText(msg.text, msg.imageUrl, msg.imageKey, msg.asSticker)
-            || compactSongCardsText(msg.songs),
-          tag: `openmusic-mention-${roomMeta.id}-${msg.id}`,
-          silent: false,
-        });
-        notification.onclick = () => window.focus();
-      };
-
-      if (Notification.permission === 'default') {
-        void Notification.requestPermission().then(notify);
-      } else {
-        notify();
-      }
-    }
-  }, [mySocketId, nickname, roomMeta.id, messages]);
 
   const handleRevealPureImage = useCallback((messageId: string) => {
     setRevealedPureImages((prev) => {
