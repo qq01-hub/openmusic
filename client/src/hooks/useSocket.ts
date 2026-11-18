@@ -1872,7 +1872,7 @@ export function useSocket() {
       { songId: song.id, source: song.source || 'netease', queueId: song.queueId, delta, requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}` },
       { success: false, error: '连接超时，请确认当前偏移后重试' },
     ).then(res => {
-      if (res.success && res.room && useRoomStore.getState().room?.id === res.room.id) applyRoomSnapshot(res.room);
+      if (res.success && res.room && useRoomStore.getState().room?.id === res.room.id) applyRoomSnapshot(res.room, true);
       return res;
     });
   }, []);

@@ -3811,7 +3811,7 @@ app.post('/api/auth/wechat-uin/recover', async (req, res) => {
   await linkDeviceToUser(deviceId, userId);
   setIdentityCookieHeaders(res, userId, signClientId(userId, now), deviceId);
   if (recovery.systemMessage) {
-    broadcastRoomUpdate(roomId, { immediate: true });
+    broadcastRoomUpdate(roomId);
     emitSystemChat(roomId, recovery.systemMessage);
   }
   return res.json({ success: true, roomId, recoveredUserId: userId });
@@ -5425,7 +5425,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    broadcastRoomUpdate(roomId);
+    broadcastRoomUpdate(roomId, { immediate: true });
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
@@ -6157,7 +6157,7 @@ io.on('connection', (socket) => {
     const result = adjustRoomLyrics(roomId, getSocketUserId(socket), payload, socket.id);
     incrementMetric('room_lyric_adjust_total', { outcome: result.error ? 'rejected' : 'success', code: result.code || 'ok' });
     if (result.error) { callback?.({ success: false, error: result.error, code: result.code }); return; }
-    broadcastRoomUpdate(roomId);
+    broadcastRoomUpdate(roomId, { immediate: true });
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
