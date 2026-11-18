@@ -76,7 +76,7 @@ export default function PlaylistImportModal({
 
   if (!open) return null;
 
-  const scrimClass = immersive ? immersiveGlassScrim : 'bg-black/70 backdrop-blur-sm';
+  const scrimClass = immersive ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm';
   const panelClass = immersive
     ? `${immersiveGlassModal} w-full max-w-md rounded-[22px] p-5 sm:p-6`
     : 'glass w-full max-w-md rounded-2xl border border-white/10 shadow-2xl p-5 sm:p-6';

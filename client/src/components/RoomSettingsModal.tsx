@@ -731,7 +731,7 @@ export default function RoomSettingsModal({
     <div className="pointer-events-auto fixed inset-0 z-[80] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={onClose}
         aria-label="关闭"
       />

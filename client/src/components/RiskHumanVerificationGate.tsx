@@ -83,7 +83,7 @@ export default function RiskHumanVerificationGate() {
     finally { if (isCurrent()) { submitting.current = false; setBusy(false); setToken(''); setWidgetRevision(value => value + 1); } }
   };
   if (!state?.pending) return null;
-  return <div className="fixed inset-0 z-[250] flex items-start justify-center overflow-y-auto bg-black/80 p-5 backdrop-blur-sm">
+  return <div className="fixed inset-0 z-[250] flex items-start justify-center overflow-y-auto bg-[#08090c] p-5 backdrop-blur-sm">
     <section ref={dialog} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
       if (event.key !== 'Tab') return;

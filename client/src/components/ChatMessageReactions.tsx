@@ -107,7 +107,7 @@ function ChatOverlayPortal({
     >
       <button
         type="button"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={onClose}
         aria-label={ariaLabel}
       />

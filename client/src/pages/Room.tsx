@@ -4222,7 +4222,7 @@ export default function Room() {
         <div className="fixed inset-0 z-50 flex items-end justify-center lg:items-start px-0 lg:px-4 pt-0 lg:pt-24 pb-0 lg:pb-8">
           <button
             type="button"
-            className="absolute inset-0 z-0 bg-black/65 backdrop-blur-sm"
+            className="absolute inset-0 z-0 bg-[#08090c] backdrop-blur-sm"
             onClick={clearSearchResults}
             aria-label="关闭搜索结果"
           />
@@ -4333,7 +4333,7 @@ export default function Room() {
           <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-24 pb-8">
             <button
               type="button"
-              className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-black/65 backdrop-blur-sm'}`}
+              className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
               onClick={() => setSongHistoryOpen(false)}
               aria-label="关闭播放历史"
             />
@@ -4427,7 +4427,7 @@ export default function Room() {
 
       {favoriteShareOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-24 pb-8">
-          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setFavoriteShareOpen(false)} aria-label="关闭收藏分享" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setFavoriteShareOpen(false)} aria-label="关闭收藏分享" />
           <div className="relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-netease-bg shadow-2xl">
             <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3"><div><h2 className="text-sm font-medium">收藏分享</h2><p className="mt-0.5 text-xs text-netease-muted">分享出去或导入他人的收藏</p></div><button type="button" onClick={() => setFavoriteShareOpen(false)}><X className="h-5 w-5 text-netease-muted" /></button></div>
             <div className="flex border-b border-netease-border/50"><button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'create' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>我的分享码</button><button type="button" onClick={() => { setFavoriteShareMode('import'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'import' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>输入分享码</button></div>
@@ -4445,7 +4445,7 @@ export default function Room() {
           <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-16 pb-6 sm:pt-24 sm:pb-8">
           <button
             type="button"
-            className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-black/65 backdrop-blur-sm'}`}
+            className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
             onClick={() => setFavoritesOpen(false)}
             aria-label="关闭收藏"
           />
@@ -4722,7 +4722,7 @@ export default function Room() {
 
       {renameOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setRenameOpen(false)} aria-label="关闭" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setRenameOpen(false)} aria-label="关闭" />
           <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">修改房间名</h2>
@@ -4786,7 +4786,7 @@ export default function Room() {
 
       {deleteFavoriteCategoryTarget && createPortal(
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} aria-label="关闭删除分类" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} aria-label="关闭删除分类" />
           <div role="dialog" aria-modal="true" aria-labelledby="delete-favorite-category-title" className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
             <h2 id="delete-favorite-category-title" className="text-sm font-medium text-white">删除分类「{deleteFavoriteCategoryTarget}」</h2>
             <p className="mt-2 text-xs leading-5 text-netease-muted">请选择如何处理分类中的歌曲，同时取消收藏后无法撤销</p>
@@ -4819,7 +4819,7 @@ export default function Room() {
         <div className="fixed inset-0 z-[110] flex items-center justify-center px-4">
           <button
             type="button"
-            className="absolute inset-0 bg-black/65 backdrop-blur-sm"
+            className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
             disabled={renamingFavoriteCategory}
             onClick={() => {
               setRenameFavoriteCategoryTarget(null);
@@ -4891,7 +4891,7 @@ export default function Room() {
 
       {newFavoriteCategoryOpen && createPortal(
         <div className="fixed inset-0 z-[110] flex items-center justify-center px-4">
-          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭新建分类" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭新建分类" />
           <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-medium text-white">新建收藏分类</h2><button type="button" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭"><X className="h-5 w-5 text-netease-muted" /></button></div>
             <input autoFocus value={newFavoriteCategoryName} onChange={(event) => setNewFavoriteCategoryName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateFavoriteCategory(); }} maxLength={30} placeholder="输入分类名称" className="w-full rounded-xl border border-netease-border bg-netease-dark px-3 py-2.5 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none" />
@@ -4903,7 +4903,7 @@ export default function Room() {
 
       {coverOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setCoverOpen(false)} aria-label="关闭" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setCoverOpen(false)} aria-label="关闭" />
           <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">房间封面</h2>
@@ -4995,7 +4995,7 @@ export default function Room() {
 
       {lockOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setLockOpen(false)} aria-label="关闭" />
+          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setLockOpen(false)} aria-label="关闭" />
           <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">房间上锁</h2>

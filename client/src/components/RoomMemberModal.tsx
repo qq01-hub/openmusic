@@ -248,7 +248,7 @@ export default function RoomMemberModal({
     <div className="fixed inset-0 z-[85] flex items-center justify-center p-3 sm:p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={onClose}
         aria-label="关闭"
       />

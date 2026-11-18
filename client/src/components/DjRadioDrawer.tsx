@@ -32,7 +32,7 @@ export default function DjRadioDrawer({ open, immersive = false, onClose, onSele
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <button
         type="button"
-        className={`absolute inset-0 ${immersive ? immersiveGlassScrim : 'bg-black/65 backdrop-blur-sm'}`}
+        className={`absolute inset-0 ${immersive ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
         onClick={onClose}
         aria-label="关闭音乐电台"
       />

@@ -48,7 +48,7 @@ export default function Modal({
 }: Props) {
   if (!open) return null;
 
-  const maskClassName = 'modal-mask pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm';
+  const maskClassName = 'modal-mask pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm';
 
   return createPortal(
     <div

@@ -289,7 +289,7 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
     <div className="fixed inset-0 z-[60]">
       <button
         type="button"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={() => setShowMutePicker(false)}
         aria-label="关闭禁言管理"
       />

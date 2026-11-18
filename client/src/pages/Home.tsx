@@ -301,7 +301,7 @@ function Modal({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity"
+        className="absolute inset-0 bg-[#08090c] backdrop-blur-md transition-opacity"
         onClick={onClose}
         aria-label="关闭"
       />
@@ -331,7 +331,7 @@ function DonationModal({ open, onClose, donations }: { open: boolean; onClose: (
   });
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <button type="button" className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={onClose} aria-label="关闭赞赏弹窗" />
+      <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-md" onClick={onClose} aria-label="关闭赞赏弹窗" />
       <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-[#171016]/95 backdrop-blur-xl rounded-[28px] border border-pink-300/20 shadow-[0_24px_80px_rgba(236,72,153,0.18)] p-6 sm:p-8 animate-fade-in">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-start gap-3">

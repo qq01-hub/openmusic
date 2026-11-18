@@ -70,7 +70,7 @@ export default function RoomQualityModal({ open, value, saving = false, onClose,
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={onClose}
         aria-label="关闭"
       />

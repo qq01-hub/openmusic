@@ -31,7 +31,7 @@ export default function ConfirmModal({
     <div className="pointer-events-auto fixed inset-0 z-[100] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="pointer-events-auto absolute inset-0 bg-black/70 backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm"
         onClick={onCancel}
         aria-label="关闭"
       />
