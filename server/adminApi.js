@@ -926,6 +926,11 @@ export function mountAdminApi(app, {
     appendAdminAudit('risk_session_revoke', { accountId: req.params.id, reason }, getClientIp?.(req) || req.ip || '');
     res.json({ ok: true });
   }));
+  app.post('/api/admin/risk/accounts/:id/human-challenge', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
+    const state = await riskControl.forceHumanChallenge(req.params.id, req.body);
+    if (state.created) appendAdminAudit('risk_human_challenge_force', { accountId: req.params.id, reason: req.body.reason.trim() }, getClientIp?.(req) || req.ip || '');
+    res.json(state);
+  }));
   app.put('/api/admin/risk/accounts/:id/human-challenge', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
     const state = await riskControl.setHumanChallengeBypass(req.params.id, req.body);
     appendAdminAudit('risk_human_challenge_bypass', { accountId: req.params.id, bypass: state.bypass, reason: state.bypassReason }, getClientIp?.(req) || req.ip || '');

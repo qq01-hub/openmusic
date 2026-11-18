@@ -19,11 +19,10 @@ export function MusicResponseSummary({ response, responses = [] }: { response?: 
   if (!response) return <span className="risk-muted">未采集响应摘要</span>;
   const returned = response.songs || [];
   const knownTarget = responses.flatMap(item => item.songs || []).find(song => song.id === response.requestedSongId && song.source === response.source && song.name);
-  const match = responseMatch(response, responses);
   return <div className="risk-response-evidence">
     <div><strong>{SOURCES[response.source] || '音源未记录'}</strong>{response.requestedSongId && <span> · 目标 ID {response.requestedSongId}{knownTarget ? ` · ${knownTarget.name}${knownTarget.artist ? ` / ${knownTarget.artist}` : ''}（采样曲名）` : ''}</span>}</div>
     <div className={['failed', 'aborted'].includes(response.outcome) ? 'risk-response-error' : ''}>{OUTCOMES[response.outcome]} · HTTP {response.status || '未完成'} · {count(response.durationMs)} ms{response.resultCount !== undefined && ` · ${count(response.resultCount)} 条结果`}</div>
-    {returned.length > 0 ? <div>返回采样：{returned.map(song => `${song.name || '未含歌名'}${song.artist ? ` / ${song.artist}` : ''}（${SOURCES[song.source] || '未知音源'} · ${song.id}）`).join('、')}</div> : response.requestedSongId && <div className="risk-muted">响应未含歌曲身份，仅能确认请求目标</div>}
-    {match && <div className="risk-muted">{match}</div>}
+    {returned.length > 0 && <div>已返回歌曲数据</div>}
+
   </div>;
 }

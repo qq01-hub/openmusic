@@ -323,7 +323,11 @@ async function fetchCrossSourceFallback(song: QueueItem): Promise<CachedUrlEntry
 
   const promise = (async () => {
     const candidates = await findCrossSourceCandidates(song);
+    const seen = new Set<string>();
     for (const candidate of candidates) {
+      const candidateKey = `${candidate.source}:${candidate.id}`;
+      if (seen.has(candidateKey)) continue;
+      seen.add(candidateKey);
       try {
         const quality = getLowestQuality(candidate.source) ?? getUserPlaybackQuality(candidate.source);
         const info = await getSongUrlInfo(candidate, quality);

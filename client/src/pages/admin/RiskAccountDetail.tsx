@@ -99,6 +99,30 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   const [showHelp, setShowHelp] = useState(false);
   const [human, setHuman] = useState(detail.humanChallenge);
   const [humanSaving, setHumanSaving] = useState(false);
+  const [humanForm] = Form.useForm<{ reason: string }>();
+  const confirmHumanAction = (force: boolean, reason: string) => {
+    modal.confirm({
+      title: force ? '向该账户发送一次人机验证？' : human?.bypass ? '确认撤销验证码放行？' : '确认长期放行此账户的异常访问验证码？',
+      content: force ? '在线用户将立即收到验证，离线用户将在下次访问时验证' : '此操作不会改变账户封禁状态或配额',
+      onOk: async () => {
+        setHumanSaving(true);
+        try {
+          const next = await adminFetch<HumanChallengeState & { created?: boolean }>(`/api/admin/risk/accounts/${encodeURIComponent(detail.id)}/human-challenge`, {
+            method: force ? 'POST' : 'PUT',
+            body: JSON.stringify(force ? { reason } : { reason, bypass: !human?.bypass }),
+          });
+          setHuman(next);
+          onHumanChallengeChange(detail.id, next);
+          message.success(force ? next.created ? '已发起一次人机验证' : '该账户已有待验证轮次' : '验证码放行状态已更新');
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : '操作失败');
+          throw error;
+        } finally {
+          setHumanSaving(false);
+        }
+      },
+    });
+  };
   const [activeTab, setActiveTab] = useState('overview');
   const [recordSections, setRecordSections] = useState<string[]>(['identity']);
   const [matchedOnly, setMatchedOnly] = useState(true);
@@ -113,7 +137,10 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   for (const response of detail.musicResponses || []) {
     if (!evidence.has(response.requestId)) evidence.set(response.requestId, { id: response.requestId, at: response.at, ip: response.ip, kind: 'music', operation: response.operation, response });
   }
-  const requestRows = [...evidence.values()].sort((a, b) => b.at - a.at).filter(event => !operationFilter || (operationFilter === 'socket' ? event.kind === 'socket' : event.operation === operationFilter));
+  const requestRows = [...evidence.values()]
+    .filter(event => Boolean(event.response))
+    .sort((a, b) => b.at - a.at)
+    .filter(event => !operationFilter || (operationFilter === 'socket' ? event.kind === 'socket' : event.operation === operationFilter));
   const changeOperation = (value: string) => { setOperationFilter(value); setRequestPage(1); };
   const inspect = (tab: string, operation = '') => {
     changeOperation(operation);
@@ -390,7 +417,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         </div>
       </RiskSection>
       </div> }]} />
-      <RiskSection title="请求与响应记录" description="近 24 小时各保留最多 200 条重要请求与音乐响应，合并同一请求，配对仅核对同 IP、同平台、同歌曲在 10 分钟内的正常响应，不根据缺少配对判定异常">
+      <RiskSection title="请求与响应记录" description="仅显示已采集执行结果的请求">
         <Select aria-label="筛选请求操作" value={operationFilter} style={{ width: 180, marginBottom: 12 }} onChange={changeOperation} options={[{ value: '', label: '全部操作' }, ...Object.entries(OPERATIONS).map(([value, label]) => ({ value, label }))]} />
         <Table
           size="small"
@@ -410,7 +437,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
             { title: '北京时间', dataIndex: 'at', render: time, width: 170 },
             { title: 'IP', dataIndex: 'ip', width: 150, render: (val: string) => <code className="risk-code-pill">{val || '—'}</code> },
             { title: '操作', width: 160, render: (_, row) => <span>{row.kind === 'socket' ? SOCKET_EVENTS[row.event || ''] || '历史实时操作' : OPERATIONS[row.operation] || '其他请求'}</span> },
-            { title: '目标与响应', render: (_, row) => row.response ? <MusicResponseSummary response={row.response} responses={detail.musicResponses} /> : <span className="risk-muted">{row.kind === 'socket' ? '收到操作请求，未采集执行结果' : '未采集响应，可能被拒绝、中断或仍在处理'}</span> },
+            { title: '结果', render: (_, row) => <MusicResponseSummary response={row.response} responses={detail.musicResponses} /> },
           ]}
         />
       </RiskSection>
@@ -557,7 +584,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         </Form>
       </RiskSection>
       <RiskSection title="异常访问人机验证" description="管理员放行长期有效，直至撤销，仅跳过异常访问验证码，不解除账户封禁、登录验证或请求额度限制">
-        <p className="risk-decision-explanation">验证码放行独立于账户状态，封禁与请求额度限制仍然生效</p>
+        <p className="risk-decision-explanation">手动发送可跳过自动验证的冷却时间和每日上限，已长期放行的账户需先撤销放行</p>
         {human && (
           <Descriptions
             className="risk-kv-grid"
@@ -582,7 +609,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
                   <Space size={[4, 4]} wrap>
                     <Tag color="orange">触发 {human.triggers}</Tag>
                     <Tag color="green">通过 {human.passes}</Tag>
-                    <Tag>上限 {human.dailyLimit || 2} 轮</Tag>
+                    <Tag>自动验证上限 {human.dailyLimit || 2} 轮</Tag>
                   </Space>
                 ),
               },
@@ -604,37 +631,20 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         )}
         {!human && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无人机验证记录" />}
         <Form<{ reason: string }>
+          form={humanForm}
           layout="vertical"
           className="risk-human-decision-form"
           disabled={saving || humanSaving || Boolean(detail.deletedAt)}
-          onFinish={values => {
-            modal.confirm({
-              title: human?.bypass ? '确认撤销验证码放行？' : '确认长期放行此账户的异常访问验证码？',
-              content: '此操作不会改变账户封禁状态或配额',
-              onOk: async () => {
-                setHumanSaving(true);
-                try {
-                  const next = await adminFetch<NonNullable<typeof human>>(`/api/admin/risk/accounts/${encodeURIComponent(detail.id)}/human-challenge`, {
-                    method: 'PUT',
-                    body: JSON.stringify({ bypass: !human?.bypass, reason: values.reason }),
-                  });
-                  setHuman(next);
-                  onHumanChallengeChange(detail.id, next);
-                  message.success('验证码放行状态已更新');
-                } catch (error) {
-                  message.error(error instanceof Error ? error.message : '保存失败');
-                  throw error;
-                } finally {
-                  setHumanSaving(false);
-                }
-              },
-            });
-          }}
+          onFinish={values => confirmHumanAction(false, values.reason)}
         >
-          <Form.Item name="reason" label="放行或撤销原因" rules={[{ required: true, whitespace: true, message: '请填写放行或撤销的原因' }, { max: 200 }]}>
+          <Form.Item name="reason" label="处置原因" rules={[{ required: true, whitespace: true, message: '请填写本次处置原因' }, { max: 200 }]}>
             <Input.TextArea rows={2} maxLength={200} showCount placeholder="说明本次验证码处置的依据" />
           </Form.Item>
           <div className="risk-decision-actions">
+            <Button type="primary" disabled={saving || humanSaving || Boolean(detail.deletedAt || human?.pending || human?.bypass) || detail.status === 'blocked'}
+              onClick={() => void humanForm.validateFields().then(values => confirmHumanAction(true, values.reason), () => undefined)}>
+              强制发送一次人机验证
+            </Button>
             <Button htmlType="submit" loading={humanSaving} disabled={saving || Boolean(detail.deletedAt)}>{human?.bypass ? '撤销长期放行' : '长期放行验证码'}</Button>
           </div>
         </Form>

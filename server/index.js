@@ -1454,9 +1454,6 @@ app.post('/api/music-account-contribution/qr/create', async (req, res) => {
   }
   const platform = ['netease', 'tencent', 'kugou', 'qishui'].includes(req.body?.platform) ? req.body.platform : '';
   if (!platform) return res.status(400).json({ success: false, error: '请选择音乐平台' });
-  if (!isMusicSourceEnabled(platform, getRuntimeConfig().musicSourcesEnabled)) {
-    return res.status(503).json({ success: false, error: '该音源已关闭' });
-  }
   const result = await createManagedMusicQrSession({
     ownerId: identity.userId,
     platform,
@@ -1547,10 +1544,6 @@ app.post('/api/music-account-contribution/bind', async (req, res) => {
   };
   const credential = await getManagedMusicQrCredential(context);
   if (!credential.ok) return res.status(400).json({ success: false, error: credential.error });
-  if (!isMusicSourceEnabled(credential.platform, getRuntimeConfig().musicSourcesEnabled)) {
-    await releaseManagedMusicQrCredential(context);
-    return res.status(503).json({ success: false, error: '该音源已关闭' });
-  }
   const revokeToken = randomBytes(12).toString('base64url');
   const result = await contributeMusicAccount(
     credential.platform,
@@ -1846,19 +1839,21 @@ app.get('/api/meting', async (req, res) => {
   const query = { ...(req.metingQueryOverride || req.query) };
   const source = String(query.server || '').trim().toLowerCase();
   const enabled = getRuntimeConfig().musicSourcesEnabled;
-  if (!req.riskMetingFallback && !isMusicSourceEnabled(source, enabled)) return res.status(503).json({ error: '该音源已关闭' });
+  const presence = findUserRoomPresence(identity.userId);
+  const hasSharedRoomCredential = Boolean(presence?.roomId && getRoomMusicAccountCookie(presence.roomId, source));
+  if (!req.riskMetingFallback && !isMusicSourceEnabled(source, enabled) && !hasSharedRoomCredential) return res.status(503).json({ error: '该音源已关闭' });
 
   try {
     const thumbPx = req.riskMetingFallback ? 0 : parseInt(String(req.query.size || ''), 10) || 0;
     delete query.size;
-    const presence = req.riskMetingFallback ? null : findUserRoomPresence(identity.userId);
+    const requestPresence = req.riskMetingFallback ? null : presence;
     await runWithMetingRequestContext(
       {
         userId: identity.userId,
-        userNickname: presence?.userNickname || '',
+        userNickname: requestPresence?.userNickname || '',
         clientIp: getRequestIp(req),
-        roomId: presence?.roomId || '',
-        roomName: presence?.roomName || '',
+        roomId: requestPresence?.roomId || '',
+        roomName: requestPresence?.roomName || '',
       },
       () => proxyMetingResponse(query, res, thumbPx, String(query.type || ''), req),
     );
@@ -5653,10 +5648,6 @@ io.on('connection', (socket) => {
       callback?.({ success: false, error: '仅房主可绑定音源账号' });
       return;
     }
-    if (!isMusicSourceEnabled(platform, getRuntimeConfig().musicSourcesEnabled)) {
-      callback?.({ success: false, error: '该音源已关闭' });
-      return;
-    }
     const result = await createManagedMusicQrSession({
       ownerId: getSocketUserId(socket),
       roomId,
@@ -5726,11 +5717,6 @@ io.on('connection', (socket) => {
     const credential = await getManagedMusicQrCredential(context);
     if (!credential.ok) {
       callback?.({ success: false, error: credential.error });
-      return;
-    }
-    if (!isMusicSourceEnabled(credential.platform, getRuntimeConfig().musicSourcesEnabled)) {
-      await releaseManagedMusicQrCredential(context);
-      callback?.({ success: false, error: '该音源已关闭' });
       return;
     }
     if (!hasRoomCredentialEncryptionKey()) {

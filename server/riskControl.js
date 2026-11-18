@@ -612,6 +612,25 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     return humanChallengeStatus(id);
   }
 
+  async function forceHumanChallenge(id, input) {
+    if (typeof input?.reason !== 'string' || !input.reason.trim() || input.reason.length > 200) throw new RiskControlError('RISK_DECISION_INVALID', '请填写 200 字内的发送原因', 400);
+    const config = getRuntimeConfig();
+    if (!config.riskChallengeEnabled || !config.turnstileEnabled) throw new RiskControlError('HUMAN_CHECK_DISABLED', '请先在管理后台启用异常访问人机验证和 Turnstile', 409);
+    const timestamp = now();
+    const result = await run(client => evalRedisScript(client, `${HUMAN_GATE_LUA}
+      if redis.call('HEXISTS', KEYS[1], 'firstSeenAt') == 0 then return 'missing' end
+      if redis.call('HGET', KEYS[1], 'status') == 'blocked' then return 'blocked' end
+      if redis.call('HGET', KEYS[1], 'humanBypass') == '1' then return 'bypass' end
+      if redis.call('HEXISTS', KEYS[1], 'humanPending') == 1 then return 'pending' end
+      humanGate(KEYS[1], ARGV[1], ARGV[2], ARGV[3], true, ARGV[4], ARGV[5], true)
+      return 'created'
+    `, { keys: [profileKey(id)], arguments: [String(timestamp), dateKey(timestamp), randomBytes(24).toString('hex'), riskChallengeChannel(client, prefix), accountId(id)] }));
+    if (result === 'missing') throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
+    if (result === 'blocked') throw new RiskControlError('ACCOUNT_RISK_BLOCKED', '账户已封禁，无法发送验证', 409);
+    if (result === 'bypass') throw new RiskControlError('HUMAN_CHECK_BYPASSED', '请先撤销该账户的长期放行', 409);
+    return { ...await humanChallengeStatus(id), created: result === 'created' };
+  }
+
   async function setHumanChallengeBypass(id, input) {
     if (typeof input?.bypass !== 'boolean' || typeof input.reason !== 'string' || !input.reason.trim() || input.reason.length > 200) throw new RiskControlError('RISK_DECISION_INVALID', '请填写放行状态及 200 字内的原因', 400);
     const result = await run(client => evalRedisScript(client, `
@@ -1173,7 +1192,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     }
   }
 
-  return { humanChallengeStatus, completeHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, recordAiCall, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
+  return { humanChallengeStatus, completeHumanChallenge, forceHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, recordAiCall, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
 }
 
 export const riskControl = createRiskControl();

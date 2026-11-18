@@ -4752,9 +4752,9 @@ export default function Room() {
       )}
 
       {favoriteDuplicatePickerOpen && createPortal(
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-black/65 backdrop-blur-sm" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭重复筛选" />
-          <div role="dialog" aria-modal="true" aria-labelledby="favorite-duplicate-title" className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/90 p-4">
+          <button type="button" className="absolute inset-0 bg-black/90" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭重复筛选" />
+          <div role="dialog" aria-modal="true" aria-labelledby="favorite-duplicate-title" className="relative z-10 w-full max-w-sm rounded-2xl border border-white/15 bg-[#17191f] p-5 text-white shadow-2xl">
             <div className="mb-2 flex items-center justify-between">
               <h2 id="favorite-duplicate-title" className="text-sm font-medium text-white">跨平台重复歌曲筛选</h2>
               <button type="button" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭"><X className="h-5 w-5 text-netease-muted" /></button>

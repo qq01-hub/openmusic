@@ -6,13 +6,15 @@ local function humanDay(key, day)
     redis.call('HSET', key, 'humanDay', day, 'humanTriggers', pending and 1 or 0, 'humanPasses', 0)
   end
 end
-local function humanGate(key, now, day, nonce, abnormal, channel, accountId)
+local function humanGate(key, now, day, nonce, abnormal, channel, accountId, forced)
   if redis.call('HGET', key, 'humanBypass') == '1' then return 0 end
   if redis.call('HEXISTS', key, 'humanPending') == 1 then return 1 end
   if not abnormal then return 0 end
   humanDay(key, day)
-  if tonumber(redis.call('HGET', key, 'humanPasses') or '0') >= 2 then return 0 end
-  if tonumber(redis.call('HGET', key, 'humanCooldownUntil') or '0') > now then return 0 end
+  if not forced then
+    if tonumber(redis.call('HGET', key, 'humanPasses') or '0') >= 2 then return 0 end
+    if tonumber(redis.call('HGET', key, 'humanCooldownUntil') or '0') > now then return 0 end
+  end
   redis.call('HSET', key, 'humanPending', nonce, 'humanTriggeredAt', now)
   redis.call('HINCRBY', key, 'humanTriggers', 1)
   redis.call('HINCRBY', key, 'humanTriggerTotal', 1)
