@@ -1692,6 +1692,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }
       }
 
+      if (!liveRoom.isPlaying) return;
       if (shouldSkipTrackLoad(audio, current.queueId)) return;
       if (loadLockRef.current.queueId) return;
       if (useAudioStore.getState().trackLoading) return;
@@ -2003,7 +2004,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     const roomState = useRoomStore.getState().room;
     if (!roomState?.current) return;
     if (!canSyncAudioForQueue(controller.audio, roomState.current.queueId)) return;
-    prefetchUpcomingFromRoom(roomState);
+    prefetchUpcomingFromRoom(roomState, { includeCurrent: roomState.isPlaying });
   }, [room?.queue, room?.nextRandom?.queueId, room?.nextRandom?.id, room?.current?.queueId, room?.current?.id, room?.current?.source]);
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { type ReactNode } from 'react';
 import { Space, Tag } from 'antd';
 import { formatAuditTime } from './utils';
 
@@ -64,11 +64,9 @@ export const riskLabel = (score: number) => score >= 60 ? '高风险' : score >=
 export const currentRiskScore = (account: RiskAccount) => account.score ?? account.queueScore ?? account.sampledScore;
 export const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback;
 
-export const RiskHelpContext = createContext(false);
-
 export function RiskSection({ title, description, children, actions }: { title: string; description?: ReactNode; children: ReactNode; actions?: ReactNode }) {
-  const showHelp = useContext(RiskHelpContext);
-  return <section className="risk-section"><div className="risk-section-heading"><div className="risk-section-intro"><h3>{title}</h3>{showHelp && description && <details className="risk-section-note"><summary aria-label={`${title}说明`}>说明</summary><p>{description}</p></details>}</div>{actions}</div>{children}</section>;
+  void description;
+  return <section className="risk-section"><div className="risk-section-heading"><h3>{title}</h3>{actions}</div>{children}</section>;
 }
 
 export function IdentityTags({ account }: { account: RiskAccount }) {

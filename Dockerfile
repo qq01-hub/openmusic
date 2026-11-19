@@ -5,6 +5,13 @@
 # 在 QEMU 下为 ARM64 重复执行 npm ci/build。
 FROM --platform=$BUILDPLATFORM node:20-alpine AS client-builder
 WORKDIR /app
+ENV NPM_CONFIG_FETCH_RETRIES=6 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=1000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=300000 \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
 # vite.config.ts 构建期会读取 server/seoFiles.js、scripts/app-version.mjs、release-notes.json
 COPY server ./server
 COPY scripts ./scripts
@@ -12,17 +19,24 @@ COPY vendor/folia ./vendor/folia
 COPY docs/FOLIA_IMMERSIVE.md ./docs/FOLIA_IMMERSIVE.md
 COPY release-notes.json ./release-notes.json
 COPY client/package.json client/package-lock.json* ./client/
-RUN --mount=type=cache,target=/root/.npm cd client && npm ci
+RUN --mount=type=cache,id=openmusic-npm-cache,target=/root/.npm,sharing=locked cd client && npm ci --prefer-offline
 COPY client ./client
 RUN cd client && npm run build
 
 # ---- 后端生产依赖 ----
 FROM node:20-alpine AS server-deps
 WORKDIR /app/server
+ENV NPM_CONFIG_FETCH_RETRIES=6 \
+    NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
+    NPM_CONFIG_FETCH_RETRY_MINTIMEOUT=1000 \
+    NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT=120000 \
+    NPM_CONFIG_FETCH_TIMEOUT=300000 \
+    NPM_CONFIG_AUDIT=false \
+    NPM_CONFIG_FUND=false
 COPY server/package.json server/package-lock.json* ./
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+RUN --mount=type=cache,id=openmusic-npm-cache,target=/root/.npm,sharing=locked npm ci --omit=dev --prefer-offline
 COPY deploy/updater/package.json deploy/updater/package-lock.json /app/deploy/updater/
-RUN --mount=type=cache,target=/root/.npm cd /app/deploy/updater && npm ci --omit=dev
+RUN --mount=type=cache,id=openmusic-npm-cache,target=/root/.npm,sharing=locked cd /app/deploy/updater && npm ci --omit=dev --prefer-offline
 
 # ---- 运行时镜像 ----
 FROM node:20-alpine AS runtime

@@ -31,6 +31,10 @@
 .risk-auto-refresh { display: inline-flex; align-items: center; gap: 8px; color: #52637c; white-space: nowrap; }
 .risk-filters { display: grid; grid-template-columns: minmax(220px, 1fr) 140px 155px; gap: 12px; margin-bottom: 16px; }
 .risk-account-cell, .risk-cell-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; overflow-wrap: anywhere; }
+.risk-metric-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; font-variant-numeric: tabular-nums; }
+.risk-metric-cell strong { color: #172b4d; font-size: 18px; line-height: 1.25; font-weight: 650; }
+.risk-metric-cell span, .risk-metric-cell em { color: #52637c; font-size: 12px; font-style: normal; line-height: 1.45; }
+.risk-metric-cell em { color: #b54708; }
 .risk-account-cell > .ant-btn-link { display: block; padding: 0; height: auto; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-weight: 600; color: #172b4d; }
 .risk-account-cell > .ant-btn-link:hover { color: #1677ff; }
 .risk-account-cell > code, .risk-cell-stack > small { color: #52637c; font-size: inherit; }
@@ -46,6 +50,7 @@
 .risk-panel .ant-table-cell { vertical-align: top; }
 .risk-account-table .ant-table-thead > tr > th { font-weight: 500; color: #52637c; background: #f7f8fa; }
 .risk-account-table table { table-layout: fixed; }
+.risk-detail-shell { display: flex; flex-direction: column; gap: 16px; }
 
 .risk-panel .ant-table-tbody > .risk-row-high > td { background: #fffaf7; }
 .risk-panel .ant-table-tbody > .risk-row-high:hover > td { background: #fff4eb; }

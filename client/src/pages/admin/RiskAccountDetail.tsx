@@ -4,7 +4,7 @@ import { MusicResponseSummary } from './RiskMusicResponses';
 import { useState } from 'react';
 import RiskProfileOverview from './RiskProfileOverview';
 import { Alert, App, Button, Collapse, Descriptions, Empty, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Switch } from 'antd';
-import { count, hasDailyActivity, RiskHelpContext, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
+import { count, hasDailyActivity, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
 import RiskErrorBreakdown from './RiskErrorBreakdown';
 
 const SOCKET_EVENTS: Record<string, string> = {
@@ -96,7 +96,6 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   onDeleteAccount: (id: string, confirmation: string, reason: string) => Promise<void>;
 }) {
   const { modal, message } = App.useApp();
-  const [showHelp, setShowHelp] = useState(false);
   const [human, setHuman] = useState(detail.humanChallenge);
   const [humanSaving, setHumanSaving] = useState(false);
   const [humanForm] = Form.useForm<{ reason: string }>();
@@ -741,7 +740,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
   );
 
   return (
-    <RiskHelpContext.Provider value={showHelp}>
+    <div className="risk-detail-shell">
       <div className="risk-detail-heading">
         <div>
           <h2>{detail.displayName || '账户画像'}</h2>
@@ -758,7 +757,6 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           <Tag color={detail.humanChallenge?.bypass ? 'green' : detail.humanChallenge?.pending ? 'orange' : detail.lastHumanVerifiedAt ? 'blue' : 'default'}>
             {human?.bypass ? '验证码已放行' : human?.pending ? '验证码待通过' : detail.lastHumanVerifiedAt ? '有验证通过记录' : '无验证记录'}
           </Tag>
-          <Button type="text" aria-pressed={showHelp} onClick={() => setShowHelp(value => !value)}>{showHelp ? '隐藏说明' : '显示说明'}</Button>
         </Space>
       </div>
       {detail.dailyEstimated && <Alert type="warning" showIcon title="升级日统计为保守估算" description="为防止升级后额度被重复使用，首次切换日合并相交的旧 UTC 日计数，可能高于真实当日值，下一北京时间自然日恢复新口径" />}
@@ -779,6 +777,6 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
           { key: 'decision', label: '复核处置', children: decisionTab },
         ]}
       />
-    </RiskHelpContext.Provider>
+    </div>
   );
 }

@@ -1,5 +1,6 @@
 import { getAvailableSources, getSongUrlInfo, getTrackKey, searchSongs, unwrapQishuiAudioUrl } from '../api/music';
 import { prefetchQishuiLocalPlayback } from './qishuiLocalPlayback';
+import { shouldPrefetchCurrentSong } from './playbackPrefetchPolicy';
 import { isHttpsPageContext, isProxiedMediaUrl, shouldProxyPlaybackUrl, toProxiedMediaUrl } from './mediaProxyUrl';
 import { isIOS } from './audioUnlock';
 import { shouldProxySongPlaybackUrl } from './roomVisualPreset';
@@ -877,12 +878,12 @@ type UrlPrefetchSong = Pick<QueueItem, 'queueId' | 'id' | 'source' | 'url'>;
 
 /** 预取即将播放的曲目：队列下一首，或私人漫游 nextRandom */
 export function prefetchUpcomingFromRoom(
-  room: Pick<RoomState, 'current' | 'queue' | 'nextRandom'> | null | undefined,
+  room: Pick<RoomState, 'current' | 'queue' | 'nextRandom' | 'isPlaying'> | null | undefined,
   options: { count?: number; includeCurrent?: boolean } = {},
 ) {
   if (!room) return;
   // 切换音质时勿重拉当前曲：否则会按新音质取链并覆盖「实际音质」标签，尽管仍在播旧档
-  if (options.includeCurrent !== false && room.current) {
+  if (options.includeCurrent !== false && room.current && shouldPrefetchCurrentSong(room)) {
     prefetchCurrentSong(room.current);
   }
   prefetchQueueSongs(room.queue ?? [], {

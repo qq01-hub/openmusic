@@ -773,7 +773,7 @@ export function useSocket() {
       prefetchDebounceTimer = window.setTimeout(() => {
         const live = useRoomStore.getState().room;
         if (!live || live.id !== room.id) return;
-        prefetchUpcomingFromRoom(live);
+        prefetchUpcomingFromRoom(live, { includeCurrent: live.isPlaying });
       }, 400);
     };
 
