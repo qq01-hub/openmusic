@@ -19,15 +19,19 @@ export function musicRequestContext(path, query = {}) {
   let operation = path === '/api/meting' ? query.type : '';
   let source = sourceName(query.server);
   if (path === '/api/music/kugou/search' || path === '/api/music/kugou/song') { operation = path.endsWith('/song') ? 'song' : 'search'; source = 'kugou'; }
-  if (path === '/api/music/hot') operation = 'fm';
+  if (path === '/api/music/hot') return null;
+  if (path === '/api/music/toplist/netease') return null;
   if (path === '/api/music/suggestions') operation = 'search';
-  if (path === '/api/music/toplist/netease') { operation = 'fm'; source = 'netease'; }
   if (path === '/api/music/netease/playlists/search') { operation = 'search_playlist'; source = 'netease'; }
   if (path === '/api/music/playlist/import') operation = 'playlist';
   if (path === '/api/qishui-source') { operation = 'source'; source = 'qishui'; }
   if (path === '/api/media-proxy') operation = 'media';
   if (!OPERATIONS.has(operation)) return null;
   return { operation, source, requestedSongId: ['song', 'url', 'lrc'].includes(operation) ? songId(query.id) : '' };
+}
+
+export function shouldRecordMusicResponse(context) {
+  return Boolean(context && ['url', 'lrc', 'song', 'source', 'media'].includes(context.operation));
 }
 
 export function summarizeMusicResponse(context, body, { status = 0, durationMs = 0, substituted = false, aborted = false } = {}) {

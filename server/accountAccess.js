@@ -1,6 +1,6 @@
 import { riskRequestOperation } from './riskErrors.js';
 import { DeviceProofError } from './deviceProof.js';
-import { musicRequestContext, summarizeMusicResponse } from './riskMusicResponse.js';
+import { musicRequestContext, shouldRecordMusicResponse, summarizeMusicResponse } from './riskMusicResponse.js';
 
 const PUBLIC_GET = new Set([
   '/api/health', '/api/app-version', '/api/site-seo', '/api/auth/session', '/api/auth/providers',
@@ -92,13 +92,16 @@ export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity,
         req.apiIdentity = identity;
         return withContext({ accountId: account.id, userId: identity.userId, clientIp: ip }, () => next());
       }
-      const kind = (publicCover || mediaProxyCover) ? 'image' : /^\/api\/(?:meting|music(?:\/|$)|media-proxy|qishui-source)/u.test(path) ? 'music' : 'api';
-      const musicContext = kind === 'music' ? musicRequestContext(path, req.query) : null;
+      const displayMusicPath = path === '/api/music/hot' || path === '/api/music/toplist/netease';
+      const musicContext = displayMusicPath ? null : musicRequestContext(path, req.query);
+      const unrecognizedMetingRequest = path === '/api/meting' && !musicContext;
+      const linkMusicRequest = shouldRecordMusicResponse(musicContext) || unrecognizedMetingRequest;
+      const kind = (publicCover || mediaProxyCover) ? 'image' : linkMusicRequest ? 'music' : 'api';
       // 未识别的 Meting 操作也计入取链预算，防止上游接受别名、缺省值或重复参数后绕过额度
       const operation = musicContext?.operation || (path === '/api/meting' ? 'url' : req.query?.type);
       const result = await risk.consume(account, { ip, kind, operation, userAgent: req.headers?.['user-agent'] || '', network: getNetworkContext(req) });
       if (publicCover && result.code !== 'ACCOUNT_HUMAN_CHECK_REQUIRED') return next();
-      if (musicContext) {
+      if (shouldRecordMusicResponse(musicContext)) {
         let summary;
         let recorded = false;
         const summarize = body => summarizeMusicResponse(musicContext, body, { status: res.statusCode, substituted: Boolean(req.riskMetingFallback) });
