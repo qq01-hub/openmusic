@@ -390,11 +390,9 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
   useEffect(() => { onReady?.(); }, [onReady]);
   const sharedMembershipEnabled = useSiteFeaturesStore((state) => state.sharedMembershipEnabled);
   const qqGroupUrl = useSiteFeaturesStore((state) => state.qqGroupUrl);
-  const musicSourcesEnabled = useSiteFeaturesStore((state) => state.musicSourcesEnabled);
   const contributionPlatforms = useMemo<MusicAccountPlatform[]>(
-    () => (['netease', 'tencent', 'kugou', 'qishui'] as MusicAccountPlatform[])
-      .filter((platform) => musicSourcesEnabled[platform]),
-    [musicSourcesEnabled],
+    () => ['netease', 'tencent', 'kugou', 'qishui'],
+    [],
   );
   const contributionEnabled = sharedMembershipEnabled && contributionPlatforms.length > 0;
   const navigate = useNavigate();
