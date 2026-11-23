@@ -8,7 +8,6 @@ import {
 } from '../lib/playlistImportHistory';
 import Tooltip from './Tooltip';
 import {
-  immersiveGlassScrim,
   immersiveGlassModal,
   immersiveGlassInset,
   immersiveGlassInput,
@@ -76,10 +75,9 @@ export default function PlaylistImportModal({
 
   if (!open) return null;
 
-  const scrimClass = immersive ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm';
   const panelClass = immersive
     ? `${immersiveGlassModal} w-full max-w-md rounded-[22px] p-5 sm:p-6`
-    : 'glass w-full max-w-md rounded-2xl border border-white/10 shadow-2xl p-5 sm:p-6';
+    : 'w-full max-w-md rounded-2xl border border-white/10 shadow-2xl p-5 sm:p-6';
   const platformBtnClass = immersive
     ? `w-full rounded-xl px-4 py-3 text-sm text-white text-left transition-colors ${immersiveGlassInset}`
     : 'w-full rounded-xl border border-white/10 bg-netease-card/80 px-4 py-3 text-sm text-white text-left hover:border-netease-red/40 hover:bg-white/5 transition-colors';
@@ -111,11 +109,11 @@ export default function PlaylistImportModal({
       <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
         <button
           type="button"
-          className={`absolute inset-0 ${scrimClass}`}
+          className="absolute inset-0 room-feature-scrim"
           onClick={onClose}
           aria-label="关闭"
         />
-        <div className={`relative animate-fade-in ${panelClass}`}>
+        <div className={`room-feature-dialog relative animate-fade-in ${panelClass}`}>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base sm:text-lg font-semibold text-white">导入歌单</h2>
             <button
@@ -193,11 +191,11 @@ export default function PlaylistImportModal({
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <button
         type="button"
-        className={`absolute inset-0 ${scrimClass}`}
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
-      <div className={`relative animate-fade-in ${panelClass}`}>
+      <div className={`room-feature-dialog relative animate-fade-in ${panelClass}`}>
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2 min-w-0">
             <button

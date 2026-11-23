@@ -1967,7 +1967,7 @@ html.control-glass-svg-ok .mineradio-glass-chip {
 }
 
 /* 弹框与沉浸面板只在外层采样背景，避免滚动内容逐行重复执行模糊和 SVG 位移滤镜 */
-html :is(.room-modal-panel, .mineradio-glass-panel, .mineradio-glass-search-results) :is(
+html :is(.room-modal-panel, .room-feature-dialog, .mineradio-glass-panel, .mineradio-glass-search-results) :is(
   .mineradio-glass-list-row,
   .mineradio-glass-chip,
   .mineradio-glass-inset,
@@ -2012,6 +2012,31 @@ html :is(.room-modal-panel, .mineradio-glass-panel, .mineradio-glass-search-resu
   background: linear-gradient(160deg, rgba(22, 26, 34, 0.95), rgba(10, 12, 18, 0.97)) !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
+}
+
+.room-feature-scrim {
+  background: rgb(8 9 12 / 0.46);
+}
+
+.room-feature-dialog,
+.room-modal-panel.room-feature-dialog,
+.mineradio-glass-panel.room-feature-dialog {
+  background: #232631 !important;
+}
+
+/* 房间功能弹框只在面板范围内模糊，遮罩和滚动列表不重复采样 */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .room-feature-dialog,
+  .room-modal-panel.room-feature-dialog,
+  .mineradio-glass-panel.room-feature-dialog {
+    background: rgb(28 31 41 / 0.82) !important;
+    backdrop-filter: blur(14px) saturate(1.12) !important;
+    -webkit-backdrop-filter: blur(14px) saturate(1.12) !important;
+  }
+
+  .mineradio-glass-panel.room-feature-dialog {
+    background: rgb(28 31 41 / 0.91) !important;
+  }
 }
 
 .room-modal-scroll {

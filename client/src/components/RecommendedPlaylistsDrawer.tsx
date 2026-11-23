@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { X, Sparkles } from 'lucide-react';
 import type { PlaylistSearchItem } from '../api/music/playlist';
 import RecommendedPlaylistsPanel from './RecommendedPlaylistsPanel';
-import { immersiveGlassModal, immersiveGlassScrim, immersiveGlassSheetHeader } from '../lib/immersiveGlass';
+import { immersiveGlassModal, immersiveGlassSheetHeader } from '../lib/immersiveGlass';
 
 interface Props {
   open: boolean;
@@ -32,15 +32,15 @@ export default function RecommendedPlaylistsDrawer({ open, immersive = false, on
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <button
         type="button"
-        className={`absolute inset-0 ${immersive ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭热榜歌单"
       />
       <div
-        className={`room-modal-panel relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
+        className={`room-modal-panel room-feature-dialog relative z-10 flex min-h-0 max-h-[min(80vh,720px)] w-full max-w-2xl flex-col overflow-hidden shadow-2xl animate-fade-in ${
           immersive
             ? immersiveGlassModal
-            : 'rounded-2xl border border-white/10 glass'
+            : 'rounded-2xl border border-white/10'
         }`}
         onClick={(e) => e.stopPropagation()}
       >

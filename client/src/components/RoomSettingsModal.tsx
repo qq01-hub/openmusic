@@ -731,12 +731,12 @@ export default function RoomSettingsModal({
     <div className="pointer-events-auto fixed inset-0 z-[80] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
       <div
-        className="room-modal-panel relative flex h-[min(88vh,640px)] w-full max-w-lg animate-fade-in flex-col rounded-2xl border border-white/10 bg-netease-dark shadow-2xl"
+        className="room-modal-panel room-feature-dialog relative flex h-[min(88vh,640px)] w-full max-w-lg animate-fade-in flex-col rounded-2xl border border-white/10 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-shrink-0 items-center justify-between border-b border-white/10 px-5 py-4">

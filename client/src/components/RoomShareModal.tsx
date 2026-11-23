@@ -42,8 +42,8 @@ export default function RoomShareModal({ open, shareUrl, shareText, onClose, onC
 
   return createPortal(
     <div className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-[max(1rem,env(safe-area-inset-top))] pb-[max(1rem,env(safe-area-inset-bottom))]">
-      <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={onClose} aria-label="关闭分享弹窗" />
-      <section className="relative flex max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] w-full max-w-sm flex-col overflow-hidden rounded-2xl border border-white/10 bg-netease-dark p-4 shadow-2xl sm:p-5" role="dialog" aria-modal="true" aria-label="分享房间">
+      <button type="button" className="absolute inset-0 room-feature-scrim" onClick={onClose} aria-label="关闭分享弹窗" />
+      <section className="room-feature-dialog relative flex max-h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom)-2rem)] w-full max-w-sm flex-col overflow-hidden rounded-2xl border border-white/10 p-4 shadow-2xl sm:p-5" role="dialog" aria-modal="true" aria-label="分享房间">
         <div className="mb-3 flex flex-shrink-0 items-center justify-between sm:mb-4">
           <div><h2 className="text-base font-semibold text-white">分享房间</h2><p className="mt-1 text-xs text-netease-muted">扫码或复制邀请文案，邀请好友一起听</p></div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-white/50 hover:bg-white/10 hover:text-white" aria-label="关闭"><X className="h-5 w-5" /></button>

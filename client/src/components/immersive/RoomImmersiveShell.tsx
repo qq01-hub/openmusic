@@ -545,7 +545,7 @@ export default function RoomImmersiveShell({
         onPointerLeave={handlePanelLeave}
       >
         <div
-          className={`mineradio-glass-panel flex flex-col overflow-hidden rounded-[24px] p-3 ${
+          className={`mineradio-glass-panel room-feature-dialog flex flex-col overflow-hidden rounded-[24px] p-3 ${
             showSearchResults ? 'h-[min(78vh,720px)]' : 'max-h-[min(78vh,720px)]'
           }`}
         >

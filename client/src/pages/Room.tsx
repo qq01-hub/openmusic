@@ -121,7 +121,6 @@ import {
   immersiveGlassChip,
   immersiveGlassListRow,
   immersiveGlassModal,
-  immersiveGlassScrim,
   immersiveGlassSheetHeader,
   immersiveGlassListFooter,
 } from '../lib/immersiveGlass';
@@ -4232,12 +4231,12 @@ export default function Room() {
         <div className="fixed inset-0 z-50 flex items-end justify-center lg:items-start px-0 lg:px-4 pt-0 lg:pt-24 pb-0 lg:pb-8">
           <button
             type="button"
-            className="absolute inset-0 z-0 bg-[#08090c] backdrop-blur-sm"
+            className="absolute inset-0 z-0 room-feature-scrim"
             onClick={clearSearchResults}
             aria-label="关闭搜索结果"
           />
           <div
-            className="room-modal-panel relative z-10 w-full max-w-2xl max-h-[min(85vh,680px)] lg:max-h-[min(72vh,680px)] flex flex-col glass rounded-t-2xl lg:rounded-2xl border border-white/10 border-b-0 lg:border-b shadow-2xl animate-fade-in overflow-hidden pointer-events-auto pb-[env(safe-area-inset-bottom,0px)]"
+            className="room-modal-panel room-feature-dialog relative z-10 w-full max-w-2xl max-h-[min(85vh,680px)] lg:max-h-[min(72vh,680px)] flex flex-col rounded-t-2xl lg:rounded-2xl border border-white/10 border-b-0 lg:border-b shadow-2xl animate-fade-in overflow-hidden pointer-events-auto pb-[env(safe-area-inset-bottom,0px)]"
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
           >
@@ -4343,13 +4342,13 @@ export default function Room() {
           <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-24 pb-8">
             <button
               type="button"
-              className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
+              className="absolute inset-0 room-feature-scrim"
               onClick={() => setSongHistoryOpen(false)}
               aria-label="关闭播放历史"
             />
             <div
-              className={`room-modal-panel relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
-                immersiveMode ? immersiveGlassModal : 'rounded-2xl border border-white/10 glass'
+              className={`room-modal-panel room-feature-dialog relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
+                immersiveMode ? immersiveGlassModal : 'border border-white/10'
               }`}
             >
               <div
@@ -4437,8 +4436,8 @@ export default function Room() {
 
       {favoriteShareOpen && createPortal(
         <div className="fixed inset-0 z-[100] flex items-start justify-center px-4 pt-24 pb-8">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setFavoriteShareOpen(false)} aria-label="关闭收藏分享" />
-          <div className="relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-netease-bg shadow-2xl">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setFavoriteShareOpen(false)} aria-label="关闭收藏分享" />
+          <div className="room-feature-dialog relative z-10 flex max-h-[min(72vh,680px)] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 shadow-2xl">
             <div className="flex items-center justify-between border-b border-netease-border/50 px-4 py-3"><div><h2 className="text-sm font-medium">收藏分享</h2><p className="mt-0.5 text-xs text-netease-muted">分享出去或导入他人的收藏</p></div><button type="button" onClick={() => setFavoriteShareOpen(false)}><X className="h-5 w-5 text-netease-muted" /></button></div>
             <div className="flex border-b border-netease-border/50"><button type="button" onClick={() => { setFavoriteShareMode('create'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'create' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>我的分享码</button><button type="button" onClick={() => { setFavoriteShareMode('import'); setFavoriteShareSongs([]); }} className={`flex-1 px-4 py-2.5 text-sm ${favoriteShareMode === 'import' ? 'border-b-2 border-netease-red text-white' : 'text-netease-muted'}`}>输入分享码</button></div>
             {favoriteShareMode === 'create' ? (
@@ -4455,13 +4454,13 @@ export default function Room() {
           <div className="fixed inset-0 z-[90] flex items-start justify-center px-4 pt-16 pb-6 sm:pt-24 sm:pb-8">
           <button
             type="button"
-            className={`absolute inset-0 ${immersiveMode ? immersiveGlassScrim : 'bg-[#08090c] backdrop-blur-sm'}`}
+            className="absolute inset-0 room-feature-scrim"
             onClick={() => setFavoritesOpen(false)}
             aria-label="关闭收藏"
           />
           <div
-            className={`room-modal-panel relative z-10 flex max-h-[min(80vh,680px)] sm:max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
-              immersiveMode ? immersiveGlassModal : 'rounded-2xl border border-white/10 glass'
+            className={`room-modal-panel room-feature-dialog relative z-10 flex max-h-[min(80vh,680px)] sm:max-h-[min(72vh,680px)] w-full max-w-2xl flex-col overflow-hidden rounded-[22px] shadow-2xl ${
+              immersiveMode ? immersiveGlassModal : 'border border-white/10'
             }`}
           >
             <div
@@ -4631,7 +4630,7 @@ export default function Room() {
             {!favoritesLoading && filteredFavorites.length > 0 && (
               <div
                 className={`flex-shrink-0 space-y-2 px-4 py-3 ${
-                  immersiveMode ? immersiveGlassListFooter : 'border-t border-netease-border/40 bg-netease-bg/90'
+                  immersiveMode ? immersiveGlassListFooter : 'border-t border-netease-border/40'
                 }`}
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -4732,8 +4731,8 @@ export default function Room() {
 
       {renameOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setRenameOpen(false)} aria-label="关闭" />
-          <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setRenameOpen(false)} aria-label="关闭" />
+          <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">修改房间名</h2>
               <button type="button" onClick={() => setRenameOpen(false)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10"><X className="w-5 h-5" /></button>
@@ -4762,9 +4761,9 @@ export default function Room() {
       )}
 
       {favoriteDuplicatePickerOpen && createPortal(
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/90 p-4">
-          <button type="button" className="absolute inset-0 bg-black/90" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭重复筛选" />
-          <div role="dialog" aria-modal="true" aria-labelledby="favorite-duplicate-title" className="relative z-10 w-full max-w-sm rounded-2xl border border-white/15 bg-[#17191f] p-5 text-white shadow-2xl">
+        <div className="fixed inset-0 z-[300] flex items-center justify-center p-4">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭重复筛选" />
+          <div role="dialog" aria-modal="true" aria-labelledby="favorite-duplicate-title" className="room-feature-dialog relative z-10 w-full max-w-sm rounded-2xl border border-white/15 p-5 text-white shadow-2xl">
             <div className="mb-2 flex items-center justify-between">
               <h2 id="favorite-duplicate-title" className="text-sm font-medium text-white">跨平台重复歌曲筛选</h2>
               <button type="button" onClick={() => setFavoriteDuplicatePickerOpen(false)} aria-label="关闭"><X className="h-5 w-5 text-netease-muted" /></button>
@@ -4796,8 +4795,8 @@ export default function Room() {
 
       {deleteFavoriteCategoryTarget && createPortal(
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} aria-label="关闭删除分类" />
-          <div role="dialog" aria-modal="true" aria-labelledby="delete-favorite-category-title" className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+          <button type="button" className="absolute inset-0 room-feature-scrim" disabled={Boolean(deletingFavoriteCategory)} onClick={() => setDeleteFavoriteCategoryTarget(null)} aria-label="关闭删除分类" />
+          <div role="dialog" aria-modal="true" aria-labelledby="delete-favorite-category-title" className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 p-5 shadow-2xl">
             <h2 id="delete-favorite-category-title" className="text-sm font-medium text-white">删除分类「{deleteFavoriteCategoryTarget}」</h2>
             <p className="mt-2 text-xs leading-5 text-netease-muted">请选择如何处理分类中的歌曲，同时取消收藏后无法撤销</p>
             <div className="mt-4 space-y-2">
@@ -4829,7 +4828,7 @@ export default function Room() {
         <div className="fixed inset-0 z-[110] flex items-center justify-center px-4">
           <button
             type="button"
-            className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+            className="absolute inset-0 room-feature-scrim"
             disabled={renamingFavoriteCategory}
             onClick={() => {
               setRenameFavoriteCategoryTarget(null);
@@ -4837,7 +4836,7 @@ export default function Room() {
             }}
             aria-label="关闭修改分类名称"
           />
-          <div role="dialog" aria-modal="true" aria-labelledby="rename-favorite-category-title" className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+          <div role="dialog" aria-modal="true" aria-labelledby="rename-favorite-category-title" className="room-feature-dialog relative z-10 w-full max-w-sm rounded-2xl border border-white/10 p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 id="rename-favorite-category-title" className="text-sm font-medium text-white">修改分类名称</h2>
               <button
@@ -4901,8 +4900,8 @@ export default function Room() {
 
       {newFavoriteCategoryOpen && createPortal(
         <div className="fixed inset-0 z-[110] flex items-center justify-center px-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭新建分类" />
-          <div className="relative z-10 w-full max-w-sm rounded-2xl border border-white/10 bg-netease-bg p-5 shadow-2xl">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭新建分类" />
+          <div className="room-feature-dialog relative z-10 w-full max-w-sm rounded-2xl border border-white/10 p-5 shadow-2xl">
             <div className="mb-4 flex items-center justify-between"><h2 className="text-sm font-medium text-white">新建收藏分类</h2><button type="button" onClick={() => setNewFavoriteCategoryOpen(false)} aria-label="关闭"><X className="h-5 w-5 text-netease-muted" /></button></div>
             <input autoFocus value={newFavoriteCategoryName} onChange={(event) => setNewFavoriteCategoryName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void handleCreateFavoriteCategory(); }} maxLength={30} placeholder="输入分类名称" className="w-full rounded-xl border border-netease-border bg-netease-dark px-3 py-2.5 text-sm text-white placeholder:text-netease-muted/50 focus:border-netease-red/50 focus:outline-none" />
             <div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setNewFavoriteCategoryOpen(false)} className="rounded-lg px-3 py-2 text-sm text-netease-muted hover:bg-white/10">取消</button><button type="button" onClick={() => void handleCreateFavoriteCategory()} disabled={!newFavoriteCategoryName.trim() || creatingFavoriteCategory} className="rounded-lg bg-netease-red px-3 py-2 text-sm text-white disabled:opacity-50">{creatingFavoriteCategory ? '创建中...' : '创建'}</button></div>
@@ -4913,8 +4912,8 @@ export default function Room() {
 
       {coverOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setCoverOpen(false)} aria-label="关闭" />
-          <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setCoverOpen(false)} aria-label="关闭" />
+          <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">房间封面</h2>
               <button type="button" onClick={() => setCoverOpen(false)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10"><X className="w-5 h-5" /></button>
@@ -5005,8 +5004,8 @@ export default function Room() {
 
       {lockOpen && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setLockOpen(false)} aria-label="关闭" />
-          <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setLockOpen(false)} aria-label="关闭" />
+          <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-white">房间上锁</h2>
               <button type="button" onClick={() => setLockOpen(false)} className="p-1.5 rounded-lg text-white/40 hover:text-white hover:bg-white/10"><X className="w-5 h-5" /></button>

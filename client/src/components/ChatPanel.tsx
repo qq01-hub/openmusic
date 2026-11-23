@@ -294,11 +294,11 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
     <div className="absolute inset-0 z-30 flex items-center justify-center p-3">
       <button
         type="button"
-        className="absolute inset-0 bg-black/45"
+        className="absolute inset-0 room-feature-scrim"
         onClick={() => setShowMutePicker(false)}
         aria-label="关闭禁言管理"
       />
-      <div className="relative z-10 flex w-[min(320px,92%)] max-h-[min(72%,360px)] flex-col rounded-2xl border border-white/10 glass p-4 shadow-2xl animate-fade-in">
+      <div className="room-feature-dialog relative z-10 flex w-[min(320px,92%)] max-h-[min(72%,360px)] flex-col rounded-2xl border border-white/10 p-4 shadow-2xl animate-fade-in">
         <ChatMutePicker
           slice={chatRoomSlice}
           myUserId={myUserId}
@@ -315,11 +315,11 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
     <div className="fixed inset-0 z-[60]">
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={() => setShowMutePicker(false)}
         aria-label="关闭禁言管理"
       />
-      <div className="absolute inset-x-0 bottom-0 flex max-h-[min(75vh,480px)] flex-col rounded-t-2xl border-t border-white/10 glass p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] shadow-2xl animate-fade-in">
+      <div className="room-feature-dialog absolute inset-x-0 bottom-0 flex max-h-[min(75vh,480px)] flex-col rounded-t-2xl border-t border-white/10 p-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] shadow-2xl animate-fade-in">
         <ChatMutePicker
           slice={chatRoomSlice}
           myUserId={myUserId}

@@ -31,11 +31,11 @@ export default function ConfirmModal({
     <div className="pointer-events-auto fixed inset-0 z-[100] flex items-center justify-center p-4" {...modalEventBoundary}>
       <button
         type="button"
-        className="pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="pointer-events-auto absolute inset-0 room-feature-scrim"
         onClick={onCancel}
         aria-label="关闭"
       />
-      <div className="relative w-full max-w-sm glass rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
+      <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 shadow-2xl p-6 animate-fade-in">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">{title}</h2>
           <button

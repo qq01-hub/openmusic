@@ -248,12 +248,12 @@ export default function RoomMemberModal({
     <div className="fixed inset-0 z-[85] flex items-center justify-center p-3 sm:p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
       <div
-        className="relative flex h-[min(86vh,680px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-netease-border/60 bg-netease-dark shadow-2xl"
+        className="room-feature-dialog relative flex h-[min(86vh,680px)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-netease-border/60 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         <header className="flex flex-shrink-0 items-start justify-between gap-3 px-4 pt-3.5 pb-3 sm:px-5">

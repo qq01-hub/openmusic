@@ -107,7 +107,7 @@ function ChatOverlayPortal({
     >
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label={ariaLabel}
       />
@@ -119,7 +119,7 @@ function ChatOverlayPortal({
     <div className="absolute inset-0 z-[60] flex items-center justify-center p-3 pointer-events-auto">
       <button
         type="button"
-        className="absolute inset-0 bg-black/45"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label={ariaLabel}
       />
@@ -207,8 +207,8 @@ function ReactionDetailModal({
       onClose={onClose}
       ariaLabel="关闭点评详情"
       panelRef={panelRef}
-      desktopPanelClassName="relative z-10 flex w-[min(280px,92%)] max-h-[min(72%,320px)] flex-col rounded-2xl border border-netease-border/70 bg-netease-dark/98 p-3 shadow-2xl backdrop-blur"
-      mobilePanelClassName="relative z-10 flex w-[min(300px,calc(100%-2rem))] max-h-[min(70vh,360px)] flex-col rounded-2xl border border-netease-border/70 bg-netease-dark/98 p-3 shadow-2xl backdrop-blur"
+      desktopPanelClassName="relative z-10 flex w-[min(280px,92%)] max-h-[min(72%,320px)] flex-col rounded-2xl border border-netease-border/70 room-feature-dialog p-3 shadow-2xl"
+      mobilePanelClassName="relative z-10 flex w-[min(300px,calc(100%-2rem))] max-h-[min(70vh,360px)] flex-col rounded-2xl border border-netease-border/70 room-feature-dialog p-3 shadow-2xl"
     >
       <div className="mb-2 flex flex-shrink-0 items-center justify-between">
         <span className="text-sm text-white">{title}</span>
@@ -422,8 +422,8 @@ export function ChatReactionPicker({
       onClose={onClose}
       ariaLabel="关闭点评表情"
       panelRef={panelRef}
-      desktopPanelClassName="relative z-10 box-border flex w-[min(280px,calc(100%-1.5rem))] max-h-[min(72%,360px)] flex-col overflow-hidden rounded-2xl border border-netease-border/70 bg-netease-dark/98 p-2.5 shadow-2xl backdrop-blur"
-      mobilePanelClassName="relative z-10 box-border flex w-[min(300px,calc(100%-2rem))] max-h-[min(70vh,400px)] flex-col overflow-hidden rounded-2xl border border-netease-border/70 bg-netease-dark/98 p-2.5 shadow-2xl backdrop-blur"
+      desktopPanelClassName="relative z-10 box-border flex w-[min(280px,calc(100%-1.5rem))] max-h-[min(72%,360px)] flex-col overflow-hidden rounded-2xl border border-netease-border/70 room-feature-dialog p-2.5 shadow-2xl"
+      mobilePanelClassName="relative z-10 box-border flex w-[min(300px,calc(100%-2rem))] max-h-[min(70vh,400px)] flex-col overflow-hidden rounded-2xl border border-netease-border/70 room-feature-dialog p-2.5 shadow-2xl"
     >
       <div className="mb-1.5 flex flex-shrink-0 items-center justify-between px-0.5">
         <span className="text-[11px] text-netease-muted">点评表情</span>

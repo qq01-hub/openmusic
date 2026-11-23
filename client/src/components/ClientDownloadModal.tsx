@@ -14,11 +14,11 @@ export default function ClientDownloadModal({ open, onClose }: Props) {
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
-      <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-netease-dark shadow-2xl animate-fade-in overflow-hidden">
+      <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 shadow-2xl animate-fade-in overflow-hidden">
         <div className="flex items-center justify-between gap-3 border-b border-netease-border/50 px-4 py-3">
           <div className="flex items-center gap-2 min-w-0">
             <Smartphone className="h-4 w-4 flex-shrink-0 text-netease-muted" />
