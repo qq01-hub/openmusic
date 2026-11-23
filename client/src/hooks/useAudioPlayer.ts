@@ -82,7 +82,7 @@ import {
 import { waitForAudioCanPlay, waitForAudioMinimumReady } from '../lib/audioReady';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
 import { resetDriftController } from '../lib/driftController';
-import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying, resolveInitialTrackSyncTime } from '../lib/playbackState';
+import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying } from '../lib/playbackState';
 import { attachAudioBufferingListeners, isAudioBuffering, setAudioBufferEndHandler } from '../lib/audioBuffering';
 import { flushPendingPlaybackSnapshot } from '../lib/playbackSchedule';
 import { stopSongPreview } from '../lib/songPreviewPlayer';
@@ -1544,9 +1544,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             justSkippedRef.current = false;
             tryFlushPendingSnapshot();
             if (wasNewTrack) {
-              const initialTarget = resolveInitialTrackSyncTime(queueId, live.currentTime);
-              // 切歌新曲已在 0s 完成缓冲，曲首阶段直接从 0 起播，避免因取链耗时向后硬跳冲掉已缓冲数据
-              applySync({ forceTime: initialTarget < 6 ? 0 : initialTarget });
+              applySync({ forceZero: true });
             } else {
               const pb = getClientPlaybackState();
               const targetTime = pb
@@ -1716,9 +1714,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     justSkippedRef.current = false;
     if (!wasNewTrack && shouldSkipForEndedTrackKey(liveRoom.current, controller.audio)) return;
 
-    applySync(wasNewTrack
-      ? { forceTime: resolveInitialTrackSyncTime(liveRoom.current.queueId, liveRoom.currentTime) }
-      : { forceCorrection: true });
+    applySync(wasNewTrack ? { forceZero: true } : { forceCorrection: true });
   }, [playbackVersion, trackLoading, applySync, shouldSkipForEndedTrackKey, controller]);
 
   // 离散同步：NORMAL 不追赶，FINAL（≤3s）一次性对齐；6s 仅检查是否进入 FINAL
