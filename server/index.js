@@ -150,6 +150,7 @@ import {
   addRoomForbiddenWord,
   removeRoomForbiddenWord,
   setChatMute,
+  clearChatHistory,
   addToQueue,
   removeFromQueue,
   clearQueue,
@@ -213,6 +214,7 @@ import {
   ackPermanentDecisionNotice,
 } from './permanentApplication.js';
 import { importNeteasePlaylist, importQqPlaylist, importKugouPlaylist, importQishuiPlaylist, fetchNeteasePlaylistMetas } from './playlistImport.js';
+import { resolveSongShareLink } from './songShareLink.js';
 import { fetchNeteaseHotToplist } from './neteaseToplist.js';
 import { createNeteasePlaylistSearchHandler } from './neteasePlaylistSearch.js';
 import { getHotSongs } from './songHotRank.js';
@@ -2071,6 +2073,17 @@ async function handleKugouSearch(req, res) {
 
 app.get('/api/music/kugou/search', handleKugouSearch);
 
+app.post('/api/music/song-link', async (req, res) => {
+  if (!requireSessionIdentity(req, res)) return;
+  if (!limitProxyRequest(proxyLimitKey('song-link', req))) {
+    return res.status(429).json({ error: '请求过于频繁，请稍后再试', code: 'SONG_LINK_RATE_LIMITED' });
+  }
+  const enabled = getRuntimeConfig().musicSourcesEnabled;
+  const result = await resolveSongShareLink(req.body?.url, (source) => isMusicSourceEnabled(source, enabled));
+  if (result.error) return res.status(result.status).json({ error: result.error, code: result.code });
+  return res.json(result);
+});
+
 /** 导入外部歌单（分享链接） */
 app.post('/api/music/playlist/import', async (req, res) => {
   if (!requireSessionIdentity(req, res)) return;
@@ -2754,7 +2767,7 @@ app.post('/api/auth/device-login', (req, res) => {
     const signature = createHmac('sha256', CLIENT_ID_SECRET).update(`login-device:${payload}`).digest('base64url');
     appendSetCookieHeaders(res, [`openmusic_login_device=${payload}.${signature}; Path=/api/auth; Max-Age=600; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || req.secure) ? '; Secure' : ''}`]);
     return res.json({ ok: true });
-  } catch (error) { return res.status(error.status || 400).json({ code: error.code || 'ACCOUNT_DEVICE_PROOF_REQUIRED', error: '设备验证失败，请重新登录' }); }
+  } catch (error) { return sendAccountAuthError(res, error); }
 });
 
 app.post('/api/auth/device-migrate', async (req, res) => {
@@ -3226,6 +3239,7 @@ app.get('/api/auth/providers', (_req, res) => {
     github: isGithubConfigured(),
     // 账户微信登录复用文件传输助手扫码；会话证明由服务端签发。
     wechat: WECHAT_ACCOUNT_AUTH_ENABLED,
+    serverTime: Date.now(),
   });
 });
 
@@ -7213,6 +7227,27 @@ io.on('connection', (socket) => {
       reactions: result.reactions,
     });
     callback?.({ success: true, messageId: result.messageId, reactions: result.reactions });
+  });
+
+  socket.on('clear_chat_history', (payload, callback) => {
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间', code: 'CHAT_CLEAR_ROOM_REQUIRED' });
+      return;
+    }
+
+    const { scope } = socketPayload(payload);
+    const userId = getSocketUserId(socket);
+    const result = clearChatHistory(roomId, userId, scope, socket.id);
+    if (result.error) {
+      callback?.({ success: false, ...result });
+      return;
+    }
+
+    const event = { roomId, clearedAt: result.clearedAt };
+    const target = scope === 'room' ? roomId : [...getRoomInternal(roomId).users.get(userId).connectionIds];
+    io.to(target).emit('chat_history_cleared', event);
+    callback?.({ success: true, ...event });
   });
 
   socket.on('load_chat_history', ({ before, beforeId, limit }, callback) => {

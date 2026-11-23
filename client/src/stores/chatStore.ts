@@ -87,6 +87,8 @@ interface ChatStore {
   startAiProcessing: (task: AiProcessingTask) => void;
   endAiProcessing: (requestId: string) => void;
   chatVisibleSince: number | null;
+  chatClearedAt: number;
+  clearHistory: (roomId: string, clearedAt: number) => void;
   hasMoreOlder: boolean;
   loadingOlder: boolean;
   reset: (
@@ -94,6 +96,7 @@ interface ChatStore {
     messages: ChatMessage[],
     hasMoreOlder: boolean,
     chatVisibleSince?: number | null,
+    chatClearedAt?: number,
   ) => void;
   append: (message: ChatMessage) => void;
   prependOlder: (messages: ChatMessage[], hasMoreOlder: boolean) => void;
@@ -110,6 +113,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
   aiProcessing: [],
   chatVisibleSince: null,
+  chatClearedAt: 0,
   hasMoreOlder: false,
   loadingOlder: false,
 
@@ -130,7 +134,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }));
   },
 
-  reset: (roomId, messages, hasMoreOlder, chatVisibleSince = null) => {
+  reset: (roomId, messages, hasMoreOlder, chatVisibleSince = null, chatClearedAt = 0) => {
     const sorted = [...messages].sort((a, b) => a.timestamp - b.timestamp);
     const deduped: ChatMessage[] = [];
     for (const message of sorted) {
@@ -150,15 +154,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       aiProcessing: [],
       hasMoreOlder,
       chatVisibleSince,
+      chatClearedAt,
       loadingOlder: false,
     });
   },
+
+  clearHistory: (roomId, clearedAt) => set((state) => {
+    if (state.roomId !== roomId || clearedAt <= state.chatClearedAt) return state;
+    return {
+      messages: state.messages.filter((message) => message.timestamp >= clearedAt),
+      aiProcessing: [],
+      chatClearedAt: clearedAt,
+      hasMoreOlder: false,
+      loadingOlder: false,
+    };
+  }),
 
   append: (message) => {
     const safe = sanitizeIncomingChatMessage(message);
     if (safe.kind === 'system') return;
     const state = get();
-    if (state.chatVisibleSince != null && safe.timestamp < state.chatVisibleSince) return;
+    if (safe.timestamp < Math.max(state.chatVisibleSince ?? 0, state.chatClearedAt)) return;
     const existingIndex = state.messages.findIndex((m) => m.id === safe.id);
     if (existingIndex >= 0) {
       const existing = state.messages[existingIndex];
@@ -199,7 +215,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
   prependOlder: (messages, hasMoreOlder) => {
     set((state) => ({
-      messages: prependMessages(state.messages, messages),
+      messages: prependMessages(state.messages, messages.filter((message) => message.timestamp >= state.chatClearedAt)),
       hasMoreOlder,
       loadingOlder: false,
     }));
@@ -238,6 +254,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     messages: [],
     aiProcessing: [],
     chatVisibleSince: null,
+    chatClearedAt: 0,
     hasMoreOlder: false,
     loadingOlder: false,
   }),

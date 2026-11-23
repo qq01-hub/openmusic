@@ -4,6 +4,7 @@ import { History, Loader2, Search } from 'lucide-react';
 import { getMusicSuggestionSourceLabel } from '../lib/suggestionLabels';
 import { buildSuggestionSearchText, preserveSearchFocusOnSuggestionPointerDown } from '../lib/suggestionInteraction';
 import { shouldRequestMusicSuggestions } from '../lib/suggestionFocus';
+import { detectSongLink } from '../lib/songLink';
 
 interface MusicSuggestion {
   name: string;
@@ -47,7 +48,7 @@ function SearchInputWithSuggestions({
   const [inputFocused, setInputFocused] = useState(false);
   const { suggestions, loading } = useMusicSuggestions(
     value,
-    shouldRequestMusicSuggestions({ enabled: suggestionsEnabled, focused: inputFocused, searching }),
+    shouldRequestMusicSuggestions({ enabled: suggestionsEnabled && !detectSongLink(value), focused: inputFocused, searching }),
   );
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
@@ -182,6 +183,16 @@ function SearchInputWithSuggestions({
           onChange(e.target.value);
         }}
         onKeyDown={handleKeyDown}
+        onPaste={(event) => {
+          const link = detectSongLink(event.clipboardData.getData('text'));
+          if (!link) return;
+          event.preventDefault();
+          setShowSuggestions(false);
+          setShowHistory(false);
+          setSelectedIndex(-1);
+          onChange(link);
+          onSearch(link);
+        }}
         onFocus={() => {
           setInputFocused(true);
           setSelectedIndex(-1);

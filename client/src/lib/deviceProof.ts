@@ -87,10 +87,29 @@ async function currentSession(): Promise<string> {
   return contextPromise;
 }
 
-export async function createDeviceProof(method: string, path: string, body = '', login = false): Promise<string> {
+async function getLoginProofTime(signal?: AbortSignal): Promise<number> {
+  const startedAt = performance.now();
+  try {
+    const response = await fetch('/api/auth/providers', {
+      cache: 'no-store',
+      signal: AbortSignal.any([AbortSignal.timeout(3000), ...(signal ? [signal] : [])]),
+    });
+    if (response.ok) {
+      const { serverTime } = await response.json();
+      if (Number.isSafeInteger(serverTime) && serverTime > 0) {
+        return serverTime + Math.round((performance.now() - startedAt) / 2);
+      }
+    }
+  } catch {
+    signal?.throwIfAborted();
+  }
+  return Date.now() + clockOffset;
+}
+
+export async function createDeviceProof(method: string, path: string, body = '', login = false, signal?: AbortSignal): Promise<string> {
   const keys = await deviceKeys();
   const sid = login ? 'login' : await currentSession();
-  const ts = Date.now() + clockOffset;
+  const ts = login ? await getLoginProofTime(signal) : Date.now() + clockOffset;
   const nonce = base64(crypto.getRandomValues(new Uint8Array(24)));
   const digest = base64(new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(body))));
   const message = ['openmusic-device-v1', sid, method.toUpperCase(), path, digest, ts, nonce].join('\n');

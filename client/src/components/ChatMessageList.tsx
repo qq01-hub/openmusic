@@ -495,7 +495,8 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     if (!allowLoadOlderRef.current || !initialScrollDoneRef.current) return;
     if (el.scrollTop > 48 || !hasMoreOlder || loadingOlderRef.current) return;
 
-    const oldest = useChatStore.getState().messages[0];
+    const requestState = useChatStore.getState();
+    const oldest = requestState.messages[0];
     if (!oldest) return;
 
     const requestRoomId = roomMeta.id;
@@ -504,10 +505,8 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
     void loadChatHistory(oldest.timestamp, oldest.id).then((res) => {
       loadingOlderRef.current = false;
-      if (useChatStore.getState().roomId !== requestRoomId) {
-        useChatStore.getState().setLoadingOlder(false);
-        return;
-      }
+      const current = useChatStore.getState();
+      if (current.roomId !== requestRoomId || current.chatClearedAt !== requestState.chatClearedAt) return;
       if (!res.success || !res.messages?.length) {
         useChatStore.getState().setLoadingOlder(false);
         if (res.success) useChatStore.getState().prependOlder([], false);

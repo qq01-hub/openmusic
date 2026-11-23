@@ -1,9 +1,9 @@
 import type { PlaylistPlatform } from '../api/music/playlist';
 
 /** 从分享文案中提取第一个 http(s) 链接（去掉中文/引号与尾随标点） */
-function extractUrl(input: string): string {
+export function extractMusicShareUrl(input: string): string {
   const text = String(input || '').trim();
-  const match = text.match(/https?:\/\/[^\s一-鿿「」]+/i);
+  const match = text.match(/https?:\/\/[^\s一-鿿「」《》“”"'<>]+/i);
   return match ? match[0].replace(/[.,;，。；)）\]]+$/, '') : text;
 }
 
@@ -17,7 +17,7 @@ export function detectPlaylistLink(input: string): PlaylistPlatform | null {
   const text = String(input || '').trim();
   if (!text) return null;
 
-  const url = extractUrl(text);
+  const url = extractMusicShareUrl(text);
 
   // 网易云：必须带 playlist 标记，排除 song / album / djradio 链接
   if (/music\.163\.com/i.test(url) && /playlist/i.test(url)) {

@@ -22,6 +22,7 @@ export function musicRequestContext(path, query = {}) {
   if (path === '/api/music/hot') return null;
   if (path === '/api/music/toplist/netease') return null;
   if (path === '/api/music/suggestions') operation = 'search';
+  if (path === '/api/music/song-link') operation = 'song';
   if (path === '/api/music/netease/playlists/search') { operation = 'search_playlist'; source = 'netease'; }
   if (path === '/api/music/playlist/import') operation = 'playlist';
   if (path === '/api/qishui-source') { operation = 'source'; source = 'qishui'; }

@@ -129,6 +129,21 @@ export async function getSongById(source: MusicSource, id: string): Promise<Sear
   return getProvider(source).getSongById(id);
 }
 
+export async function getSongByShareLink(url: string, signal?: AbortSignal): Promise<SearchResult> {
+  const response = await fetchWithTimeout('/api/music/song-link', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+    signal,
+  });
+  const data = await response.json() as { source?: MusicSource; id?: string; error?: string };
+  if (!response.ok || !data.source || !data.id) throw new Error(data.error || '单曲链接解析失败');
+  signal?.throwIfAborted();
+  const song = await getSongById(data.source, data.id);
+  if (!song) throw new Error('该音源未返回此歌曲');
+  return song;
+}
+
 export async function getSongUrlInfo(
   song: Pick<Song, 'id' | 'source' | 'url' | 'duration'>,
   qualityOverride?: string,

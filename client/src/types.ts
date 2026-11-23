@@ -276,6 +276,7 @@ export interface RoomState {
   messages?: ChatMessage[];
   /** 非 null 时仅能看到该时间戳之后的消息（首次进入且未发言的新用户） */
   chatVisibleSince?: number | null;
+  chatClearedAt?: number;
   /** @deprecated 不再随 room_update 广播，由 chatStore 维护 */
   chatHasMore?: boolean;
   /** @deprecated 不再随 room_update 广播，按需 load_song_history */

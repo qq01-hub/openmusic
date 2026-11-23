@@ -81,6 +81,7 @@ const EXTRA_POLICIES = new Map([
   ['recall_chat', { windowMs: 60_000, max: 30 }],
   ['toggle_chat_reaction', { windowMs: 60_000, max: 60 }],
   ['load_chat_history', { windowMs: 60_000, max: 60 }],
+  ['clear_chat_history', { windowMs: 60_000, max: 10 }],
   ['load_song_history', { windowMs: 60_000, max: 60 }],
   ['list_favorites', { windowMs: 60_000, max: 60 }],
   ['list_favorite_categories', { windowMs: 60_000, max: 60 }],

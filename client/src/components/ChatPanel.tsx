@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { MessageCircle, MicOff } from 'lucide-react';
+import { MessageCircle, MicOff, Trash2 } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
 import { useMediaQuery } from '../hooks/useMediaQuery';
@@ -15,6 +15,8 @@ import ChatImageLightbox from './ChatImageLightbox';
 import ChatMessageList, { type ChatMessageListHandle } from './ChatMessageList';
 import ChatInputBar, { type ChatInputBarHandle, type PendingChatImage } from './ChatInputBar';
 import ChatMutePicker from './ChatMutePicker';
+import ConfirmModal from './ConfirmModal';
+import { useChatStore } from '../stores/chatStore';
 import RoomAiDesktopPet from './RoomAiDesktopPet';
 import { compactReplyText, compactSongCardsText } from '../lib/chatPanelUtils';
 import { useChatRoomMeta, useChatRoomSlice } from '../lib/chatRoomSlice';
@@ -58,13 +60,16 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
   const isAdmin = useRoomStore((s) => s.isAdmin);
   const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
   const canModerate = isOwner || isAdmin;
-  const { sendChat, recallChat, setChatMute, loadChatHistory, toggleChatReaction, addSong } = useSocket();
+  const { sendChat, recallChat, setChatMute, loadChatHistory, clearChatHistory, toggleChatReaction, addSong } = useSocket();
+  const chatClearedAt = useChatStore((s) => s.chatClearedAt);
   const { favoriteIds, toggleFavorite } = useFavorites();
   const { queueKeys } = useRoomSongKeySets();
 
   const [replyTo, setReplyTo] = useState<ChatReplyRef | null>(null);
   const [reactionPickerMessageId, setReactionPickerMessageId] = useState<string | null>(null);
   const [showMutePicker, setShowMutePicker] = useState(false);
+  const [showClearPicker, setShowClearPicker] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
   const [muteSaving, setMuteSaving] = useState(false);
   const [muteError, setMuteError] = useState('');
   const [chatUploadEnabled, setChatUploadEnabled] = useState(false);
@@ -93,6 +98,7 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
   useEffect(() => {
     if (!chatRoomSlice?.id) return;
     setMuteError('');
+    setShowClearPicker(false);
     setCardPendingKeys(new Set());
     setReplyTo(null);
     setPendingImage((current) => {
@@ -101,6 +107,13 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
     });
     setReactionPickerMessageId(null);
   }, [chatRoomSlice?.id]);
+
+  useEffect(() => {
+    if (!chatClearedAt) return;
+    setReplyTo(null);
+    setReactionPickerMessageId(null);
+    setPreviewImageUrl(null);
+  }, [chatClearedAt]);
 
   useEffect(() => {
     if (!showMutePicker) return;
@@ -262,6 +275,19 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
     if (!res.success) setMuteError(res.error || '操作失败');
   };
 
+  const clearHistory = async (scope: 'self' | 'room') => {
+    if (clearingHistory) return;
+    const roomId = chatRoomSlice?.id;
+    setClearingHistory(true);
+    setMuteError('');
+    setShowClearPicker(false);
+    const res = await clearChatHistory(scope);
+    setClearingHistory(false);
+    if (!res.success && useChatStore.getState().roomId === roomId) {
+      setMuteError(res.error || '清空聊天记录失败');
+    }
+  };
+
   if (!chatRoomSlice || !roomMeta) return null;
 
   const desktopMutePickerPortal = showMutePicker && !isMobileLayout && chatPanelRef.current ? (
@@ -323,18 +349,31 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
             <span className="rounded-full bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-400/90">全体禁言</span>
           )}
         </div>
-        {canModerate && (
-          <Tooltip side="bottom" content="禁言管理">
+        <div className="flex shrink-0 items-center gap-1">
+          <Tooltip side="bottom" content="清空聊天记录">
             <button
               type="button"
-              onClick={() => setShowMutePicker(true)}
-              className="rounded-lg p-1.5 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
-              aria-label="禁言管理"
+              disabled={clearingHistory}
+              onClick={() => isOwner ? setShowClearPicker(true) : void clearHistory('self')}
+              className="rounded-lg p-1.5 text-netease-muted transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+              aria-label="清空聊天记录"
             >
-              <MicOff className="h-4 w-4" />
+              <Trash2 className="h-4 w-4" />
             </button>
           </Tooltip>
-        )}
+          {canModerate && (
+            <Tooltip side="bottom" content="禁言管理">
+              <button
+                type="button"
+                onClick={() => setShowMutePicker(true)}
+                className="rounded-lg p-1.5 text-netease-muted transition-colors hover:bg-white/10 hover:text-white"
+                aria-label="禁言管理"
+              >
+                <MicOff className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
       </div>
 
       {muteError && (
@@ -411,6 +450,27 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
 
       {desktopMutePickerPortal && createPortal(desktopMutePickerPortal, chatPanelRef.current!)}
       {mobileMutePickerPortal && createPortal(mobileMutePickerPortal, document.body)}
+      {showClearPicker && isOwner && (
+        <ConfirmModal
+          title="清空聊天记录"
+          message={(
+            <div className="space-y-3">
+              <p>清空全房会移除所有成员的聊天记录，操作无法撤销</p>
+              <button
+                type="button"
+                onClick={() => void clearHistory('self')}
+                className="rounded-lg border border-white/15 px-3 py-2 text-white hover:bg-white/10"
+              >
+                仅清空我的记录
+              </button>
+            </div>
+          )}
+          confirmLabel="清空全房"
+          confirmVariant="danger"
+          onConfirm={() => void clearHistory('room')}
+          onCancel={() => setShowClearPicker(false)}
+        />
+      )}
 
       <ChatImageLightbox
         imageUrl={previewImageUrl}

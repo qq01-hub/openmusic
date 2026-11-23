@@ -68,7 +68,7 @@ export async function migrateAccountDevice(signal?: AbortSignal): Promise<Accoun
   const revision = getAccountSessionGeneration();
   const response = await fetch('/api/auth/device-migrate', {
     method: 'POST', credentials: 'include', cache: 'no-store', signal,
-    headers: { 'X-OpenMusic-Request': '1', 'X-OpenMusic-Device': await createDeviceProof('POST', '/api/auth/device-migrate', '', true) },
+    headers: { 'X-OpenMusic-Request': '1', 'X-OpenMusic-Device': await createDeviceProof('POST', '/api/auth/device-migrate', '', true, signal) },
   });
   const data = await response.json().catch(() => ({})) as { ok?: boolean; session?: AccountSessionMetadata; code?: string; error?: string };
   if (revision !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');

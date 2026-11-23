@@ -111,7 +111,7 @@ export async function fetchWithTimeout(
       if ((!hasAnonymousAccess() && ((businessRequest && pathname !== '/api/media-proxy') || authenticatedAuth)) || login) {
         const body = typeof initFinal.body === 'string' ? initFinal.body : input instanceof Request ? await input.clone().text() : '';
         const target = new URL(url, window.location.origin);
-        headers.set('X-OpenMusic-Device', await createDeviceProof(method, target.pathname + target.search, body, login));
+        headers.set('X-OpenMusic-Device', await createDeviceProof(method, target.pathname + target.search, body, login, controller.signal));
       }
       return headers;
     };

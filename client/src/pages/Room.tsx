@@ -10,7 +10,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle, Megaphone } from 'lucide-react';
 import { isSongInRoomQueue } from '../lib/roomSongStatus';
 
-import { searchAllSongs, getAvailableSources, listRooms, type SearchFilterMode } from '../api/music';
+import { searchAllSongs, getAvailableSources, getSongByShareLink, listRooms, type SearchFilterMode } from '../api/music';
 import { importPlaylist, searchPlaylists, type PlaylistSearchItem, type PlaylistPlatform, type PlaylistChannelFilter as PlaylistChannelFilterMode } from '../api/music/playlist';
 import { fetchDjPrograms, type DjRadioItem } from '../api/music/djRadio';
 import { getRecommendedPlaylists } from '../lib/recommendedPlaylists';
@@ -21,6 +21,7 @@ import { refreshQualityCapabilities } from '../api/music/quality';
 import { addSongsToQueue, formatBulkAddToast } from '../lib/addSongsToQueue';
 import { rememberPlaylistImportHistory } from '../lib/playlistImportHistory';
 import { detectPlaylistLink } from '../lib/playlistLink';
+import { detectSongLink } from '../lib/songLink';
 import { consumeLinuxdoReturnParam, fetchLinuxdoStatus, type LinuxdoBinding } from '../lib/linuxdoAuth';
 import { consumeGithubReturnParam, fetchGithubStatus, type GithubBinding } from '../lib/githubAuth';
 import { fetchWechatUinStatus, type WechatUinBinding } from '../lib/wechatUinAuth';
@@ -1451,11 +1452,13 @@ export default function Room() {
     }
 
     setSearching(true);
+    const songLink = artistFilter ? null : detectSongLink(keyword);
+    if (songLink) setResults([]);
 
     try {
 
       // 音源配置还在加载时不能传空数组，否则 searchAllSongs 会直接返回空结果。
-      const songs = await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, {
+      const songs = songLink ? [await getSongByShareLink(songLink, controller.signal)] : await searchAllSongs(keyword, sources.length > 0 ? sources : undefined, {
         filterMode,
         suggestion,
         artist: artistFilter,
@@ -1464,9 +1467,12 @@ export default function Room() {
 
       if (requestId === songSearchRequestRef.current) setResults(songs);
 
-    } catch {
+    } catch (error) {
 
-      if (requestId === songSearchRequestRef.current) setResults([]);
+      if (requestId === songSearchRequestRef.current && !controller.signal.aborted) {
+        setResults([]);
+        if (songLink) showToast(error instanceof Error ? error.message : '单曲链接解析失败', 'error');
+      }
 
     } finally {
 
@@ -1474,7 +1480,7 @@ export default function Room() {
 
     }
 
-  }, [sources, searchFilterMode, isRadioResults, resetRadioProgramState]);
+  }, [sources, searchFilterMode, isRadioResults, resetRadioProgramState, showToast]);
 
   const handleSearchFilterChange = useCallback((next: SearchFilterMode) => {
     if (isPlaylistResults || isRadioResults) return;
@@ -1755,14 +1761,16 @@ export default function Room() {
 
   const handleSearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
     const keyword = (selectedKeyword ?? query).trim();
-    if (keyword) rememberSearch(searchMode, keyword);
-    const detectedPlatform = detectPlaylistLink(keyword);
+    const songLink = detectSongLink(keyword);
+    if (keyword && !songLink) rememberSearch(searchMode, keyword);
+    const detectedPlatform = songLink ? null : detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
       return;
     }
-    setActiveSearchMode(searchMode);
-    if (searchMode === 'playlist') {
+    if (songLink) setSearchMode('song');
+    setActiveSearchMode(songLink ? 'song' : searchMode);
+    if (!songLink && searchMode === 'playlist') {
       setSearchedKeyword(keyword);
       setIsPlaylistResults(false);
       void doPlaylistSearch(keyword, 1);
@@ -1812,14 +1820,16 @@ export default function Room() {
 
   const handleOverlaySearch = useCallback((selectedKeyword?: string, suggestion?: SelectedMusicSuggestion) => {
     const keyword = (selectedKeyword ?? overlayQuery).trim();
-    if (keyword) rememberSearch(overlaySearchMode, keyword);
-    const detectedPlatform = detectPlaylistLink(keyword);
+    const songLink = detectSongLink(keyword);
+    if (keyword && !songLink) rememberSearch(overlaySearchMode, keyword);
+    const detectedPlatform = songLink ? null : detectPlaylistLink(keyword);
     if (detectedPlatform) {
       void handlePlaylistImport(detectedPlatform, keyword);
       return;
     }
-    setActiveSearchMode(overlaySearchMode);
-    if (overlaySearchMode === 'playlist') {
+    if (songLink) setOverlaySearchMode('song');
+    setActiveSearchMode(songLink ? 'song' : overlaySearchMode);
+    if (!songLink && overlaySearchMode === 'playlist') {
       setSearchedKeyword(keyword);
       setIsPlaylistResults(false);
       void doPlaylistSearch(keyword, 1);
@@ -3029,7 +3039,7 @@ export default function Room() {
           onChange={setQuery}
           onSearch={handleSearch}
           searchHistory={searchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
-          placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴分享链接…'}
           searching={searching}
           suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
           className="w-full bg-netease-card border border-netease-border rounded-xl sm:rounded-2xl pl-10 sm:pl-12 pr-4 py-3 sm:py-3.5 text-sm sm:text-base text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
@@ -3167,7 +3177,7 @@ export default function Room() {
           onChange={setOverlayQuery}
           onSearch={handleOverlaySearch}
           searchHistory={overlaySearchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
-          placeholder={overlaySearchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          placeholder={overlaySearchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴分享链接…'}
           searching={overlaySearchMode === 'song' && searching}
           suggestionsEnabled={overlaySearchMode === 'song'}
           className="w-full bg-netease-card border border-netease-border rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder:text-netease-muted/50 focus:outline-none focus:border-netease-red/50 transition-colors"
@@ -3194,7 +3204,7 @@ export default function Room() {
           onChange={setQuery}
           onSearch={handleSearch}
           searchHistory={searchMode === 'playlist' ? playlistSearchHistory : songSearchHistory}
-          placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴歌单链接...'}
+          placeholder={searchMode === 'playlist' ? '搜索歌单...' : '搜索歌曲、歌手，或粘贴分享链接…'}
           searching={searchMode === 'song' && searching}
           suggestionsEnabled={searchMode === 'song' && !showDesktopSearchOverlay}
           className="min-w-0 flex-1 border-none bg-transparent text-[13.5px] tracking-wide text-white outline-none placeholder:text-white/22"

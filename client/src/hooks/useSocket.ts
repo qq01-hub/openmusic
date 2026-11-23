@@ -498,6 +498,7 @@ function applyJoinChat(room: RoomState, messages?: ChatMessage[], chatHasMore?: 
     messages || [],
     Boolean(chatHasMore),
     room.chatVisibleSince ?? null,
+    room.chatClearedAt,
   );
 }
 
@@ -962,6 +963,9 @@ export function useSocket() {
     s.on('queue_snapshot', onQueueSnapshot);
 
     s.on('chat_message', onChatMessage);
+    s.on('chat_history_cleared', ({ roomId, clearedAt }: { roomId: string; clearedAt: number }) => {
+      useChatStore.getState().clearHistory(roomId, clearedAt);
+    });
 
     s.on('room_ai_processing', onRoomAiProcessing);
 
@@ -2077,6 +2081,16 @@ export function useSocket() {
 
 
 
+  const clearChatHistory = useCallback(async (scope: 'self' | 'room') => {
+    const result = await emitWithAck<{ success: boolean; error?: string; roomId?: string; clearedAt?: number }>(
+      'clear_chat_history', { scope }, { success: false, error: '连接超时，请重试' },
+    );
+    if (result.success && result.roomId && result.clearedAt) {
+      useChatStore.getState().clearHistory(result.roomId, result.clearedAt);
+    }
+    return result;
+  }, []);
+
   const loadChatHistory = useCallback((before: number, beforeId: string): Promise<{
     success: boolean;
     messages?: ChatMessage[];
@@ -2243,6 +2257,7 @@ export function useSocket() {
     setChatMute,
 
     loadChatHistory,
+    clearChatHistory,
 
     loadSongHistory,
 

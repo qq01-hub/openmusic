@@ -795,6 +795,8 @@ export function snapshotRoomForStorage(room) {
     messages: room.messages.slice(-MAX_CHAT_MESSAGES).map(sanitizeMessageForStorage),
     knownUserIds: Array.from(room.knownUserIds || []),
     chatVisibleSinceByUserId: Object.fromEntries(room.chatVisibleSinceByUserId || []),
+    chatClearedAt: room.chatClearedAt,
+    chatClearedAtByUserId: Object.fromEntries(room.chatClearedAtByUserId),
     songHistory: (room.songHistory || []).slice(0, MAX_SONG_HISTORY).map(serializeSongHistoryForClient).filter(Boolean),
     jumpRequests: room.jumpRequests,
     skipRequests: room.skipRequests,
@@ -889,6 +891,11 @@ function restoreRoomFromStorage(data) {
   room.messages = data.messages || [];
   room.knownUserIds = new Set(data.knownUserIds || []);
   room.chatVisibleSinceByUserId = restoreChatVisibleSinceMap(data.chatVisibleSinceByUserId);
+  room.chatClearedAt = Number.isSafeInteger(data.chatClearedAt) ? Math.max(0, data.chatClearedAt) : 0;
+  room.chatClearedAtByUserId = restoreChatVisibleSinceMap(data.chatClearedAtByUserId);
+  room.chatTimestampFloor = [...room.chatClearedAtByUserId.values()].reduce(
+    (floor, timestamp) => Math.max(floor, timestamp), room.chatClearedAt,
+  );
   room.songHistory = (Array.isArray(data.songHistory) ? data.songHistory : []).slice(0, MAX_SONG_HISTORY).map(serializeSongHistoryForClient).filter(Boolean);
   room.jumpRequests = data.jumpRequests || [];
   room.skipRequests = data.skipRequests || [];
@@ -1323,6 +1330,9 @@ function createEmptyRoom(roomId, name, passwordHash = null) {
     messages: [],
     knownUserIds: new Set(),
     chatVisibleSinceByUserId: new Map(),
+    chatClearedAt: 0,
+    chatClearedAtByUserId: new Map(),
+    chatTimestampFloor: 0,
     songHistory: [],
     randomPlayedKeys: new Set(),
     /** 当前汽水 song-tab 批次的剩余歌曲，按接口顺序消费，不落盘。 */
@@ -2743,7 +2753,7 @@ export function broadcastAdminSystemMessage(text, { roomIds } = {}) {
       kind: "recall",
       mentions: [],
       replyTo: null,
-      timestamp: Date.now(),
+      timestamp: chatMessageTimestamp(room),
     };
     room.messages.push(message);
     if (room.messages.length > MAX_CHAT_MESSAGES) {
@@ -3649,7 +3659,7 @@ export function postMemberWelcomeMessage(roomId, userId) {
     kind: "welcome",
     mentions: [],
     replyTo: null,
-    timestamp: Date.now(),
+    timestamp: chatMessageTimestamp(room),
     memberTier: {
       badgeLabel: tier.badgeLabel,
       badgeColor: tier.badgeColor,
@@ -3705,7 +3715,7 @@ function appendSystemChatMessage(room, text) {
     kind: "system",
     mentions: [],
     replyTo: null,
-    timestamp: Date.now(),
+    timestamp: chatMessageTimestamp(room),
   };
 
   return serializeChatMessage(message);
@@ -3727,7 +3737,7 @@ function appendRecallChatMessage(room, text) {
     kind: "recall",
     mentions: [],
     replyTo: null,
-    timestamp: Date.now(),
+    timestamp: chatMessageTimestamp(room),
   };
 
   room.messages.push(message);
@@ -6272,7 +6282,7 @@ export function addChatMessage(roomId, userId, text, options = {}) {
     asSticker: asSticker || undefined,
     mentions,
     replyTo: sanitizeChatReplyRef(options.replyTo, roomId),
-    timestamp: Date.now(),
+    timestamp: chatMessageTimestamp(room),
     songs: songs.length ? songs : undefined,
   };
 
@@ -6361,7 +6371,7 @@ export function postBotChatMessage(roomId, options = {}) {
     asSticker: asSticker || undefined,
     mentions: [],
     replyTo: sanitizeChatReplyRef(options.replyTo, roomId),
-    timestamp: Date.now(),
+    timestamp: chatMessageTimestamp(room),
     songs: songs.length ? songs : undefined,
     ...(aiThoughts.length ? { aiThoughts } : {}),
   };
@@ -6696,13 +6706,43 @@ function serializeSongHistoryForClient(item) {
   };
 }
 
+function chatMessageTimestamp(room) {
+  return Math.max(Date.now(), room.chatTimestampFloor);
+}
+
+function getChatClearedAt(room, userId) {
+  return Math.max(room.chatClearedAt, room.chatClearedAtByUserId.get(userId) || 0);
+}
+
+export function clearChatHistory(roomId, userId, scope, connectionId) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在", code: "CHAT_CLEAR_ROOM_REQUIRED" };
+  if (scope !== "self" && scope !== "room") return { error: "无效的清空范围", code: "CHAT_CLEAR_INVALID_SCOPE" };
+  if (!isActorConnection(room, userId, connectionId) || (scope === "room" && !isOwnerConnection(room, userId, connectionId))) {
+    return { error: scope === "room" ? "仅房主可清空全房聊天记录" : "当前会话无权清空聊天记录", code: "CHAT_CLEAR_FORBIDDEN" };
+  }
+
+  const clearedAt = room.messages.reduce(
+    (cutoff, message) => Math.max(cutoff, message.timestamp + 1),
+    chatMessageTimestamp(room),
+  );
+  room.chatTimestampFloor = clearedAt;
+  if (scope === "room") {
+    room.messages = [];
+    room.chatClearedAt = clearedAt;
+    room.chatClearedAtByUserId.clear();
+  } else {
+    room.chatClearedAtByUserId.set(userId, clearedAt);
+  }
+  persistRoom(room);
+  return { clearedAt };
+}
+
 function getMessagesForUser(room, userId) {
   if (!userId) return room.messages;
   const user = room.users.get(userId);
-  if (user?.chatVisibleSince) {
-    return room.messages.filter((message) => message.timestamp >= user.chatVisibleSince);
-  }
-  return room.messages;
+  const since = Math.max(user?.chatVisibleSince || 0, getChatClearedAt(room, userId));
+  return since ? room.messages.filter((message) => message.timestamp >= since) : room.messages;
 }
 
 /** 分页拉取聊天历史（join 初始 100 条，上滑每次 50 条） */
@@ -6821,6 +6861,7 @@ function serializeRoom(room, options = {}) {
     jumpRequests: room.jumpRequests,
     skipRequests: room.skipRequests,
     chatVisibleSince: forUser?.chatVisibleSince ?? null,
+    chatClearedAt: getChatClearedAt(room, forUserId),
     nextRandom: serializeQueueItemForRoom(room.nextRandom),
     randomLoading: Boolean(room.randomLoading),
     randomError: room.randomError || "",

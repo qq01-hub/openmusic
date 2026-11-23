@@ -388,6 +388,14 @@ async function cancelMediaBody(response) {
   }
 }
 
+export async function fetchPublicHttpsOnce(url, signal, allowedHosts) {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.port || !allowedHosts.has(parsed.hostname)) throw new Error('无效的 HTTPS 地址');
+  const target = await assertSafeMediaUrl(parsed.href, [], { requireAllowlist: false, timeoutMs: 4000 });
+  signal.throwIfAborted();
+  return requestPinnedMedia(target, { 'User-Agent': DEFAULT_MEDIA_UA }, signal, 4000);
+}
+
 /**
  * 手动跟随重定向，每一跳重新校验主机名，避免公网 302 跳内网绕过 SSRF 检查。
  */

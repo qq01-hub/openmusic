@@ -2,7 +2,9 @@ import { createHash, createPublicKey, verify } from 'node:crypto';
 
 export class DeviceProofError extends Error {
   constructor(code = 'ACCOUNT_DEVICE_PROOF_REQUIRED', status = 401) {
-    super('设备验证失败，请在当前设备重新登录');
+    super(code === 'ACCOUNT_DEVICE_CLOCK_SKEW'
+      ? '设备时间与站点时间相差过大，请同步系统时间后重新登录'
+      : '设备验证失败，请在当前设备重新登录');
     this.code = code;
     this.status = status;
   }
@@ -26,11 +28,17 @@ export function verifyDeviceProof(req, encoded, expectedKey, sessionId, now = Da
     if (typeof encoded !== 'string' || encoded.length > 2048 || !/^[A-Za-z0-9_-]+$/u.test(encoded)) throw new Error();
     const proof = JSON.parse(Buffer.from(encoded, 'base64url'));
     const key = normalizeDeviceKey(expectedKey);
-    if (proof.v !== 1 || proof.sid !== sessionId || !Number.isSafeInteger(proof.ts) || Math.abs(now - proof.ts) > 60000
+    if (proof.v !== 1 || proof.sid !== sessionId || !Number.isSafeInteger(proof.ts)
       || !/^[A-Za-z0-9_-]{32}$/u.test(proof.nonce) || !/^[A-Za-z0-9_-]{86}$/u.test(proof.sig)) throw new Error();
+    const clockSkew = Math.abs(now - proof.ts) > 60000;
+    if (clockSkew && sessionId !== 'login') throw new Error();
     if (!verify('sha256', Buffer.from(deviceProofMessage(req, proof)), { key: createPublicKey({ key, format: 'jwk' }), dsaEncoding: 'ieee-p1363' }, Buffer.from(proof.sig, 'base64url'))) throw new Error();
+    if (clockSkew) throw new DeviceProofError('ACCOUNT_DEVICE_CLOCK_SKEW');
     return { nonce: proof.nonce, timestamp: proof.ts, key };
-  } catch { throw new DeviceProofError(); }
+  } catch (error) {
+    if (error instanceof DeviceProofError) throw error;
+    throw new DeviceProofError();
+  }
 }
 
 // 仅供凭密码、注册验证码或 OAuth 重新认证时绑定，不能给现有会话更换公钥
