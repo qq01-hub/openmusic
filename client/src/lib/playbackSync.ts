@@ -36,6 +36,7 @@ const FINAL_WINDOW_SEC = 3;
 const REMOTE_SEEK_THRESHOLD_SEC = 0.5;
 /** 本机仍视为「刚加载/曲首」的阈值；刷新进房后 audio 停在 0，需对齐服务端进度 */
 const INITIAL_SYNC_AUDIO_SEC = 1;
+const RECOVERY_LAG_SEC = 6;
 const BEYOND_DURATION_GRACE_SEC = 0.15;
 /** 本机已到媒体末尾的判定窗口（不依赖 audio.ended，规避 seek 卡死） */
 const LOCAL_ENDED_WAIT_SEC = 0.35;
@@ -148,6 +149,8 @@ export interface ApplySyncOptions {
   forceZero?: boolean;
   /** 服务端 playback_state：暂停/远端 seek 时校正，播放中途不追 */
   forceCorrection?: boolean;
+  /** 切回前台恢复：明显落后时对齐服务端时间轴 */
+  foregroundResume?: boolean;
 }
 
 function resolveTargetTime(
@@ -187,6 +190,14 @@ async function verifyPlaybackStarted(
   if (result !== 'played') return result;
   const progressed = await waitForAudioProgress(audio);
   if (progressed) return result;
+  if (
+    !audio.paused
+    && !audio.ended
+    && !audio.error
+    && (document.hidden || audio.seeking || audio.readyState < HTMLMediaElement.HAVE_FUTURE_DATA)
+  ) {
+    return result;
+  }
   debugLog('sync_play_stalled', debugLine({
     reason,
     audio: Number(audio.currentTime.toFixed(3)),
@@ -276,6 +287,13 @@ function applyAutoPlaybackSync(
 
   const remaining = getRemainingTimeSec(options.song, target);
   if (remaining > FINAL_WINDOW_SEC) {
+    if (
+      document.hidden
+      && target - audio.currentTime >= RECOVERY_LAG_SEC
+      && getBufferedAheadSeconds(audio, target) >= 1
+    ) {
+      explicitHardSeek(audio, target, trackId, 'buffered_recovery');
+    }
     return 'played';
   }
 
@@ -439,6 +457,9 @@ async function applyCorrectionSync(
   if (remoteSeek && Math.abs(diff) > REMOTE_SEEK_THRESHOLD_SEC) {
     // 房主拖进度（或单曲循环回 0）：playback_state 时间轴跳变，必须对齐
     explicitHardSeek(audio, target, trackId, 'remote_seek');
+  } else if (options.foregroundResume && Math.abs(diff) >= RECOVERY_LAG_SEC) {
+    // 切回前台时若因后台停滞明显落后，立即对齐服务端时间轴，避免后续提前切歌
+    explicitHardSeek(audio, target, trackId, 'foreground_recovery');
   } else if (
     audio.currentTime < INITIAL_SYNC_AUDIO_SEC
     && target >= 6
@@ -607,9 +628,10 @@ export async function applyVisibilityResume(
   if (isEndedWhileServerPlaying(audio, options.song)) {
     return recoverFromEndedAudio(audio, options, 'visibility');
   }
-  // 切回前台：续播 + 曲末/切歌判定；中途不因时钟漂移 hard-seek（见 applyCorrectionSync）
+  // 切回前台：续播 + 明显落后时对齐进度 + 曲末/切歌判定
   return applyFollowerSync(audio, {
     ...options,
+    foregroundResume: true,
     forceCorrection: true,
   });
 }

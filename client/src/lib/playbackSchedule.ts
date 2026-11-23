@@ -55,14 +55,12 @@ function shouldDropPendingAgainstOptimisticPause(state: PlaybackState): boolean 
 function isAudioReadyForSnapshot(trackId: string): boolean {
   const audio = getSharedAudio();
   if (!audio.src) return false;
-  // HAVE_METADATA 即可 seek；与 waitForAudioMinimumReady 对齐，避免 load 完成后 flush 失败从 0 开播
-  if (audio.readyState < HTMLMediaElement.HAVE_METADATA) return false;
-  const duration = audio.duration;
-  if (!Number.isFinite(duration) || duration <= 0) return false;
   const { room } = useRoomStore.getState();
   if (!room?.current || room.current.queueId !== trackId) return false;
   if (getAudioBoundQueueId(audio) !== trackId) return false;
-  return true;
+  // HAVE_METADATA 即可提交状态；流式代理或后台已触发 play 时不再因 duration 未定阻塞新曲快照
+  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) return true;
+  return !audio.paused && !audio.error;
 }
 
 function queueSnapshot(state: PlaybackState, receivedAt: number): void {

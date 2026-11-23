@@ -100,6 +100,7 @@ export function getSharedAudioOutput(): typeof output {
     const AudioContextClass = getAudioContextClass();
     if (!AudioContextClass) return null;
     outputContext ??= new AudioContextClass();
+    if (outputContext.state !== 'running') void outputContext.resume().catch(() => {});
     const gain = outputContext.createGain();
     gain.gain.value = Math.max(0.00001, useAudioStore.getState().volume * loudnessMultiplier);
     gain.connect(outputContext.destination);
