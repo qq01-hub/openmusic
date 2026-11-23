@@ -86,10 +86,7 @@ export async function waitForAudioProgress(
       const current = Number.isFinite(audio.currentTime) ? audio.currentTime : initial;
       if (current > initial + 0.05) finish(true);
     };
-    timer = window.setTimeout(() => {
-      // 后台事件可能延迟，超时时再读一次媒体时钟
-      finish(!audio.paused && !audio.ended && !audio.seeking && audio.currentTime > initial + 0.05);
-    }, timeoutMs);
+    timer = window.setTimeout(() => finish(false), timeoutMs);
     audio.addEventListener('timeupdate', onProgress);
     audio.addEventListener('playing', onProgress);
     onProgress();

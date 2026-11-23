@@ -1,9 +1,7 @@
 const DEFAULT_MIN_BUFFER_SEC = 1;
 
-export function getBufferedAheadSeconds(
-  audio: Pick<HTMLMediaElement, 'buffered' | 'currentTime'>,
-  currentTime = audio.currentTime,
-): number {
+export function getBufferedAheadSeconds(audio: Pick<HTMLMediaElement, 'buffered' | 'currentTime'>): number {
+  const currentTime = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
   const ranges = audio.buffered;
   for (let i = 0; i < ranges.length; i += 1) {
     const start = ranges.start(i);
