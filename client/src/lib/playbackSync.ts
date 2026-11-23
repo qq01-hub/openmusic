@@ -6,6 +6,7 @@ import { useRoomStore } from '../stores/roomStore';
 import {
   getClientPlaybackState,
   getPlaybackTime,
+  resolveInitialTrackSyncTime,
   wasLastPlaybackCommitASeek,
   type ClientPlaybackState,
 } from './playbackState';
@@ -36,6 +37,7 @@ const FINAL_WINDOW_SEC = 3;
 const REMOTE_SEEK_THRESHOLD_SEC = 0.5;
 /** 本机仍视为「刚加载/曲首」的阈值；刷新进房后 audio 停在 0，需对齐服务端进度 */
 const INITIAL_SYNC_AUDIO_SEC = 1;
+const RECOVERY_LAG_SEC = 6;
 const BEYOND_DURATION_GRACE_SEC = 0.15;
 /** 本机已到媒体末尾的判定窗口（不依赖 audio.ended，规避 seek 卡死） */
 const LOCAL_ENDED_WAIT_SEC = 0.35;
@@ -148,6 +150,14 @@ export interface ApplySyncOptions {
   forceZero?: boolean;
   /** 服务端 playback_state：暂停/远端 seek 时校正，播放中途不追 */
   forceCorrection?: boolean;
+  alignOnReady?: boolean;
+  foregroundResume?: boolean;
+}
+
+function wouldLeavePlayableBuffer(audio: HTMLAudioElement, target: number): boolean {
+  return document.hidden && target > audio.currentTime
+    && getBufferedAheadSeconds(audio) > 0
+    && getBufferedAheadSeconds(audio, target) === 0;
 }
 
 function resolveTargetTime(
@@ -276,6 +286,10 @@ function applyAutoPlaybackSync(
 
   const remaining = getRemainingTimeSec(options.song, target);
   if (remaining > FINAL_WINDOW_SEC) {
+    if (document.hidden && target - audio.currentTime >= RECOVERY_LAG_SEC
+      && getBufferedAheadSeconds(audio, target) >= 1) {
+      explicitHardSeek(audio, target, trackId, 'buffered_recovery');
+    }
     return 'played';
   }
 
@@ -439,9 +453,12 @@ async function applyCorrectionSync(
   if (remoteSeek && Math.abs(diff) > REMOTE_SEEK_THRESHOLD_SEC) {
     // 房主拖进度（或单曲循环回 0）：playback_state 时间轴跳变，必须对齐
     explicitHardSeek(audio, target, trackId, 'remote_seek');
+  } else if (options.foregroundResume && diff >= RECOVERY_LAG_SEC) {
+    explicitHardSeek(audio, target, trackId, 'foreground_recovery');
   } else if (
     audio.currentTime < INITIAL_SYNC_AUDIO_SEC
     && target >= 6
+    && !wouldLeavePlayableBuffer(audio, target)
     && Math.abs(diff) > REMOTE_SEEK_THRESHOLD_SEC
   ) {
     // 刷新/进房后本机仍在曲首且房间已播至中途：必须对齐服务端进度
@@ -541,6 +558,13 @@ export async function applyFollowerSync(
 ): Promise<FollowerSyncResult> {
   if (!audio.src) return 'idle';
 
+  if (options.alignOnReady) {
+    const target = resolveInitialTrackSyncTime(options.song.queueId, useRoomStore.getState().room?.currentTime);
+    const keepPosition = getClientPlaybackState()?.status === 'playing'
+      && useRoomStore.getState().room?.isPlaying === true
+      && ((target < 6 && audio.currentTime < 1) || wouldLeavePlayableBuffer(audio, target));
+    options = { ...options, forceTime: keepPosition ? audio.currentTime : target };
+  }
   const mode = syncModeLabel(options);
   recordSyncDrift(audio, options, mode);
 
@@ -607,9 +631,10 @@ export async function applyVisibilityResume(
   if (isEndedWhileServerPlaying(audio, options.song)) {
     return recoverFromEndedAudio(audio, options, 'visibility');
   }
-  // 切回前台：续播 + 曲末/切歌判定；中途不因时钟漂移 hard-seek（见 applyCorrectionSync）
+  // 恢复时按最新房间时间追上后台停滞造成的明显落后
   return applyFollowerSync(audio, {
     ...options,
+    foregroundResume: true,
     forceCorrection: true,
   });
 }

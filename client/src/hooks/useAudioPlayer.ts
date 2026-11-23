@@ -82,7 +82,7 @@ import {
 import { waitForAudioCanPlay, waitForAudioMinimumReady } from '../lib/audioReady';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
 import { resetDriftController } from '../lib/driftController';
-import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying, resolveInitialTrackSyncTime } from '../lib/playbackState';
+import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying } from '../lib/playbackState';
 import { attachAudioBufferingListeners, isAudioBuffering, setAudioBufferEndHandler } from '../lib/audioBuffering';
 import { flushPendingPlaybackSnapshot } from '../lib/playbackSchedule';
 import { stopSongPreview } from '../lib/songPreviewPlayer';
@@ -486,14 +486,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   }, [controller]);
 
   const applySync = useCallback((
-    options: { forceZero?: boolean; forceTime?: number; forceCorrection?: boolean } = {},
+    options: { forceZero?: boolean; forceTime?: number; forceCorrection?: boolean; alignOnReady?: boolean } = {},
   ) => {
+    const queueId = useRoomStore.getState().room?.current?.queueId;
     controller.enqueue(async () => {
       // 本机被更高优先级占用（试听 / 聊天音乐卡片）时禁止跟播，避免抢回音频输出
       if (isRoomAudioTakenOver()) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || skippingRef.current) return;
       const song = liveRoom.current;
+      if (song.queueId !== queueId) return;
       const audio = controller.audio;
       if (!isAudioBoundToQueue(audio, song.queueId)) return;
       if (shouldSkipForEndedTrackKey(song, audio)) return;
@@ -506,6 +508,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         forceZero: options.forceZero,
         forceTime: options.forceTime,
         forceCorrection: options.forceCorrection,
+        alignOnReady: options.alignOnReady,
       });
 
       handleSyncResult(result, audio, liveRoom, song);
@@ -521,12 +524,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (!isAudioBoundToQueue(audio, liveRoom.current.queueId)) return;
     if (audio.readyState < HTMLMediaElement.HAVE_METADATA) return;
 
-    const playbackState = getClientPlaybackState();
-    const targetTime = playbackState
-      ? getPlaybackTime(playbackState)
-      : Math.max(0, Number(liveRoom.currentTime) || 0);
-    // 曲首刚开播（< 6s）且本机已在头部时保持从 0s 连续播放，避免 loadeddata 晚到触发二次跳秒
-    applySync({ forceTime: targetTime < 6 && audio.currentTime < 1 ? 0 : targetTime });
+    applySync({ alignOnReady: true });
   }, [applySync]);
 
   const applyVisibilitySync = useCallback(() => {
@@ -928,15 +926,21 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           retryCount: runtime.tempRetries.current,
         }));
 
+        const stalledQueueId = live.room.current.queueId;
+        const stalledSrc = audio.currentSrc || audio.src;
         runtime.stallRetryTimer.current = window.setTimeout(() => {
           runtime.stallRetryTimer.current = null;
           if (audio.paused || audio.ended) return;
           if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return;
           if (runtime.tempRetries.current >= MAX_TEMP_PLAYBACK_RETRIES) return;
 
-          runtime.tempRetries.current += 1;
           controller.enqueue(async () => {
             const current = useRoomStore.getState().room?.current;
+            if (!current || current.queueId !== stalledQueueId || (audio.currentSrc || audio.src) !== stalledSrc
+              || !isAudioBoundToQueue(audio, current.queueId) || !useRoomStore.getState().room?.isPlaying
+              || audio.paused || audio.ended || audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+              || isRoomAudioTakenOver()) return;
+            runtime.tempRetries.current += 1;
             const currentSrc = controller.audio.currentSrc || controller.audio.src;
             const canProxy = current
               && current.source !== 'qishui'
@@ -1455,7 +1459,17 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
         // 仅缓存/同步服务端地址；blob: 只属于当前浏览器，不能发给房间内其他用户。
         if (!cachedAudio && !crossSource) {
-          void cacheSongAudio(audioCacheKey, playbackUrl, audioCacheAbort.signal);
+          const audio = controller.audio;
+          const savePlayingTrack = () => {
+            if (isAudioBoundToQueue(audio, current.queueId)) {
+              void cacheSongAudio(audioCacheKey, playbackUrl, audioCacheAbort.signal);
+            }
+          };
+          if (!audio.paused && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
+            savePlayingTrack();
+          } else {
+            audio.addEventListener('playing', savePlayingTrack, { once: true, signal: audioCacheAbort.signal });
+          }
         }
         rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);
         if (duration && duration > 0) {
@@ -1540,20 +1554,9 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             && trackKeyOf(live.current) === trackKey
             && canSyncAudioForQueue(controller.audio, live.current.queueId)
           ) {
-            const wasNewTrack = justSkippedRef.current;
             justSkippedRef.current = false;
             tryFlushPendingSnapshot();
-            if (wasNewTrack) {
-              const initialTarget = resolveInitialTrackSyncTime(queueId, live.currentTime);
-              // 切歌新曲已在 0s 完成缓冲，曲首阶段直接从 0 起播，避免因取链耗时向后硬跳冲掉已缓冲数据
-              applySync({ forceTime: initialTarget < 6 ? 0 : initialTarget });
-            } else {
-              const pb = getClientPlaybackState();
-              const targetTime = pb
-                ? getPlaybackTime(pb)
-                : Math.max(0, Number(live.currentTime) || 0);
-              applySync({ forceTime: targetTime < 6 && controller.audio.currentTime < 1 ? 0 : targetTime });
-            }
+            applySync({ alignOnReady: true });
           }
         }
       }
@@ -1717,16 +1720,15 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (!wasNewTrack && shouldSkipForEndedTrackKey(liveRoom.current, controller.audio)) return;
 
     applySync(wasNewTrack
-      ? { forceTime: resolveInitialTrackSyncTime(liveRoom.current.queueId, liveRoom.currentTime) }
+      ? { alignOnReady: true }
       : { forceCorrection: true });
   }, [playbackVersion, trackLoading, applySync, shouldSkipForEndedTrackKey, controller]);
 
-  // 离散同步：NORMAL 不追赶，FINAL（≤3s）一次性对齐；6s 仅检查是否进入 FINAL
+  // 后台恢复优先利用已有缓冲，前台常规检查仍只在曲末对齐
   useEffect(() => {
     if (tvMode) return;
 
-    const id = window.setInterval(() => {
-      if (document.hidden) return;
+    return createWorkerInterval(() => {
       if (isRoomAudioTakenOver()) return;
       const liveRoom = useRoomStore.getState().room;
       if (!liveRoom?.current || !liveRoom.isPlaying) return;
@@ -1739,8 +1741,6 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (!controller.audio.src) return;
       applySync();
     }, CALIBRATION_INTERVAL_MS);
-
-    return () => window.clearInterval(id);
   }, [tvMode, controller, applySync, shouldSkipForEndedTrackKey, room?.isPlaying, room?.current?.queueId]);
 
   useEffect(() => {

@@ -5809,16 +5809,12 @@ export function setPlaying(roomId, socketId, isPlaying, connectionId = null) {
   if (!room || !room.current) return null;
   if (!canPausePlayback(room, socketId, connectionId)) return null;
 
+  const now = Date.now();
+  room.currentTime = calculatePlaybackTime(room, now);
   room.isPlaying = isPlaying;
-  if (isPlaying) {
-    const now = Date.now();
-    const currentTime = calculatePlaybackTime(room, now);
-    room.currentTime = currentTime;
-    room.startedAt = now - (currentTime / normalizePlaybackRate(room.playbackRate)) * 1000;
-  } else {
-    room.currentTime = calculatePlaybackTime(room);
-    room.startedAt = null;
-  }
+  room.startedAt = isPlaying
+    ? now - (room.currentTime / normalizePlaybackRate(room.playbackRate)) * 1000
+    : null;
   bumpPlaybackState(room);
 
   persistRoom(room);

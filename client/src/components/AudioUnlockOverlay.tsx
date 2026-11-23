@@ -44,11 +44,11 @@ export default function AudioUnlockOverlay({ tvMode = false }: Props) {
       type="button"
       onClick={!isMobileDevice() ? handlePointerUnlock : undefined}
       onTouchStart={isMobileDevice() ? handlePointerUnlock : undefined}
-      className="fixed inset-0 z-[9999] flex items-center justify-center bg-[#08090c] touch-manipulation cursor-pointer"
+      className="room-feature-scrim fixed inset-0 z-[9999] flex items-center justify-center touch-manipulation cursor-pointer"
       style={{ WebkitTapHighlightColor: 'transparent' }}
       aria-label="开启声音"
     >
-      <div className="flex flex-col items-center gap-3 px-6 py-5 rounded-2xl bg-netease-card border border-netease-border/60 shadow-2xl pointer-events-none select-none">
+      <div className="room-modal-panel room-feature-dialog flex flex-col items-center gap-3 px-6 py-5 rounded-2xl border border-netease-border/60 shadow-2xl pointer-events-none select-none">
         <div className="w-14 h-14 rounded-full bg-netease-red/20 flex items-center justify-center">
           <Volume2 className="w-7 h-7 text-netease-red" />
         </div>
