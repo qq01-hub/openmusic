@@ -2021,7 +2021,7 @@ html :is(.room-modal-panel, .room-feature-dialog, .mineradio-glass-panel, .miner
 .room-feature-dialog,
 .room-modal-panel.room-feature-dialog,
 .mineradio-glass-panel.room-feature-dialog {
-  background: #232631 !important;
+  background: #141419 !important;
 }
 
 /* 房间功能弹框只在面板范围内模糊，遮罩和滚动列表不重复采样 */
@@ -2029,13 +2029,13 @@ html :is(.room-modal-panel, .room-feature-dialog, .mineradio-glass-panel, .miner
   .room-feature-dialog,
   .room-modal-panel.room-feature-dialog,
   .mineradio-glass-panel.room-feature-dialog {
-    background: rgb(28 31 41 / 0.82) !important;
-    backdrop-filter: blur(14px) saturate(1.12) !important;
-    -webkit-backdrop-filter: blur(14px) saturate(1.12) !important;
+    background: rgb(20 20 25 / 0.82) !important;
+    backdrop-filter: blur(14px) grayscale(1) !important;
+    -webkit-backdrop-filter: blur(14px) grayscale(1) !important;
   }
 
   .mineradio-glass-panel.room-feature-dialog {
-    background: rgb(28 31 41 / 0.91) !important;
+    background: rgb(20 20 25 / 0.91) !important;
   }
 }
 
