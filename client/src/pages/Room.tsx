@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useDeferredValue, useRef, useMemo, Suspense } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useMemo, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
 import MusicLoading from '../components/MusicLoading';
@@ -447,6 +447,8 @@ export default function Room() {
   const [roomSwitcherError, setRoomSwitcherError] = useState('');
   const [roomSwitcherRooms, setRoomSwitcherRooms] = useState<RoomSummary[]>([]);
   const roomSwitcherRef = useRef<HTMLDivElement>(null);
+  const roomSwitcherMenuRef = useRef<HTMLDivElement>(null);
+  const [roomSwitcherPos, setRoomSwitcherPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const [isPlaylistResults, setIsPlaylistResults] = useState(false);
   const [isRadioResults, setIsRadioResults] = useState(false);
   const [searchDetailOrigin, setSearchDetailOrigin] = useState<SearchDetailOrigin | null>(null);
@@ -653,10 +655,42 @@ export default function Room() {
     [roomId, roomSwitcherRooms],
   );
 
+  const computeRoomSwitcherPos = useCallback(() => {
+    const anchor = roomSwitcherRef.current;
+    if (!anchor) return null;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 12;
+    const width = Math.min(336, Math.max(240, window.innerWidth - margin * 2));
+    const left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin));
+    const top = Math.max(margin, rect.bottom + 10);
+    return { top, left, width };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!roomSwitcherOpen) {
+      setRoomSwitcherPos(null);
+      return;
+    }
+    const syncPosition = () => setRoomSwitcherPos(computeRoomSwitcherPos());
+    syncPosition();
+    const handleScroll = (event: Event) => {
+      if (event.target instanceof Node && roomSwitcherMenuRef.current?.contains(event.target)) return;
+      syncPosition();
+    };
+    window.addEventListener('resize', syncPosition);
+    window.addEventListener('scroll', handleScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('resize', syncPosition);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [roomSwitcherOpen, computeRoomSwitcherPos]);
+
   useEffect(() => {
     if (!roomSwitcherOpen) return;
     const handlePointerDown = (event: PointerEvent) => {
-      if (!roomSwitcherRef.current?.contains(event.target as Node)) setRoomSwitcherOpen(false);
+      const target = event.target as Node;
+      if (roomSwitcherRef.current?.contains(target) || roomSwitcherMenuRef.current?.contains(target)) return;
+      setRoomSwitcherOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setRoomSwitcherOpen(false);
@@ -4002,9 +4036,11 @@ export default function Room() {
                   </button>
                 </Tooltip>
 
-                {roomSwitcherOpen && (
+                {roomSwitcherOpen && roomSwitcherPos && createPortal(
                   <div
-                    className="room-switcher-menu fixed right-3 top-[calc(env(safe-area-inset-top)+8.25rem)] z-50 w-[min(21rem,calc(100vw-1.5rem))] overflow-hidden rounded-2xl border border-white/10 shadow-2xl shadow-black/40 sm:absolute sm:right-0 sm:top-[calc(100%+0.6rem)]"
+                    ref={roomSwitcherMenuRef}
+                    className="room-switcher-menu om-glass-popover fixed z-[75] overflow-hidden rounded-2xl border"
+                    style={{ top: roomSwitcherPos.top, left: roomSwitcherPos.left, width: roomSwitcherPos.width }}
                     role="menu"
                     aria-label="房间选项"
                   >
@@ -4067,7 +4103,8 @@ export default function Room() {
                         })}
                       </div>
                     )}
-                  </div>
+                  </div>,
+                  document.body,
                 )}
               </div>
 

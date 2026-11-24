@@ -32,10 +32,10 @@ export default function Toast({ message, type = 'success', onClose, duration = 3
       aria-live="polite"
     >
       <div
-        className={`animate-slide-up inline-flex max-w-[min(22rem,calc(100vw-2rem))] items-center gap-2.5 rounded-2xl px-4 py-2.5 text-sm leading-snug shadow-[0_12px_40px_rgba(0,0,0,0.55)] backdrop-blur-md [-webkit-backdrop-filter:blur(12px)] ${
+        className={`animate-slide-up inline-flex max-w-[min(22rem,calc(100vw-2rem))] items-center gap-2.5 rounded-2xl px-4 py-2.5 text-sm leading-snug ${
           isSuccess
-            ? 'border border-emerald-400/35 bg-[#101815]/82 text-emerald-100'
-            : 'border border-amber-400/40 bg-[#1a1610]/82 text-amber-50'
+            ? 'om-glass-toast-success border border-emerald-400/35 text-emerald-100'
+            : 'om-glass-toast-error border border-amber-400/40 text-amber-50'
         }`}
       >
         <span

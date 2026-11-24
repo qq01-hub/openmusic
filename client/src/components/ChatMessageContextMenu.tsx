@@ -82,7 +82,7 @@ export default function ChatMessageContextMenu({
       ref={panelRef}
       role="menu"
       aria-label="消息菜单"
-      className={`${inPanel ? 'absolute' : 'fixed'} z-[90] min-w-[9.25rem] rounded-xl border border-white/10 bg-[#141419]/82 p-1 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] animate-fade-in`}
+      className={`om-glass-popover ${inPanel ? 'absolute' : 'fixed'} z-[90] min-w-[9.25rem] rounded-xl border p-1 animate-fade-in`}
       style={{ left, top }}
       onContextMenu={(event) => event.preventDefault()}
     >

@@ -334,7 +334,7 @@ function DonationModal({ open, onClose, donations }: { open: boolean; onClose: (
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <button type="button" className="absolute inset-0 room-feature-scrim backdrop-blur-md" onClick={onClose} aria-label="关闭赞赏弹窗" />
-      <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-[#171016]/80 backdrop-blur-xl [-webkit-backdrop-filter:blur(24px)] rounded-[28px] border border-pink-300/20 shadow-[0_24px_80px_rgba(236,72,153,0.18)] p-6 sm:p-8 animate-fade-in">
+      <div className="om-glass-donation scrollbar-hide relative w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-[28px] border border-pink-300/20 p-6 sm:p-8 animate-fade-in">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 inline-flex h-9 w-9 items-center justify-center rounded-full border border-pink-300/25 bg-pink-400/15 text-pink-200">

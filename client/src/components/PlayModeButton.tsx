@@ -269,7 +269,7 @@ export default function PlayModeButton({
           role={artistEditorOpen ? 'dialog' : 'menu'}
           aria-label={artistEditorOpen ? '歌手随机设置' : '播放顺序选项'}
           tabIndex={-1}
-          className="fixed z-[230] max-h-[calc(100vh-16px)] w-[280px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border border-white/10 bg-[#141419]/82 p-1.5 text-white shadow-2xl shadow-black/40 backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] animate-fade-in"
+          className="om-glass-popover fixed z-[230] max-h-[calc(100vh-16px)] w-[280px] max-w-[calc(100vw-16px)] overflow-y-auto rounded-xl border p-1.5 text-white animate-fade-in"
           style={{ left: menuPosition.left, top: menuPosition.top }}
           onContextMenu={(event) => event.preventDefault()}
         >

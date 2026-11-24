@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useRef,
@@ -6,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Palette, RotateCcw, X } from 'lucide-react';
 import Tooltip from './Tooltip';
 import {
@@ -111,15 +113,28 @@ export default function RoomThemeColorPicker() {
   const panelRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [open, setOpen] = useState(false);
-  const [panelShiftX, setPanelShiftX] = useState(0);
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number } | null>(null);
   const [hsv, setHsv] = useState<HsvColor>(() => rgbToHsv(hexToThemeRgb(readRoomThemeColor())));
   const rgb = hsvToRgb(hsv);
   const color = themeRgbToHex(rgb);
 
+  const computePanelPos = useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return null;
+    const rect = root.getBoundingClientRect();
+    const panelWidth = WHEEL_SIZE + 24;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(rect.right - panelWidth, window.innerWidth - panelWidth - margin));
+    const top = Math.max(margin, rect.bottom + 8);
+    return { top, left };
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     const closeOnOutside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !rootRef.current?.contains(event.target)) setOpen(false);
+      if (!(event.target instanceof Node)) return;
+      if (rootRef.current?.contains(event.target) || panelRef.current?.contains(event.target)) return;
+      setOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
@@ -132,26 +147,30 @@ export default function RoomThemeColorPicker() {
     };
   }, [open]);
 
+  const panelReady = Boolean(panelPos);
   useEffect(() => {
-    if (!open || !canvasRef.current) return;
+    if (!open || !panelReady || !canvasRef.current) return;
     drawColorWheel(canvasRef.current, 1);
-  }, [open]);
+  }, [open, panelReady]);
 
-  // 手机上按钮靠屏幕边缘时，右对齐弹层会伸出视口外，测量后平移回可视区域
   useLayoutEffect(() => {
     if (!open) {
-      setPanelShiftX(0);
+      setPanelPos(null);
       return;
     }
-    const panel = panelRef.current;
-    if (!panel) return;
-    const margin = 8;
-    const rect = panel.getBoundingClientRect();
-    let delta = 0;
-    if (rect.left < margin) delta = margin - rect.left;
-    else if (rect.right > window.innerWidth - margin) delta = window.innerWidth - margin - rect.right;
-    if (delta) setPanelShiftX(delta);
-  }, [open]);
+    const syncPosition = () => setPanelPos(computePanelPos());
+    syncPosition();
+    const handleScroll = (event: Event) => {
+      if (event.target instanceof Node && panelRef.current?.contains(event.target)) return;
+      syncPosition();
+    };
+    window.addEventListener('resize', syncPosition);
+    window.addEventListener('scroll', handleScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('resize', syncPosition);
+      window.removeEventListener('scroll', handleScroll, true);
+    };
+  }, [open, computePanelPos]);
 
   const updateColor = (next: HsvColor) => {
     setHsv(next);
@@ -214,11 +233,11 @@ export default function RoomThemeColorPicker() {
         </button>
       </Tooltip>
 
-      {open && (
+      {open && panelPos && createPortal(
         <div
           ref={panelRef}
-          className="absolute right-0 top-[calc(100%+8px)] z-[100] w-[calc(220px+1.5rem)] rounded-2xl border border-white/10 bg-[#141419]/84 py-3 shadow-2xl shadow-black/50 backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]"
-          style={panelShiftX ? { transform: `translateX(${panelShiftX}px)` } : undefined}
+          className="om-glass-popover fixed z-[75] max-h-[calc(100dvh-16px)] w-[calc(220px+1.5rem)] overflow-y-auto rounded-2xl border py-3"
+          style={{ top: panelPos.top, left: panelPos.left }}
         >
           <div className="mb-2 flex items-center justify-between px-3">
             <h2 className="text-sm font-medium text-white">房间主题色</h2>
@@ -293,7 +312,8 @@ export default function RoomThemeColorPicker() {
               恢复默认红色
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

@@ -54,7 +54,7 @@ export default function PlaylistChannelFilter({ value, onChange }: Props) {
         <div
           role="listbox"
           aria-label="歌单渠道筛选"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[8rem] rounded-xl border border-white/10 bg-[#141419]/84 backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] shadow-xl py-1 animate-fade-in"
+          className="om-glass-popover absolute right-0 top-full z-50 mt-1 min-w-[8rem] rounded-xl border py-1 animate-fade-in"
         >
           {OPTIONS.map((opt, i) => (
             <div key={opt.value}>

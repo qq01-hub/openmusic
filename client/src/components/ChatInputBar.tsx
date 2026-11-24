@@ -739,13 +739,13 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
     <div className="fixed inset-0 z-[80]">
       <button
         type="button"
-        className="absolute inset-0 room-feature-scrim"
+        className="room-feature-scrim absolute inset-0"
         onClick={() => setShowEmoji(false)}
         aria-label="关闭表情"
       />
       <div
         ref={emojiPickerPortalRef}
-        className={`room-feature-dialog absolute inset-x-0 bottom-0 flex flex-col rounded-t-2xl border-t border-netease-border/70 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] shadow-2xl ${emojiPickerTab === 'search' ? '' : emojiPickerTab === 'wechat' ? 'h-[min(68vh,480px)]' : 'max-h-[min(68vh,480px)]'}`}
+        className={`room-feature-dialog absolute inset-x-0 bottom-0 flex flex-col rounded-t-2xl border-t border-white/15 p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] shadow-2xl ${emojiPickerTab === 'search' ? '' : emojiPickerTab === 'wechat' ? 'h-[min(68vh,480px)]' : 'max-h-[min(68vh,480px)]'}`}
         style={emojiPickerTab === 'search' ? { height: STICKER_SEARCH_PICKER_HEIGHT } : undefined}
       >
         {renderEmojiPickerContent('grid min-h-0 flex-1 grid-cols-8 gap-0.5 overflow-y-auto overscroll-contain px-0.5 py-0.5')}
@@ -827,7 +827,7 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
           />
           {showEmoji && !isMobileLayout && (
             <div
-              className={`absolute bottom-full left-0 z-20 mb-2 box-border flex w-full max-w-full flex-col rounded-2xl border border-netease-border/70 bg-[#141419]/86 p-2 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] ${emojiPickerTab === 'search' ? '' : emojiPickerTab === 'wechat' ? 'h-80' : 'max-h-80'}`}
+              className={`om-glass-popover absolute bottom-full left-0 z-20 mb-2 box-border flex w-full max-w-full flex-col rounded-2xl border p-2 ${emojiPickerTab === 'search' ? '' : emojiPickerTab === 'wechat' ? 'h-80' : 'max-h-80'}`}
               style={emojiPickerTab === 'search' ? { height: STICKER_SEARCH_PICKER_HEIGHT } : undefined}
             >
               {renderEmojiPickerContent('grid max-h-64 grid-cols-8 gap-0.5 overflow-y-auto overscroll-contain px-0.5 py-0.5')}
@@ -859,7 +859,7 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
           )}
           <div className="relative min-w-0 flex-1">
             {showSlashPicker && slashOptions.length > 0 && (
-              <div className="absolute bottom-full left-0 z-20 mb-2 box-border flex max-h-[min(70vh,32rem)] w-full max-w-full flex-col overflow-hidden rounded-2xl border border-netease-border/70 bg-[#141419]/86 p-1.5 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]">
+              <div className="om-glass-popover absolute bottom-full left-0 z-20 mb-2 box-border flex max-h-[min(70vh,32rem)] w-full max-w-full flex-col overflow-hidden rounded-2xl border p-1.5">
                 <p className="px-2 py-1 text-[10px] text-netease-muted/80">
                   {roomAi?.botName ? `${roomAi.botName} · 命令` : 'AI 命令'}
                 </p>
@@ -882,7 +882,7 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
               </div>
             )}
             {showMentionPicker && (
-              <div className="absolute bottom-full left-0 z-20 mb-2 w-56 overflow-hidden rounded-2xl border border-netease-border/70 bg-[#141419]/86 p-1.5 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]">
+              <div className="om-glass-popover absolute bottom-full left-0 z-20 mb-2 w-56 overflow-hidden rounded-2xl border p-1.5">
                 {mentionOptions.map((option, index) => (
                   option.type === 'all' ? (
                     <button

@@ -37,15 +37,17 @@
   line-height: 1.5;
   color: var(--om-text);
   background: var(--om-surface-raised);
-  border: 1px solid var(--om-border-strong);
-  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 20px 50px rgba(0, 0, 0, 0.56),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.09);
 }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .room-desk-pet [data-desk-pet-menu="true"] {
-    background: rgb(20 20 25 / 0.84);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    background: rgba(18, 18, 21, 0.78);
+    backdrop-filter: blur(36px) saturate(1.45);
+    -webkit-backdrop-filter: blur(36px) saturate(1.45);
   }
 }
 

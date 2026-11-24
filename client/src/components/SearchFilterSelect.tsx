@@ -77,7 +77,7 @@ export default function SearchFilterSelect({
         <div
           role="listbox"
           aria-label="搜索结果筛选"
-          className="absolute right-0 top-full z-50 mt-1 min-w-[9.5rem] rounded-xl border border-white/10 bg-[#141419]/84 backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] shadow-xl py-1 animate-fade-in"
+          className="om-glass-popover absolute right-0 top-full z-50 mt-1 min-w-[9.5rem] rounded-xl border py-1 animate-fade-in"
         >
           {options.map((opt, i) => (
             <div key={opt.value}>

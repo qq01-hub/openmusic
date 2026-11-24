@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, Clock, Crown, Image, MapPin, Pencil, Shield, Upload, UserMinus, Users, X } from "lucide-react";
 import { useRoomStore } from "../stores/roomStore";
 import Modal from "./Modal";
@@ -65,7 +66,9 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
 
   const getUserAvatar = (userId: string) => {
     if (userId === mySocketId) return resolveRoomAvatarUrl(avatar_url, userAvatarUrls[userId]);
@@ -126,20 +129,62 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
     setPage((current) => open ? Math.min(current, totalPages) : 1);
   }, [open, totalPages]);
 
+  const computeDropdownPos = useCallback(() => {
+    const anchor = panelRef.current;
+    if (!anchor) return null;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const width = Math.min(288, Math.max(220, window.innerWidth - margin * 2));
+    const left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin));
+    const top = Math.max(margin, rect.bottom + 8);
+    const maxHeight = Math.max(220, window.innerHeight - top - 12);
+    return { top, left, width, maxHeight };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setDropdownPos(null);
+      return;
+    }
+    const syncPosition = () => setDropdownPos(computeDropdownPos());
+    syncPosition();
+    const handleScroll = (event: Event) => {
+      if (event.target instanceof Node && dropdownRef.current?.contains(event.target)) return;
+      syncPosition();
+    };
+    window.addEventListener("resize", syncPosition);
+    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener("resize", syncPosition);
+      window.removeEventListener("scroll", handleScroll, true);
+    };
+  }, [open, computeDropdownPos]);
+
   useEffect(() => {
     if (!open) return;
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (panelRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setOpen(false);
+      setEditing(false);
+      setError("");
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || pendingAction || showAvatarModal || previewAvatarUrl) return;
       setOpen(false);
       setEditing(false);
       setError("");
     };
 
     document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, pendingAction, showAvatarModal, previewAvatarUrl]);
 
   useEffect(() => {
     setDraftName(nickname);
@@ -329,7 +374,7 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
           <Users className="h-3.5 w-3.5 shrink-0" />
           <div className="flex -space-x-2">
             {orderedUsers.slice(0, 5).map((user) => (
-              <Tooltip key={user.id} content={user.id === creatorId ? `${user.nickname}（房主）` : user.nickname} side="bottom">
+              <Tooltip key={user.id} content={user.id === creatorId ? `${user.nickname}（房主）` : user.nickname} side="bottom" disabled={open}>
                 <div
                   className={`relative w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white border-2 border-netease-dark ${
                     getUserAvatar(user.id)
@@ -360,8 +405,12 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
         </button>
       </Tooltip>
 
-      {open && (
-        <div className="absolute right-0 top-full mt-2 w-72 rounded-2xl border border-netease-border/70 bg-[#141419]/84 p-3 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] z-30">
+      {open && dropdownPos && createPortal(
+        <div
+          ref={dropdownRef}
+          className="om-glass-popover fixed z-[75] flex flex-col rounded-2xl border p-3"
+          style={{ top: dropdownPos.top, left: dropdownPos.left, width: dropdownPos.width, maxHeight: dropdownPos.maxHeight }}
+        >
           <div className="mb-2 flex items-center justify-between">
             <div>
               <h3 className="text-sm font-medium text-white">房间用户</h3>
@@ -380,7 +429,7 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
             </button>
           </div>
 
-          <div ref={listRef} className="max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
+          <div ref={listRef} className="min-h-0 flex-1 max-h-80 space-y-1.5 overflow-y-auto pr-0.5">
             {pagedUsers.map((user) => {
               const isMe = user.id === mySocketId;
               const isRoomCreator = Boolean(creatorId && user.id === creatorId);
@@ -587,7 +636,8 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
             </div>
           )}
           {error && <p className="mt-2 text-xs text-netease-red">{error}</p>}
-        </div>
+        </div>,
+        document.body,
       )}
 
       {pendingAction?.type === "kick" && (

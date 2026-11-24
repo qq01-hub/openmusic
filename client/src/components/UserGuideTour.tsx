@@ -350,7 +350,7 @@ export default function UserGuideTour({ scope, paused = false, delayMs = 700 }: 
       <div
         ref={popoverRef}
         style={tipPlacement.style}
-        className="pointer-events-auto z-[321] flex max-h-[calc(100dvh-24px)] max-w-[min(380px,calc(100vw-24px))] animate-fade-in flex-col overflow-hidden rounded-2xl border border-white/12 bg-[#141419]/82 shadow-2xl shadow-black/50 backdrop-blur-xl [-webkit-backdrop-filter:blur(24px)]"
+        className="om-glass-popover pointer-events-auto z-[321] flex max-h-[calc(100dvh-24px)] max-w-[min(380px,calc(100vw-24px))] animate-fade-in flex-col overflow-hidden rounded-2xl border"
         onClick={stopBubble}
         onMouseDown={stopBubble}
       >
