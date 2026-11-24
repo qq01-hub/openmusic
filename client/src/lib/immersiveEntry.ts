@@ -187,7 +187,7 @@ export async function reloadImmersiveTrackProxy(song: QueueItem): Promise<void> 
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
   });
   try {
-    await resolveSongUrl(song, { refresh: true });
+    await resolveSongUrl(song);
   } catch (error) {
     console.warn('沉浸模式音频预加载失败，将由播放器继续恢复', error);
     return;

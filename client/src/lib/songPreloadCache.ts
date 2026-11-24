@@ -420,6 +420,7 @@ export function clearSongUrlCache() {
 /** 清除指定曲目的全部 URL 缓存（含 proxy/direct、各音质档） */
 export function invalidateTrackUrlCache(song: Pick<QueueItem, 'queueId' | 'id' | 'source'>) {
   const prefix = trackKeyOf(song);
+  const identityPrefix = `${songSourceOf(song)}:${song.id}:`;
   let changed = false;
 
   for (const key of [...urlCache.keys()]) {
@@ -429,11 +430,15 @@ export function invalidateTrackUrlCache(song: Pick<QueueItem, 'queueId' | 'id' |
     }
   }
 
-  for (const key of identityUrlCache.keys()) {
-    if (key.startsWith(`${song.source || 'netease'}:${song.id}:`)) identityUrlCache.delete(key);
+  for (const key of [...identityUrlCache.keys()]) {
+    if (key.startsWith(identityPrefix)) identityUrlCache.delete(key);
+  }
+  for (const key of [...pendingFetches.keys()]) {
+    if (key === prefix || key.startsWith(`${prefix}:`) || key.startsWith(identityPrefix)) {
+      pendingFetches.delete(key);
+    }
   }
   if (changed) {
-    pendingFetches.clear();
     persistUrlCacheToStorage();
   }
 }
@@ -505,13 +510,6 @@ async function fetchSongUrlOnce(
         urlCache.delete(key);
         persistUrlCacheToStorage();
       } else if (isBlockedPlaybackUrl(cached.url)) {
-        urlCache.delete(key);
-        persistUrlCacheToStorage();
-      } else if (
-        !cached.qualityLabel
-        && songSourceOf(song) !== 'kugou'
-      ) {
-        // 旧缓存没有实际音质字段，强制重取以拿到 type=url 的 quality
         urlCache.delete(key);
         persistUrlCacheToStorage();
       } else {

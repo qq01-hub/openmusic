@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMetingResponseCache } from './metingCache.js';
-import { __test as metingUpstreamTest, runWithMetingRequestContext } from './metingUpstream.js';
+import { __test as metingUpstreamTest, invalidateMetingUrlCache, runWithMetingRequestContext } from './metingUpstream.js';
 
 test('搜索联想的 Meting 500 不写后台错误记录，但保留失败计数和冷却', () => {
   const upstream = { failCount: 0, recentErrors: [], lastError: '已有错误', lastErrorAt: 1 };
@@ -105,4 +105,35 @@ test('歌曲 URL 缓存键区分不同音质', () => {
   );
 
   assert.notEqual(standard, high);
+});
+
+test('缓存支持按条件淘汰单曲 URL，不影响同曲歌词及其他歌曲缓存', () => {
+  const cache = metingUpstreamTest.metingResponseCache;
+  cache.clear();
+  const targetStandard = runWithMetingRequestContext(
+    { roomId: 'ROOM1' },
+    () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'url', id: '21038564', quality: 'standard' }, {}),
+  );
+  const targetLossless = runWithMetingRequestContext(
+    { roomId: 'ROOM2' },
+    () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'url', id: '21038564', quality: 'lossless' }, {}),
+  );
+  const targetLyrics = runWithMetingRequestContext(
+    { roomId: 'ROOM1' },
+    () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'lrc', id: '21038564' }, {}),
+  );
+  const otherSongUrl = runWithMetingRequestContext(
+    { roomId: 'ROOM1' },
+    () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'url', id: '999999', quality: 'standard' }, {}),
+  );
+
+  cache.set(targetStandard, { status: 200, body: '{"url":"https://cdn.example/1.mp3"}' }, 60_000);
+  cache.set(targetLossless, { status: 200, body: '{"url":"https://cdn.example/2.flac"}' }, 60_000);
+  cache.set(targetLyrics, { status: 200, body: '[00:00.00]test' }, 60_000);
+  cache.set(otherSongUrl, { status: 200, body: '{"url":"https://cdn.example/other.mp3"}' }, 60_000);
+
+  const removed = invalidateMetingUrlCache('netease', '21038564');
+  assert.equal(removed, 2);
+  assert.equal(cache.size(), 2);
+  cache.clear();
 });

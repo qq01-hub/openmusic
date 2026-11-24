@@ -3,8 +3,8 @@ import { Space, Tag } from 'antd';
 import { formatAuditTime } from './utils';
 
 export type AccountStatus = 'normal' | 'watch' | 'blocked';
-export type Policy = { minuteLimit: number; dayLimit: number; musicMinuteLimit: number; musicDayLimit: number; ipMinuteLimit: number; urlMinuteLimit: number; urlBurstLimit: number };
-export type Decision = { status: AccountStatus; tags: string[]; note: string; reason: string };
+export type Policy = { minuteLimit: number; dayLimit: number; musicMinuteLimit: number; musicDayLimit: number; ipMinuteLimit: number; ipUrlMinuteLimit: number; urlMinuteLimit: number; urlBurstLimit: number };
+export type Decision = { status: AccountStatus; durationMinutes?: number; blockedUntil?: number; tags: string[]; note: string; reason: string };
 export type Identity = { provider: string; username: string; subjectHint: string; linkedAt: number };
 export type Factor = { id: string; label: string; value: number; points: number; threshold?: number; maxPoints?: number; matched?: boolean; window?: string; category?: string };
 export type HumanChallengeState = { pending: boolean; day: string; triggers: number; passes: number; triggerTotal: number; passTotal: number; bypass: boolean; bypassReason: string; lastTriggeredAt: number; lastVerifiedAt: number; cooldownUntil: number; dailyLimit: number };
@@ -47,17 +47,25 @@ export type AccountDetail = RiskAccount & {
   rooms: { roomId: string; roomName: string; nickname: string; joins: number; firstSeenAt: number; lastSeenAt: number; ip: string; readOnly: boolean }[];
   clients: { userAgent: string; lastSeenAt: number }[];
   nicknames: { name: string; lastSeenAt: number }[];
-  decisions: { at: number; previousStatus: AccountStatus; status: AccountStatus; reason: string }[];
+  decisions: { at: number; previousStatus: AccountStatus; status: AccountStatus; reason: string; blockedUntil?: number; auto?: boolean }[];
 };
 export type RiskPage = { items: RiskAccount[]; total: number; high: number; blocked: number; generatedAt: number };
 export type RiskEvent = { at: number; ip: string; accountId?: string; accountHash?: string; code: string; kind?: string };
 
-export const STATUS_OPTIONS = [{ value: 'normal', label: '正常' }, { value: 'watch', label: '关注' }, { value: 'blocked', label: '限制访问' }];
+export const STATUS_OPTIONS = [{ value: 'normal', label: '正常' }, { value: 'watch', label: '关注（音乐额度减半）' }, { value: 'blocked', label: '限制访问' }];
+export const BLOCK_DURATION_OPTIONS = [
+  { value: 0, label: '永久限制（需人工解除）' },
+  { value: 15, label: '临时限制 15 分钟' },
+  { value: 60, label: '临时限制 1 小时' },
+  { value: 360, label: '临时限制 6 小时' },
+  { value: 1440, label: '临时限制 24 小时' },
+  { value: 10080, label: '临时限制 7 天' },
+];
 export const PROVIDERS: Record<string, string> = { email: '邮箱', github: 'GitHub', linuxdo: 'Linux.do', wechat: '微信文件传输助手登录' };
-export const POLICY_LABELS: Record<keyof Policy, string> = { minuteLimit: '账户每分钟总请求', dayLimit: '账户每日总请求', musicMinuteLimit: '账户每分钟音乐请求', musicDayLimit: '账户每日音乐请求', ipMinuteLimit: '同 IP 每分钟总请求', urlMinuteLimit: '账户每分钟取链', urlBurstLimit: '取链突发容量（10秒补满）' };
+export const POLICY_LABELS: Record<keyof Policy, string> = { minuteLimit: '账户每分钟总请求', dayLimit: '账户每日总请求', musicMinuteLimit: '账户每分钟音乐请求', musicDayLimit: '账户每日音乐请求', ipMinuteLimit: '同 IP 每分钟总请求', ipUrlMinuteLimit: '同 IP 每分钟取链', urlMinuteLimit: '账户每分钟取链', urlBurstLimit: '取链突发容量（10秒补满）' };
 export const time = (value: number) => value ? formatAuditTime(value) : '未记录';
 export const count = (value: number | string | undefined) => Number(value || 0).toLocaleString('zh-CN');
-export const statusLabel = (status: AccountStatus) => STATUS_OPTIONS.find(entry => entry.value === status)?.label || status;
+export const statusLabel = (status: AccountStatus) => status === 'watch' ? '关注' : status === 'blocked' ? '限制访问' : status === 'normal' ? '正常' : status;
 export const statusColor = (status: AccountStatus) => status === 'blocked' ? 'red' : status === 'watch' ? 'orange' : 'green';
 export const riskColor = (score: number) => score >= 60 ? 'red' : score >= 30 ? 'orange' : 'green';
 export const riskLabel = (score: number) => score >= 60 ? '高风险' : score >= 30 ? '待关注' : '低风险';

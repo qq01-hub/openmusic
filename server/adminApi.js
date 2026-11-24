@@ -972,7 +972,7 @@ export function mountAdminApi(app, {
   }));
   app.put('/api/admin/risk/accounts/:id', requireAdminOrigin, requireAdmin, requireAdminSetupComplete, riskHandler(async (req, res) => {
     const decision = await riskControl.setDecision(req.params.id, req.body);
-    appendAdminAudit('risk_account_update', { accountId: req.params.id, status: decision.status, tags: decision.tags, reason: decision.reason }, getClientIp?.(req) || req.ip || '');
+    appendAdminAudit('risk_account_update', { accountId: req.params.id, status: decision.status, blockedUntil: decision.blockedUntil || 0, tags: decision.tags, reason: decision.reason }, getClientIp?.(req) || req.ip || '');
     if (decision.status === 'blocked') {
       io.to(`account:${req.params.id}`).emit('account_session_invalidated', { reason: 'risk_blocked', stopReconnect: true });
       io.in(`account:${req.params.id}`).disconnectSockets(true);

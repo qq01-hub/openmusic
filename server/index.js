@@ -619,6 +619,7 @@ app.use(createAccountAccessMiddleware({
   metric: incrementMetric,
   onHumanChallenge: suspendAccountSocketsForHumanChallenge,
   resolveAnonymous: resolveAnonymousAccount,
+  hasRoomPresence: userId => Boolean(findUserRoomPresence(userId)),
 }));
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = 10000) {
@@ -1986,6 +1987,7 @@ app.get('/api/media-proxy', async (req, res) => {
 
   const raw = String(req.query.url || '').trim();
   const thumbPx = Math.min(2048, Math.max(0, parseInt(String(req.query.size || ''), 10) || 0));
+  const imageOnly = Boolean(req.mediaProxyImageOnly || isMediaProxyCoverRequest(req));
   let fetchUrl = raw;
   let parsed;
   try {
@@ -2018,7 +2020,12 @@ app.get('/api/media-proxy', async (req, res) => {
   };
 
   try {
-    if (parseMetingMediaQuery(raw)) {
+    const metingQuery = isMetingApiHostname(parsed.hostname) ? parseMetingMediaQuery(raw) : null;
+    if (metingQuery?.type === 'url') {
+      return res.status(403).json({ error: '请通过歌曲播放接口获取音频地址', code: 'MEDIA_PROXY_METING_URL_DENIED' });
+    }
+    const enforceImageOnly = imageOnly || metingQuery?.type === 'pic';
+    if (metingQuery?.type === 'pic') {
       fetchUrl = await runWithMetingRequestContext(
         metingCtx,
         () => resolveMediaProxyFetchUrl(raw, thumbPx),
@@ -2049,6 +2056,7 @@ app.get('/api/media-proxy', async (req, res) => {
       range: req.headers.range,
       ifRange: req.headers['if-range'],
       thumbPx,
+      imageOnly: enforceImageOnly,
       requireAllowlist: true,
     });
   } catch (err) {
@@ -4652,12 +4660,12 @@ function suspendAccountSocketsForHumanChallenge(accountId) {
   sockets.disconnectSockets(true);
 }
 
-async function verifySocketAccountSession(socket) {
+async function verifySocketAccountSession(socket, { skipRiskCheck = false } = {}) {
   try {
     if (socket.data.anonymous) {
       const account = await resolveAnonymousAccount({ headers: socket.handshake?.headers || {} });
       if (!account || account.id !== socket.data.accountId) return { valid: false };
-      await riskControl.assertAllowed(account.id, { human: true });
+      if (!skipRiskCheck) await riskControl.assertAllowed(account.id, { human: true });
       return { valid: true, account };
     }
     const key = socketToAccountSessionKey.get(socket.id);
@@ -4666,7 +4674,7 @@ async function verifySocketAccountSession(socket) {
     if (!token || accountSessionSocketKey(token) !== key) return { valid: false };
     const account = await resolveAccountSession(token);
     if (!account || account.id !== socket.data.accountId) return { valid: false };
-    await riskControl.assertAllowed(account.id, { human: true });
+    if (!skipRiskCheck) await riskControl.assertAllowed(account.id, { human: true });
     return { valid: true, account };
   } catch (error) {
     if (error.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') return { valid: false, humanRequired: true };
@@ -5203,7 +5211,7 @@ io.use(async (socket, next) => {
       error.data = { code: 'ACCOUNT_AUTH_REQUIRED' };
       return next(error);
     }
-    await verifyAccountDeviceRequest(resolveAccountSessionToken({ headers: socket.handshake.headers }), { method: 'SOCKET', originalUrl: '/socket.io', headers: { 'x-openmusic-device': socket.handshake.auth?.deviceProof } }, { session, ip: getClientIp(socket) });
+    const verifiedDevice = await verifyAccountDeviceRequest(resolveAccountSessionToken({ headers: socket.handshake.headers }), { method: 'SOCKET', originalUrl: '/socket.io', headers: { 'x-openmusic-device': socket.handshake.auth?.deviceProof } }, { session, ip: getClientIp(socket) });
     await riskControl.assertAllowed(account.id, { human: true });
     const identity = resolveIdentityFromCookies(socket.handshake.headers.cookie || '');
     const roomUserId = account.roomUserId || await ensureRoomUserId(account.id);
@@ -5211,6 +5219,8 @@ io.use(async (socket, next) => {
     socket.join(`account-session:${session.sessionId}`);
     socket.data.accountId = account.id;
     socket.data.accountExpiresAt = session.expiresAt;
+    socket.data.deviceMigrationRequired = Boolean(session.deviceMigrationRequired);
+    socket.data.sessionShared = Boolean(verifiedDevice?.sessionShared);
     next();
   } catch (cause) {
     incrementMetric('account_socket_rejected_total', { reason: cause.code || 'storage' });
@@ -5227,7 +5237,7 @@ io.on('connection', (socket) => {
 
   socket.use(async (packet, proceed) => {
     const next = () => runWithMetingRequestContext({ accountId: socket.data.accountId }, proceed);
-    const session = await verifySocketAccountSession(socket);
+    const session = await verifySocketAccountSession(socket, { skipRiskCheck: true });
     if (!session.valid) {
       const callback = typeof packet?.[packet.length - 1] === 'function'
         ? packet[packet.length - 1]
@@ -5244,9 +5254,15 @@ io.on('connection', (socket) => {
     const event = String(packet?.[0] || '');
     try {
       const ip = getClientIpFromHeaders(socket.handshake.headers, socket.handshake.address);
-      const music = ['skip_song', 'finish_song', 'music_account_qr_create', 'music_account_qr_check', 'music_account_bind', 'set_room_fm_mode', 'set_room_playlist_roaming'].includes(event);
+      const music = ['add_song', 'add_songs', 'skip_song', 'music_account_qr_create', 'music_account_qr_check', 'music_account_bind', 'set_room_fm_mode', 'set_room_playlist_roaming'].includes(event);
       const operation = event.startsWith('music_account_qr') ? 'qr' : 'queue';
-      const result = await riskControl.consume(session.account, { ip, kind: 'socket', operation: music ? operation : '', eventName: event, music, userAgent: socket.handshake.headers['user-agent'] || '' });
+      const result = await riskControl.consume(session.account, {
+        ip, kind: 'socket', operation: music ? operation : '', eventName: event, music,
+        userAgent: socket.handshake.headers['user-agent'] || '',
+        inRoom: Boolean(socketToRoom.get(socket.id)),
+        legacyUnbound: Boolean(socket.data.deviceMigrationRequired),
+        sessionShared: Boolean(socket.data.sessionShared),
+      });
       incrementMetric('account_request_total', { kind: 'socket', outcome: result.allowed ? 'allowed' : result.code });
       if (!result.allowed) {
         const callback = typeof packet?.[packet.length - 1] === 'function' ? packet[packet.length - 1] : null;

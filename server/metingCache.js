@@ -56,6 +56,39 @@ export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, s
 
   return {
     get,
+    set(key, value, requestedTtlMs = ttlMs) {
+      const cacheKey = String(key);
+      const effectiveTtlMs = Math.max(0, Number(requestedTtlMs) || 0);
+      if (effectiveTtlMs <= 0 || !shouldCache(value)) {
+        values.delete(cacheKey);
+        return false;
+      }
+      values.delete(cacheKey);
+      values.set(cacheKey, { value, expiresAt: Date.now() + effectiveTtlMs });
+      prune();
+      return true;
+    },
+    delete(key) {
+      const cacheKey = String(key);
+      inflight.delete(cacheKey);
+      return values.delete(cacheKey);
+    },
+    deleteWhere(predicate) {
+      if (typeof predicate !== 'function') return 0;
+      let removed = 0;
+      for (const key of [...values.keys()]) {
+        if (predicate(key)) {
+          values.delete(key);
+          removed += 1;
+        }
+      }
+      for (const key of [...inflight.keys()]) {
+        if (predicate(key)) {
+          inflight.delete(key);
+        }
+      }
+      return removed;
+    },
     clear() {
       values.clear();
       inflight.clear();

@@ -333,8 +333,9 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
       keys: [familyKey(current.sessionId), proofKey(current.sessionId), activityKey(current.sessionId), networkKey(current.sessionId)],
       arguments: [String(now()), proof.nonce, String(proof.timestamp + 60001), isIP(ip) ? ip : ''],
     }));
-    if (Number(result) !== 1) throw new DeviceProofError(Number(result) === -2 ? 'ACCOUNT_DEVICE_RATE_LIMITED' : 'ACCOUNT_DEVICE_PROOF_REPLAY', Number(result) === -2 ? 429 : 401);
-    return current;
+    const proofStatus = Number(result);
+    if (proofStatus !== 1 && proofStatus !== 2) throw new DeviceProofError(proofStatus === -2 ? 'ACCOUNT_DEVICE_RATE_LIMITED' : 'ACCOUNT_DEVICE_PROOF_REPLAY', proofStatus === -2 ? 429 : 401);
+    return proofStatus === 2 ? { ...current, sessionShared: true } : current;
   }
 
   async function listSessions(userId) {

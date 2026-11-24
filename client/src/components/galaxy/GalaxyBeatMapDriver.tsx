@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
-import { getSongUrl } from '../../api/music';
 import type { QueueItem } from '../../types';
 import { getSharedAudio } from '../../lib/audioElement';
-import { isProxiedMediaUrl, isSameOriginMediaUrl } from '../../lib/mediaProxyUrl';
+import { isAudioBoundToQueue } from '../../lib/audioTrackBinding';
+import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../../lib/mediaProxyUrl';
 import {
   bindBeatMapToSong,
   cancelBeatMapAnalysis,
@@ -15,23 +15,31 @@ interface Props {
   isPlaying: boolean;
 }
 
-function currentAnalyzableAudioUrl(): string | null {
+function resolveAnalyzableAudioUrl(queueId: string, source: string | undefined): string | null {
   const audio = getSharedAudio();
+  if (!isAudioBoundToQueue(audio, queueId)) return null;
   const src = audio.currentSrc || audio.src || '';
   if (!src) return null;
-  // blob:（汽水解密结果）与同源/代理地址均可离线分析；外链直链会 CORS 失败
   if (src.startsWith('blob:') || isProxiedMediaUrl(src) || isSameOriginMediaUrl(src)) return src;
+  if ((source || 'netease') === 'qishui') return null;
+  if (/^https?:\/\//i.test(src)) {
+    return toProxiedMediaUrl(src) || null;
+  }
   return null;
 }
 
 /** 绑定当前曲目并后台分析离线 BeatMap */
 export default function GalaxyBeatMapDriver({ song, isPlaying }: Props) {
   const lastQueueIdRef = useRef<string | null>(null);
+  const attachedQueueIdRef = useRef<string | null>(null);
+  const queueId = song?.queueId ?? null;
+  const songId = song?.id ?? null;
+  const songSource = song?.source ?? 'netease';
 
   useEffect(() => {
-    const queueId = song?.queueId ?? null;
-    if (!queueId) {
+    if (!queueId || !songId) {
       lastQueueIdRef.current = null;
+      attachedQueueIdRef.current = null;
       cancelBeatMapAnalysis();
       resetGalaxyBeatMapState();
       return;
@@ -39,42 +47,39 @@ export default function GalaxyBeatMapDriver({ song, isPlaying }: Props) {
 
     if (lastQueueIdRef.current !== queueId) {
       lastQueueIdRef.current = queueId;
+      attachedQueueIdRef.current = null;
       resetGalaxyAudioVisualStateForSongChange();
       resetGalaxyBeatMapState(true);
     }
 
-    let cancelled = false;
+    const songRef = { queueId, id: songId, source: songSource };
 
-    const attach = async () => {
-      let audioUrl = currentAnalyzableAudioUrl();
-      // 汽水只能等本地解密后的 blob:；禁止 getSongUrl(proxy:true) 把解密打回服务器
-      if (!audioUrl && song && (song.source || 'netease') !== 'qishui') {
-        try {
-          audioUrl = await getSongUrl(song, undefined, { proxy: true });
-        } catch {
-          audioUrl = null;
-        }
+    const attach = () => {
+      if (attachedQueueIdRef.current === queueId && isPlaying) return;
+      const audioUrl = resolveAnalyzableAudioUrl(queueId, songSource);
+      if (audioUrl && isPlaying) {
+        attachedQueueIdRef.current = queueId;
       }
-      if (cancelled) return;
-      bindBeatMapToSong(song, audioUrl, isPlaying);
+      bindBeatMapToSong(songRef, audioUrl, isPlaying);
     };
 
-    void attach();
+    attach();
 
     const audio = getSharedAudio();
     const onAudioReady = () => {
-      if (cancelled || !isPlaying) return;
-      void attach();
+      if (!isPlaying) return;
+      attach();
     };
     audio.addEventListener('loadeddata', onAudioReady);
     audio.addEventListener('canplay', onAudioReady);
+    audio.addEventListener('playing', onAudioReady);
 
     return () => {
-      cancelled = true;
       audio.removeEventListener('loadeddata', onAudioReady);
       audio.removeEventListener('canplay', onAudioReady);
+      audio.removeEventListener('playing', onAudioReady);
     };
-  }, [song, isPlaying]);
+  }, [queueId, songId, songSource, isPlaying]);
 
   useEffect(() => () => cancelBeatMapAnalysis(), []);
 

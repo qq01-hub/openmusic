@@ -4,7 +4,7 @@ import { MusicResponseSummary } from './RiskMusicResponses';
 import { useState } from 'react';
 import RiskProfileOverview from './RiskProfileOverview';
 import { Alert, App, Button, Collapse, Descriptions, Empty, Form, Input, Modal, Select, Space, Table, Tabs, Tag, Switch } from 'antd';
-import { count, hasDailyActivity, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
+import { BLOCK_DURATION_OPTIONS, count, hasDailyActivity, POLICY_LABELS, PROVIDERS, riskColor, riskLabel, RiskSection, STATUS_OPTIONS, statusColor, statusLabel, time, type AccountDetail, type Day, type Decision, type Policy, type HumanChallengeState } from './riskControlShared';
 import RiskErrorBreakdown from './RiskErrorBreakdown';
 
 const SOCKET_EVENTS: Record<string, string> = {
@@ -147,19 +147,23 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
     else setActiveTab(tab === 'requests' ? 'overview' : tab);
   };
   const confirmDecision = (values: Decision) => {
+    const durationLabel = values.status === 'blocked'
+      ? (BLOCK_DURATION_OPTIONS.find(option => option.value === (values.durationMinutes || 0))?.label || `临时限制 ${values.durationMinutes} 分钟`)
+      : '';
     modal.confirm({
       title: `确认将账户设为「${statusLabel(values.status)}」？`,
       content: (
         <div className="risk-wrap">
           <p>{detail.displayName || detail.id}</p>
+          {durationLabel && <p>限制方式：{durationLabel}</p>}
           <p>{values.reason}</p>
-          <p>限制访问会沿用现有替代曲处理规则，评分不会自动改变账户状态</p>
+          <p>{values.status === 'watch' ? '关注状态会将该账户的音乐与取链配额减半，并把异常人机验证触发阈值降至 45 分' : values.status === 'blocked' ? '限制访问会阻断敏感接口与续传，到期后临时限制将自动恢复正常' : '恢复正常后将解除限制并恢复标准配额'}</p>
         </div>
       ),
       okText: '确认保存',
       cancelText: '返回检查',
       okButtonProps: { danger: values.status === 'blocked' },
-      onOk: () => onSaveDecision(values),
+      onOk: () => onSaveDecision({ ...values, durationMinutes: values.status === 'blocked' ? (values.durationMinutes || 0) : 0 }),
     });
   };
   const operations = Object.entries(detail.daily || {}).filter(([key]) => key.startsWith('operation_')).sort((left, right) => right[1] - left[1]);
@@ -567,10 +571,20 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
       <RiskSection title="账户标记与处置" description="所有变更需要填写原因并确认，风险分只排序和提示，不自动封禁">
         <div className="risk-decision-current">
           <span>当前账户状态</span>
-          <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
+          <Space size={[6, 4]} wrap>
+            <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
+            {detail.status === 'blocked' && Number(detail.blockedUntil || 0) > 0 && <Tag color="volcano">到期 {time(Number(detail.blockedUntil))}</Tag>}
+          </Space>
         </div>
-        <Form<Decision> initialValues={{ status: detail.status, tags: detail.tags, note: detail.note, reason: '' }} layout="vertical" onFinish={confirmDecision} disabled={saving || humanSaving || Boolean(detail.deletedAt)}>
+        <Form<Decision> initialValues={{ status: detail.status, durationMinutes: 0, tags: detail.tags, note: detail.note, reason: '' }} layout="vertical" onFinish={confirmDecision} disabled={saving || humanSaving || Boolean(detail.deletedAt)}>
           <Form.Item name="status" label="处置后状态" rules={[{ required: true }]}><Select options={STATUS_OPTIONS} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, next) => prev.status !== next.status}>
+            {({ getFieldValue }) => getFieldValue('status') === 'blocked' ? (
+              <Form.Item name="durationMinutes" label="限制时长" extra="支持临时冷却封禁，到期后自动恢复为正常状态">
+                <Select options={BLOCK_DURATION_OPTIONS} />
+              </Form.Item>
+            ) : null}
+          </Form.Item>
           <Form.Item name="tags" label="风险标签" extra="最多 10 个，每个最多 24 字" rules={[{ validator: (_, values: string[]) => values?.length > 10 || values?.some(value => value.length > 24) ? Promise.reject(new Error('标签最多 10 个，每个最多 24 字')) : Promise.resolve() }]}>
             <Select mode="tags" tokenSeparators={['，', ',']} maxCount={10} placeholder="输入标签后按回车" />
           </Form.Item>
@@ -608,7 +622,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
                   <Space size={[4, 4]} wrap>
                     <Tag color="orange">触发 {human.triggers}</Tag>
                     <Tag color="green">通过 {human.passes}</Tag>
-                    <Tag>自动验证上限 {human.dailyLimit || 2} 轮</Tag>
+                    <Tag>{human.dailyLimit > 0 ? `自动验证上限 ${human.dailyLimit} 轮` : '冷却后持续复验'}</Tag>
                   </Space>
                 ),
               },
@@ -729,6 +743,8 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
                   <Tag color={statusColor(row.previousStatus)}>{statusLabel(row.previousStatus)}</Tag>
                   <span className="risk-muted">→</span>
                   <Tag color={statusColor(row.status)}>{statusLabel(row.status)}</Tag>
+                  {row.auto && <Tag color="gold">自动升级</Tag>}
+                  {Number(row.blockedUntil || 0) > 0 && <Tag color="volcano">至 {time(Number(row.blockedUntil))}</Tag>}
                 </Space>
               ),
             },
@@ -754,6 +770,7 @@ export default function RiskAccountDetail({ detail, saving, onOpenAccount, onOpe
         <Space size={[6, 6]} wrap>
           <Tag color={riskColor(detail.score)}>{detail.score} 分 · {riskLabel(detail.score)}</Tag>
           <Tag color={statusColor(detail.status)}>{statusLabel(detail.status)}</Tag>
+          {detail.status === 'blocked' && Number(detail.blockedUntil || 0) > 0 && <Tag color="volcano">临时限制至 {time(Number(detail.blockedUntil))}</Tag>}
           <Tag color={detail.humanChallenge?.bypass ? 'green' : detail.humanChallenge?.pending ? 'orange' : detail.lastHumanVerifiedAt ? 'blue' : 'default'}>
             {human?.bypass ? '验证码已放行' : human?.pending ? '验证码待通过' : detail.lastHumanVerifiedAt ? '有验证通过记录' : '无验证记录'}
           </Tag>

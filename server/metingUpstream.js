@@ -323,6 +323,7 @@ export const __test = {
   buildUpstreamRequest,
   buildMetingCacheKey,
   markFailure,
+  metingResponseCache: METING_RESPONSE_CACHE,
 };
 
 function buildUpstreamUrl(upstream, query) {
@@ -628,6 +629,28 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
   throw lastError || metingUnavailableError || new Error('所有 Meting 上游均不可用');
 }
 
+/** 淘汰指定音源和曲目 ID 在各音质档位与房间下的服务端 URL 缓存 */
+export function invalidateMetingUrlCache(server, id) {
+  const normalizedServer = String(server || 'netease').trim().toLowerCase();
+  const normalizedId = String(id || '').trim();
+  if (!normalizedId) return 0;
+  return METING_RESPONSE_CACHE.deleteWhere((cacheKey) => {
+    const separatorIndex = cacheKey.indexOf('\n');
+    if (separatorIndex < 0) return false;
+    try {
+      const parsed = JSON.parse(cacheKey.slice(separatorIndex + 1));
+      const query = parsed?.query;
+      if (!query || typeof query !== 'object') return false;
+      if (String(query.type || '').trim().toLowerCase() !== 'url') return false;
+      const keyServer = String(query.server || 'netease').trim().toLowerCase();
+      const keyId = String(query.id || '').trim();
+      return keyServer === normalizedServer && keyId === normalizedId;
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
  * 统一缓存所有公共 Meting API 请求，并合并相同请求的并发 Promise。
  * 私有房间请求通过 roomId 纳入 key，避免不同房间共享私有账号结果。
@@ -637,12 +660,24 @@ export async function fetchMetingApi(query, options = {}, timeoutMs = 10000) {
   const type = String(query?.type || '').trim().toLowerCase();
   // 漫游每批推荐需要重新请求，仅合并并发请求，避免缓存同一批导致已播去重后持续为空
   const ttlMs = type === 'fm' ? 0 : (METING_CACHE_TTLS[type] || 15_000);
-  const key = buildMetingCacheKey(query, options);
-  const snapshot = await METING_RESPONSE_CACHE.get(
-    key,
-    async () => snapshotMetingResponse(await fetchMetingApiUncached(query, options, timeoutMs)),
-    ttlMs,
-  );
+  const rawOptions = options && typeof options === 'object' ? options : {};
+  const { bypassCache = false, ...fetchOptions } = rawOptions;
+  const key = buildMetingCacheKey(query, fetchOptions);
+  let snapshot;
+  if (bypassCache) {
+    snapshot = await snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs));
+    if (ttlMs > 0 && snapshot.status >= 200 && snapshot.status < 400) {
+      METING_RESPONSE_CACHE.set(key, snapshot, ttlMs);
+    } else {
+      METING_RESPONSE_CACHE.delete(key);
+    }
+  } else {
+    snapshot = await METING_RESPONSE_CACHE.get(
+      key,
+      async () => snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs)),
+      ttlMs,
+    );
+  }
   const keywords = getRuntimeConfig().blockedArtistKeywords;
   if (keywords?.length && snapshot.status >= 200 && snapshot.status < 300
     && ['search', 'song', 'playlist', 'dj', 'djprogram', 'fm'].includes(type)) {

@@ -51,7 +51,7 @@ export function isContinuationMediaRangeRequest(req) {
   return /^bytes=[1-9]\d*-\d*$/iu.test(range);
 }
 
-export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity, ensureIdentity, risk, getIp, getNetworkContext = () => ({}), withContext, metric, verifyDevice = async () => { throw new DeviceProofError(); }, onHumanChallenge = () => {}, resolveAnonymous = async () => null }) {
+export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity, ensureIdentity, risk, getIp, getNetworkContext = () => ({}), withContext, metric, verifyDevice = async () => { throw new DeviceProofError(); }, onHumanChallenge = () => {}, resolveAnonymous = async () => null, hasRoomPresence = () => false }) {
   return async (req, res, next) => {
     const startedAt = performance.now();
     // Express 默认忽略路由大小写及尾斜杠，权限分类必须采用相同语义，签名仍绑定原始 URL
@@ -75,12 +75,34 @@ export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity,
         metric('account_access_rejected_total', { reason: 'anonymous' });
         return res.status(401).json({ error: '请先登录账户', code: 'ACCOUNT_AUTH_REQUIRED' });
       }
-      if (!account.anonymous && !publicCover && (/^\/api\/(?:meting$|music(?:\/|$)|qishui-source$)/u.test(path) || path.startsWith('/api/auth/') && req.method === 'POST')) await verifyDevice(req);
+      if (!account.anonymous && !publicCover && (/^\/api\/(?:meting$|music(?:\/|$)|qishui-source$)/u.test(path) || path.startsWith('/api/auth/') && req.method === 'POST')) {
+        const verified = await verifyDevice(req);
+        if (verified?.sessionShared) req.riskSessionShared = true;
+      }
       const ip = getIp(req);
       const mediaProxyCover = isMediaProxyCoverRequest(req);
+      if (mediaProxyCover) req.mediaProxyImageOnly = true;
       if (isContinuationMediaRangeRequest(req) && !mediaProxyCover) {
-        if (account.status === 'blocked') {
-          return res.status(403).json({ error: '账户访问已受限，请联系管理员复核', code: 'ACCOUNT_RISK_BLOCKED' });
+        if (typeof risk.consumeMediaContinuation === 'function') {
+          const continuation = await risk.consumeMediaContinuation(account, { ip });
+          metric('account_request_total', { kind: 'media-continuation', outcome: continuation.allowed ? 'allowed' : continuation.code });
+          if (!continuation.allowed) {
+            if (continuation.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED') onHumanChallenge(account.id);
+            const status = continuation.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED' ? 403 : continuation.limited ? 429 : continuation.status;
+            const code = continuation.limited ? 'ACCOUNT_RATE_LIMITED' : continuation.code;
+            if (status === 429) res.setHeader('Retry-After', String(continuation.retryAfter));
+            return res.status(status).json({
+              error: continuation.code === 'ACCOUNT_HUMAN_CHECK_REQUIRED'
+                ? '访问行为异常，请先完成人机验证'
+                : status === 403
+                  ? '账户访问已受限，请联系管理员复核'
+                  : '媒体续传请求过于频繁，请稍后重试',
+              code,
+              retryAfterSec: status === 429 ? continuation.retryAfter : undefined,
+            });
+          }
+        } else {
+          await risk.assertAllowed(account.id, { human: true });
         }
         const identity = resolveIdentity(req);
         const roomUserId = account.roomUserId || await ensureIdentity(account.id);
@@ -99,7 +121,13 @@ export function createAccountAccessMiddleware({ resolveAccount, resolveIdentity,
       const kind = (publicCover || mediaProxyCover) ? 'image' : linkMusicRequest ? 'music' : 'api';
       // 未识别的 Meting 操作也计入取链预算，防止上游接受别名、缺省值或重复参数后绕过额度
       const operation = musicContext?.operation || (path === '/api/meting' ? 'url' : req.query?.type);
-      const result = await risk.consume(account, { ip, kind, operation, userAgent: req.headers?.['user-agent'] || '', network: getNetworkContext(req) });
+      const inRoom = Boolean(account.roomUserId && hasRoomPresence(account.roomUserId));
+      const legacyUnbound = Boolean(!account.anonymous && req.accountSession?.deviceMigrationRequired);
+      const sessionShared = Boolean(req.riskSessionShared);
+      const result = await risk.consume(account, {
+        ip, kind, operation, userAgent: req.headers?.['user-agent'] || '', network: getNetworkContext(req),
+        inRoom, legacyUnbound, sessionShared,
+      });
       if (publicCover && result.code !== 'ACCOUNT_HUMAN_CHECK_REQUIRED') return next();
       if (shouldRecordMusicResponse(musicContext)) {
         let summary;

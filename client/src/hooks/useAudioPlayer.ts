@@ -80,6 +80,13 @@ import {
   lockPlaybackQualityToLowest,
 } from '../lib/playbackQualityLock';
 import { waitForAudioCanPlay, waitForAudioMinimumReady } from '../lib/audioReady';
+import {
+  createTrackRecoveryTracker,
+  isSourceUnavailableRecoveryReason,
+  shouldInvalidateUrlCacheOnRecovery,
+  shouldPauseForAudioUnlock,
+  shouldWatchdogTriggerReload,
+} from '../lib/audioRecoveryPolicy';
 import { applyFollowerSync, applyVisibilityResume, applyPostBufferSync, isEndedWhileServerPlaying } from '../lib/playbackSync';
 import { resetDriftController } from '../lib/driftController';
 import { getClientPlaybackState, getPlaybackTime, optimisticSeekPosition, optimisticSetPlaying } from '../lib/playbackState';
@@ -107,10 +114,6 @@ import {
   getUserPlaybackQuality,
 } from '../api/music/quality';
 
-/** 主控本机失败后的本地恢复间隔：不切歌，等网络恢复再重试 */
-const LOCAL_PLAYBACK_RECOVERY_MS = 8000;
-/** 明确无源时更快重试；仍失败则由主控核实后切歌，避免全屋卡死 */
-const SOURCE_UNAVAILABLE_RECOVERY_MS = 2500;
 const LOCAL_RECOVERY_TOAST_COOLDOWN_MS = 20000;
 /** 同一曲本机取链连续失败多少次后，主控请求服务端核实并切歌 */
 const SOURCE_ERROR_SERVER_VERIFY_AFTER = 2;
@@ -129,6 +132,19 @@ let localRecoveryTimer: number | null = null;
 let localRecoveryQueueId: string | null = null;
 let lastLocalRecoveryToastAt = 0;
 let lastSourceErrorSkipToastAt = 0;
+const localRecoveryTracker = createTrackRecoveryTracker();
+
+function clearLocalRecoveryTimer(queueId?: string): void {
+  if (!localRecoveryTimer) return;
+  if (queueId && localRecoveryQueueId !== queueId) return;
+  window.clearTimeout(localRecoveryTimer);
+  localRecoveryTimer = null;
+  localRecoveryQueueId = null;
+}
+
+function hasPendingLocalRecovery(queueId: string): boolean {
+  return Boolean(localRecoveryTimer && localRecoveryQueueId === queueId);
+}
 
 function notifyPlaybackToast(message: string, type: 'success' | 'error' = 'error') {
   window.dispatchEvent(new CustomEvent('openmusic:visual-toast', {
@@ -137,10 +153,7 @@ function notifyPlaybackToast(message: string, type: 'success' | 'error' = 'error
 }
 
 function isSourceUnavailableReason(reason: string): boolean {
-  return reason === 'source_unavailable'
-    || reason === 'source_error_marked_local'
-    || reason === 'service_fallback_exhausted'
-    || reason === 'service_no_fallback';
+  return isSourceUnavailableRecoveryReason(reason);
 }
 
 /**
@@ -255,6 +268,10 @@ interface AudioRuntime {
   readyRecoveryTimer: MutableRefObject<number | null>;
   /** 主控本机失败：仅本地重试，不触发全屋切歌 */
   scheduleLocalRecovery: (song: QueueItem, reason: string) => void;
+  requestSkip: (options?: {
+    bypassThrottle?: boolean;
+    reason?: 'manual' | 'source_error' | 'system';
+  }) => boolean;
   finishSong: (queueId: string) => void;
   playAudio: (audio: HTMLAudioElement) => Promise<PlayResult>;
   applyPlaybackResult: (
@@ -385,6 +402,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   /** 当前曲目本地汽水解密任务；切歌时立即终止，避免旧曲继续占用浏览器 CPU/带宽。 */
   const qishuiLocalAbortRef = useRef<AbortController | null>(null);
   const audioCacheAbortRef = useRef<AbortController | null>(null);
+  const loadWaitAbortRef = useRef<AbortController | null>(null);
   const currentLoudnessRef = useRef<{ loudness?: { gain?: number; peak?: number; lra?: number }; source?: string }>({});
 
   const shouldSkipForEndedTrackKey = useCallback((song: QueueItem, audio: HTMLAudioElement): boolean => {
@@ -574,6 +592,70 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     });
   }, [controller, tvMode, shouldSkipForEndedTrackKey, handleSyncResult]);
 
+  /**
+   * 本机加载或播放失败时按指数退避与上限做本地恢复，避免看门狗与定时器互抢穿透后端取链
+   */
+  const scheduleLocalRecovery = useCallback((song: QueueItem, reason: string) => {
+    if (isHumanCheckPending()) return;
+    const queueId = song.queueId;
+    if (hasPendingLocalRecovery(queueId)) return;
+
+    loadWaitAbortRef.current?.abort();
+    loadWaitAbortRef.current = null;
+    clearLocalRecoveryTimer();
+
+    const isHidden = typeof document !== 'undefined' && document.hidden;
+    const attemptState = localRecoveryTracker.nextAttempt(queueId, reason, isHidden);
+    if (attemptState.exhausted || attemptState.delayMs === null) {
+      debugLog('local_playback_recovery_exhausted', debugLine({
+        reason,
+        queueId,
+        attempts: attemptState.attempt,
+        hidden: isHidden,
+      }));
+      return;
+    }
+
+    const sourceIssue = isSourceUnavailableReason(reason);
+    const qualityDowngraded = (sourceIssue || reason === 'source_error_rejected')
+      ? false
+      : ensureLowestQualityForLocalRecovery(song);
+    notifyLocalRecoveryToast(song, { qualityDowngraded, reason });
+
+    const delayMs = attemptState.delayMs;
+    const shouldInvalidateCache = shouldInvalidateUrlCacheOnRecovery(reason, attemptState.attempt);
+
+    debugLog('local_playback_recovery', debugLine({
+      reason,
+      queueId,
+      attempt: attemptState.attempt,
+      delayMs,
+      qualityDowngraded,
+      invalidateCache: shouldInvalidateCache,
+      skipRoom: false,
+    }));
+
+    localRecoveryQueueId = queueId;
+    localRecoveryTimer = window.setTimeout(() => {
+      localRecoveryTimer = null;
+      localRecoveryQueueId = null;
+
+      const live = useRoomStore.getState().room?.current;
+      if (!live || live.queueId !== queueId) return;
+
+      clearTrackSourceError(live);
+      if (shouldInvalidateCache) {
+        invalidateTrackUrlCache(live);
+      }
+      tempRetries.current = 0;
+      if (attemptState.attempt <= 1) {
+        lowestFallbackAttempted.current = false;
+      }
+      loadLockRef.current = EMPTY_LOAD_LOCK;
+      setLoadRetryNonce((count) => count + 1);
+    }, delayMs);
+  }, []);
+
   const requestSkip = useCallback((options: {
     bypassThrottle?: boolean;
     reason?: 'manual' | 'source_error' | 'system';
@@ -625,8 +707,13 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     skipSong({ reason: options.reason || 'manual' }).then(async (res) => {
       if (!res.success && sourceErrorSkip) {
         // 服务端确认音源仍可用时，只能视为主控本机问题；禁止强制切歌影响全房间。
-        // 解锁后交给本地恢复/watchdog 重试当前歌曲。
-        unlockAfterSkipFailure();
+        // 解锁后交给退避恢复定时器重试当前歌曲，避免无延迟死循环
+        loadLockRef.current = EMPTY_LOAD_LOCK;
+        setTrackLoading(false);
+        const liveCurrent = useRoomStore.getState().room?.current;
+        if (lockedQueueId && liveCurrent?.queueId === lockedQueueId) {
+          scheduleLocalRecovery(liveCurrent, 'source_error_rejected');
+        }
         notifyPlaybackToast('服务端检测音源正常，正在本地重试…', 'error');
         return;
       }
@@ -640,52 +727,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       skippingRef.current = false;
     });
     return true;
-  }, [controller, skipSong, setTrackLoading]);
-
-  /**
-   * 主控本机加载/播放失败时只做本地恢复，不 skip 全屋。
-   * 房主网络抖动不应把其他已正常播放的成员一并切走。
-   */
-  const scheduleLocalRecovery = useCallback((song: QueueItem, reason: string) => {
-    if (isHumanCheckPending()) return;
-    const queueId = song.queueId;
-    const sourceIssue = isSourceUnavailableReason(reason);
-    const qualityDowngraded = sourceIssue ? false : ensureLowestQualityForLocalRecovery(song);
-    notifyLocalRecoveryToast(song, { qualityDowngraded, reason });
-
-    if (localRecoveryTimer && localRecoveryQueueId === queueId) return;
-
-    if (localRecoveryTimer) {
-      window.clearTimeout(localRecoveryTimer);
-      localRecoveryTimer = null;
-    }
-
-    const delayMs = sourceIssue ? SOURCE_UNAVAILABLE_RECOVERY_MS : LOCAL_PLAYBACK_RECOVERY_MS;
-
-    debugLog('local_playback_recovery', debugLine({
-      reason,
-      queueId,
-      delayMs,
-      qualityDowngraded,
-      skipRoom: false,
-    }));
-
-    localRecoveryQueueId = queueId;
-    localRecoveryTimer = window.setTimeout(() => {
-      localRecoveryTimer = null;
-      localRecoveryQueueId = null;
-
-      const live = useRoomStore.getState().room?.current;
-      if (!live || live.queueId !== queueId) return;
-
-      clearTrackSourceError(live);
-      invalidateTrackUrlCache(live);
-      tempRetries.current = 0;
-      lowestFallbackAttempted.current = false;
-      loadLockRef.current = EMPTY_LOAD_LOCK;
-      setLoadRetryNonce((n) => n + 1);
-    }, delayMs);
-  }, []);
+  }, [controller, skipSong, setTrackLoading, scheduleLocalRecovery]);
 
   const initAudio = useCallback(() => {
     const audio = controller.audio;
@@ -701,6 +743,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       stallRetryTimer,
       readyRecoveryTimer,
       scheduleLocalRecovery,
+      requestSkip,
       finishSong,
       playAudio,
       applyPlaybackResult,
@@ -876,6 +919,15 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           invalidateTrackUrlCache(song);
 
           if (runtime.lowestFallbackAttempted.current) {
+            const latestRoom = useRoomStore.getState();
+            if (
+              latestRoom.isPlaybackLeader
+              && latestRoom.room?.current?.queueId === song.queueId
+              && localRecoveryTracker.consumeAutoSourceErrorSkip(song.queueId)
+            ) {
+              runtime.requestSkip({ reason: 'source_error' });
+              return;
+            }
             runtime.scheduleLocalRecovery(song, 'service_fallback_exhausted');
             return;
           }
@@ -904,6 +956,15 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
                 a.load();
                 await a.play().catch(() => {});
               });
+              return;
+            }
+            const latestRoom = useRoomStore.getState();
+            if (
+              latestRoom.isPlaybackLeader
+              && latestRoom.room?.current?.queueId === song.queueId
+              && localRecoveryTracker.consumeAutoSourceErrorSkip(song.queueId)
+            ) {
+              runtime.requestSkip({ reason: 'source_error' });
               return;
             }
             runtime.scheduleLocalRecovery(song, 'service_no_fallback');
@@ -989,11 +1050,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
           const live = useRoomStore.getState().room?.current;
           if (live) {
-            if (localRecoveryTimer && localRecoveryQueueId === live.queueId) {
-              window.clearTimeout(localRecoveryTimer);
-              localRecoveryTimer = null;
-              localRecoveryQueueId = null;
-            }
+            clearLocalRecoveryTimer(live.queueId);
+            localRecoveryTracker.reset(live.queueId);
             const trackKey = trackKeyOf(live);
             if (runtime.successRecordedTrackKey.current !== trackKey) {
               runtime.successRecordedTrackKey.current = trackKey;
@@ -1058,7 +1116,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     }
 
     return audio;
-  }, [controller, scheduleLocalRecovery, finishSong, playAudio, applyPlaybackResult, recoverReadyAudio]);
+  }, [controller, scheduleLocalRecovery, requestSkip, finishSong, playAudio, applyPlaybackResult, recoverReadyAudio]);
 
   const retryPlayback = useCallback(async (fromUserGesture = false) => {
     const liveRoom = useRoomStore.getState().room;
@@ -1080,8 +1138,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     if (fromUserGesture) {
       markAudioSessionUnlocked();
       setNeedsAudioUnlock(false);
+      clearLocalRecoveryTimer(liveRoom.current.queueId);
+      localRecoveryTracker.reset(liveRoom.current.queueId);
       tryFlushPendingSnapshot();
-      if (controller.audio.src) playInUserGesture(controller.audio);
+      if (isAudioBoundToQueue(controller.audio, liveRoom.current.queueId)) {
+        playInUserGesture(controller.audio);
+      } else {
+        loadLockRef.current = EMPTY_LOAD_LOCK;
+        setLoadRetryNonce((count) => count + 1);
+        return;
+      }
     }
 
     if (!canSyncAudioForQueue(controller.audio, liveRoom.current.queueId)) return;
@@ -1104,6 +1170,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
     if (!current) {
       audioCacheAbortRef.current?.abort();
+      loadWaitAbortRef.current?.abort();
+      loadWaitAbortRef.current = null;
+      clearLocalRecoveryTimer();
+      localRecoveryTracker.reset();
       loadGeneration.current += 1;
       loadLockRef.current = EMPTY_LOAD_LOCK;
       suppressAutoResumeRef.current = false;
@@ -1132,20 +1202,23 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       suppressAutoResumeRef.current = true;
       clearAudioQueueBinding(controller.audio);
       loadLockRef.current = EMPTY_LOAD_LOCK;
+      loadWaitAbortRef.current?.abort();
+      loadWaitAbortRef.current = null;
+      clearLocalRecoveryTimer();
+      localRecoveryTracker.reset(current.queueId);
     }
 
     if (prevQueueIdRef.current && prevQueueIdRef.current !== current.queueId) {
       audioCacheAbortRef.current?.abort();
+      loadWaitAbortRef.current?.abort();
+      loadWaitAbortRef.current = null;
       loadGeneration.current += 1;
       loadLockRef.current = EMPTY_LOAD_LOCK;
       justSkippedRef.current = true;
       suppressAutoResumeRef.current = true;
       endedTrackKey.current = null;
-      if (localRecoveryTimer) {
-        window.clearTimeout(localRecoveryTimer);
-        localRecoveryTimer = null;
-        localRecoveryQueueId = null;
-      }
+      clearLocalRecoveryTimer();
+      localRecoveryTracker.reset();
       enqueuePause();
       // 取链期间不要让旧曲继续占用 audio；新曲加载失败时也应保持明确静音状态。
       controller.enqueue(() => {
@@ -1195,16 +1268,22 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
     // 同步占锁：避免 effect 连跑两次时都通过「无锁」检查，导致同曲两次 qishui-source（同 t，第一次被 abort）
     loadLockRef.current = { queueId, gen };
+    clearLocalRecoveryTimer(queueId);
     qishuiLocalAbortRef.current?.abort();
     qishuiLocalAbortRef.current = null;
     audioCacheAbortRef.current?.abort();
     const audioCacheAbort = new AbortController();
     audioCacheAbortRef.current = audioCacheAbort;
+    loadWaitAbortRef.current?.abort();
+    const loadWaitAbort = new AbortController();
+    loadWaitAbortRef.current = loadWaitAbort;
 
     const loadTrack = async () => {
       const loadStartedAt = performance.now();
       tempRetries.current = 0;
-      lowestFallbackAttempted.current = false;
+      if (localRecoveryTracker.getAttempts(queueId) === 0) {
+        lowestFallbackAttempted.current = false;
+      }
       successRecordedTrackKey.current = null;
       setTrackLoading(true);
       debugLog('track_load_start', debugLine({
@@ -1339,7 +1418,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
             const prev = resolveFailCountRef.current;
             const count = prev?.queueId === queueId ? prev.count + 1 : 1;
             resolveFailCountRef.current = { queueId, count };
-            if (count >= SOURCE_ERROR_SERVER_VERIFY_AFTER || timedOut) {
+            if (
+              (count >= SOURCE_ERROR_SERVER_VERIFY_AFTER || timedOut)
+              && localRecoveryTracker.consumeAutoSourceErrorSkip(queueId)
+            ) {
               // 多次失败或取链超时：主控切歌，避免 loading 挂死拖垮全屋
               resolveFailCountRef.current = null;
               notifyPlaybackToast(
@@ -1444,7 +1526,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           });
         }
 
-        if (!justSkippedRef.current) {
+        const waitingForAudioUnlock = shouldPauseForAudioUnlock({
+          restrictedAutoplay: isRestrictedAutoplayEnv(),
+          needsAudioUnlock: useAudioStore.getState().needsAudioUnlock,
+          audioPaused: controller.audio.paused,
+          hasAudioError: Boolean(controller.audio.error),
+        });
+
+        if (!waitingForAudioUnlock && !justSkippedRef.current) {
           const pbBeforeWait = getClientPlaybackState();
           const initialOffset = pbBeforeWait && (!pbBeforeWait.trackId || pbBeforeWait.trackId === current.queueId)
             ? getPlaybackTime(pbBeforeWait)
@@ -1460,7 +1549,19 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           }
         }
 
-        await waitForAudioCanPlay(controller.audio, backgroundAutoStart ? 4000 : undefined);
+        if (!waitingForAudioUnlock) {
+          await waitForAudioCanPlay(
+            controller.audio,
+            backgroundAutoStart ? 4000 : undefined,
+            { signal: loadWaitAbort.signal },
+          );
+        } else {
+          debugLog('track_waiting_audio_unlock', debugLine({
+            queueId: current.queueId,
+            elapsedMs: Math.round(performance.now() - loadStartedAt),
+            readyState: controller.audio.readyState,
+          }));
+        }
         if (gen !== loadGeneration.current) return;
         debugLog('track_audio_ready', debugLine({
           queueId: current.queueId,
@@ -1536,16 +1637,32 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         const liveRoom = useRoomStore.getState().room;
         if (liveRoom) prefetchUpcomingFromRoom(liveRoom);
       } catch (err) {
+        if (gen !== loadGeneration.current || loadWaitAbort.signal.aborted) return;
+        const waitingForAudioUnlock = shouldPauseForAudioUnlock({
+          restrictedAutoplay: isRestrictedAutoplayEnv(),
+          needsAudioUnlock: useAudioStore.getState().needsAudioUnlock,
+          audioPaused: controller.audio.paused,
+          hasAudioError: Boolean(controller.audio.error),
+        });
+        if (waitingForAudioUnlock) {
+          debugLog('track_load_paused_for_unlock', debugLine({
+            queueId: current.queueId,
+            elapsedMs: Math.round(performance.now() - loadStartedAt),
+          }));
+          return;
+        }
         console.error('Failed to load song:', err);
         debugLog('track_load_failed', debugLine({
           queueId: current.queueId,
           elapsedMs: Math.round(performance.now() - loadStartedAt),
           error: err instanceof Error ? err.message : String(err),
         }));
-        if (gen !== loadGeneration.current) return;
         clearAudioQueueBinding(controller.audio);
         scheduleLocalRecovery(current, 'load_track_failed');
       } finally {
+        if (loadWaitAbortRef.current === loadWaitAbort) {
+          loadWaitAbortRef.current = null;
+        }
         releaseLoadLock(loadLockRef, queueId, gen);
         if (gen === loadGeneration.current) {
           setTrackLoading(false);
@@ -1636,6 +1753,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (!live.isPlaybackLeader || skippingRef.current) return;
       if (!useAudioStore.getState().trackLoading) return;
       if (live.room?.current?.queueId !== queueId) return;
+      if (!localRecoveryTracker.consumeAutoSourceErrorSkip(queueId)) return;
 
       debugLog('leader_load_stuck_skip', debugLine({
         queueId,
@@ -1666,6 +1784,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       if (canSyncAudioForQueue(controller.audio, queueId)) return;
       // 仍在取链：交给 LEADER_LOAD_STUCK_SKIP；此处专治 loading=false 却永久脱节
       if (useAudioStore.getState().trackLoading) return;
+      if (useAudioStore.getState().needsAudioUnlock) return;
+      if (!localRecoveryTracker.consumeAutoSourceErrorSkip(queueId)) return;
 
       debugLog('leader_bind_mismatch_skip', debugLine({
         queueId,
@@ -1714,6 +1834,14 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       const current = liveRoom?.current;
       if (!current) return;
       const audio = controller.audio;
+      const pendingRecovery = hasPendingLocalRecovery(current.queueId);
+      const recoveryExhausted = localRecoveryTracker.isExhausted(current.queueId);
+      const waitingForAudioUnlock = shouldPauseForAudioUnlock({
+        restrictedAutoplay: isRestrictedAutoplayEnv(),
+        needsAudioUnlock: useAudioStore.getState().needsAudioUnlock,
+        audioPaused: audio.paused,
+        hasAudioError: Boolean(audio.error),
+      });
 
       // 主控卡在「源异常 + loadLock / 未跳成」：解开锁并触发 load effect 再次 requestSkip
       if (
@@ -1722,21 +1850,31 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         && isTrackSourceError(current)
         && !skippingRef.current
         && !useAudioStore.getState().trackLoading
+        && !pendingRecovery
+        && !recoveryExhausted
+        && !waitingForAudioUnlock
       ) {
         if (loadLockRef.current.queueId === current.queueId) {
           loadLockRef.current = EMPTY_LOAD_LOCK;
         }
         if (!canSyncAudioForQueue(audio, current.queueId)) {
-          setLoadRetryNonce((n) => n + 1);
+          setLoadRetryNonce((count) => count + 1);
           return;
         }
       }
 
-      if (!liveRoom.isPlaying) return;
-      if (shouldSkipTrackLoad(audio, current.queueId)) return;
-      if (loadLockRef.current.queueId) return;
-      if (useAudioStore.getState().trackLoading) return;
-      setLoadRetryNonce((n) => n + 1);
+      if (!shouldWatchdogTriggerReload({
+        isPlaying: Boolean(liveRoom.isPlaying),
+        isTrackLoaded: shouldSkipTrackLoad(audio, current.queueId),
+        hasLoadLock: Boolean(loadLockRef.current.queueId),
+        trackLoading: useAudioStore.getState().trackLoading,
+        hasPendingRecovery: pendingRecovery,
+        recoveryExhausted,
+        waitingForAudioUnlock,
+      })) {
+        return;
+      }
+      setLoadRetryNonce((count) => count + 1);
     };
 
     return createWorkerInterval(runLoadWatchdog, LOAD_WATCHDOG_INTERVAL_MS);
@@ -1830,9 +1968,33 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
       const current = liveRoom.current;
       if (!canSyncAudioForQueue(controller.audio, current.queueId)) {
+        if (
+          isAudioBoundToQueue(controller.audio, current.queueId)
+          && shouldPauseForAudioUnlock({
+            restrictedAutoplay: isRestrictedAutoplayEnv(),
+            needsAudioUnlock: useAudioStore.getState().needsAudioUnlock,
+            audioPaused: controller.audio.paused,
+            hasAudioError: Boolean(controller.audio.error),
+          })
+        ) {
+          return;
+        }
+        if (useAudioStore.getState().trackLoading || hasPendingLocalRecovery(current.queueId)) {
+          return;
+        }
+        if (localRecoveryTracker.isExhausted(current.queueId)) {
+          if (!localRecoveryTracker.canRetryOnForeground(current.queueId)) {
+            return;
+          }
+          localRecoveryTracker.markForegroundRetryUsed(current.queueId);
+        }
         // 回前台发现音源脱节：解开 load 锁；源异常则主控立刻切歌，否则触发重新取链
         loadLockRef.current = EMPTY_LOAD_LOCK;
-        if (live.isPlaybackLeader && isTrackSourceError(current)) {
+        if (
+          live.isPlaybackLeader
+          && isTrackSourceError(current)
+          && localRecoveryTracker.consumeAutoSourceErrorSkip(current.queueId)
+        ) {
           const now = Date.now();
           if (now - lastSourceErrorSkipToastAt >= SOURCE_ERROR_SKIP_TOAST_COOLDOWN_MS) {
             lastSourceErrorSkipToastAt = now;
@@ -1842,7 +2004,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           return;
         }
         if (!useAudioStore.getState().trackLoading) {
-          setLoadRetryNonce((n) => n + 1);
+          setLoadRetryNonce((count) => count + 1);
         }
         return;
       }
@@ -2060,6 +2222,8 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
       qishuiLocalAbortRef.current?.abort();
       qishuiLocalAbortRef.current = null;
       audioCacheAbortRef.current?.abort();
+      loadWaitAbortRef.current?.abort();
+      loadWaitAbortRef.current = null;
       // 共享 audio 跨房间页和电视页复用，Blob 在换源或清空曲目时释放
       loadLockRef.current = EMPTY_LOAD_LOCK;
       if (readyRecoveryTimer.current) {
@@ -2071,11 +2235,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         stallRetryTimer.current = null;
       }
       if (activeAudioRuntime?.audioRef === audioRef) {
-        if (localRecoveryTimer) {
-          window.clearTimeout(localRecoveryTimer);
-          localRecoveryTimer = null;
-          localRecoveryQueueId = null;
-        }
+        clearLocalRecoveryTimer();
         activeAudioRuntime = null;
       }
     };

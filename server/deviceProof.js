@@ -61,6 +61,7 @@ local lifetime = math.max(1, redis.call('TTL', KEYS[1]))
 redis.call('EXPIRE', KEYS[2], math.min(125, lifetime))
 local now = tonumber(ARGV[1])
 local ip = ARGV[4]
+local shared = false
 if ip ~= '' then
   local last = redis.call('HGET', KEYS[3], 'lastIp')
   local seen = tonumber(redis.call('HGET', KEYS[3], 'lastSeenAt') or '0')
@@ -77,10 +78,15 @@ if ip ~= '' then
     local count = redis.call('ZCARD', KEYS[4])
     local changes = tonumber(redis.call('HGET', KEYS[3], 'ipChanges') or '0')
     redis.call('HSET', KEYS[3], 'lastIp', ip, 'lastSeenAt', now, 'ipCount', count)
-    if count >= 3 and changes >= 6 then redis.call('HSET', KEYS[3], 'sharedAt', now) end
+    if count >= 3 and changes >= 6 then
+      redis.call('HSET', KEYS[3], 'sharedAt', now)
+      shared = true
+    elseif tonumber(redis.call('HGET', KEYS[3], 'sharedAt') or '0') >= now - 600000 then
+      shared = true
+    end
     redis.call('EXPIRE', KEYS[3], lifetime)
     redis.call('EXPIRE', KEYS[4], math.min(600, lifetime))
   end
 end
-return 1
+return shared and 2 or 1
 `;

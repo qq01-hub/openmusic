@@ -17,11 +17,30 @@ const DEFAULT_POLICY = Object.freeze({
   musicMinuteLimit: 120,
   musicDayLimit: 10_000,
   ipMinuteLimit: 3_000,
+  ipUrlMinuteLimit: 120,
   urlMinuteLimit: 30,
   urlBurstLimit: 8,
 });
 const STATUSES = new Set(['normal', 'watch', 'blocked']);
 const ACCOUNT_PATTERN = /^acct_[a-zA-Z0-9_-]{16,64}$/u;
+const NON_CLIENT_ERROR_CATEGORIES = new Set(['upstream', 'configuration', 'unavailable', 'server']);
+const NON_CLIENT_ERROR_CODES = new Set(['MUSIC_URL_UNAVAILABLE', 'COVER_UNAVAILABLE']);
+const MEDIA_CONTINUATION_ACCOUNT_LIMIT = 180;
+const MEDIA_CONTINUATION_IP_LIMIT = 900;
+const MAX_TEMP_BLOCK_MINUTES = 43_200;
+
+function isClientAttributableError(error) {
+  return Boolean(error && !NON_CLIENT_ERROR_CATEGORIES.has(error.category) && !NON_CLIENT_ERROR_CODES.has(error.code));
+}
+
+function isAutomationUserAgent(userAgent) {
+  const normalized = String(userAgent || '').slice(0, 320);
+  if (!normalized) return false;
+  if (/curl|wget|python-requests|python-urllib|aiohttp|httpx|go-http-client|scrapy|headless|selenium|playwright|puppeteer|node-fetch|undici|axios/iu.test(normalized)) {
+    return true;
+  }
+  return !/openmusic/iu.test(normalized) && /okhttp|dart\//iu.test(normalized);
+}
 
 export class RiskControlError extends Error {
   constructor(code, message, status = 503) {
@@ -88,7 +107,7 @@ export const riskDayRemaining = timestamp => Math.ceil((DAY - (timestamp + CHINA
 const MUSIC_OPERATIONS = ['url', 'search', 'lrc', 'song', 'playlist', 'search_playlist', 'fm', 'source', 'media'];
 
 const RULES = [
-  { id: 'denied', label: '当日多次触发额度或封禁', threshold: 10, points: 30, highThreshold: 100, highPoints: 50 },
+  { id: 'denied', label: '当日多次触发额度或封禁', threshold: 20, points: 20, highThreshold: 120, highPoints: 40 },
   { id: 'ipCount', label: '近 24 小时使用多个访问 IP', threshold: 8, points: 15, highThreshold: 15, highPoints: 25 },
   { id: 'minutePeak', label: '当日请求存在突发高峰', threshold: 600, points: 30 },
   { id: 'sharedAccounts', label: '同 IP 关联账户，仅供共享网络复核', threshold: 5, points: 0 },
@@ -96,18 +115,19 @@ const RULES = [
   { id: 'authFailures', label: '当日账户凭据多次验证失败，可能正在被攻击', threshold: 10, points: 15, highThreshold: 50, highPoints: 25 },
   { id: 'clientCount', label: '近 24 小时登录客户端特征较多，可被伪造需复核', threshold: 5, points: 10 },
   { id: 'roomHopping', label: '当日高频进入多个不同房间', threshold: 1, points: 15 },
-  { id: 'highErrorRate', label: '当日错误较多且错误比例达到 30%', threshold: 1, points: 15 },
+  { id: 'highErrorRate', label: '当日客户端异常错误较多且比例达到 30%', threshold: 1, points: 15 },
   { id: 'operationConcentration', label: '当日音乐操作至少 200 次且单一操作占比达到 90%', threshold: 90, points: 15 },
   { id: 'musicWithoutContext', label: '当日音乐请求至少 500 次、实时操作占比不超过 0.5% 且无成功入房', threshold: 1, points: 20 },
   { id: 'musicMinutePeak', label: '当日音乐请求分钟峰值达到 100', threshold: 100, points: 15 },
-  { id: 'urlMinuteBurst', label: '同一账户同 IP 在 60 秒内成功取链至少 11 次，16 次加重', threshold: 11, points: 10, highThreshold: 16, highPoints: 20 },
+  { id: 'urlMinuteBurst', label: '同一账户同 IP 在 60 秒内成功取链至少 11 首不同歌曲，16 首加重', threshold: 11, points: 10, highThreshold: 16, highPoints: 20 },
   { id: 'untrustedForwarded', label: '非可信代理来源携带转发头，已忽略，需检查代理配置', threshold: 20, points: 0 },
   { id: 'toolClientBurst', label: '工具类客户端声明伴随大量音乐请求且无成功入房', threshold: 1, points: 10 },
   { id: 'urlHarvesting', label: '成功取链至少 500 次且缺少房间及实时上下文，不含替代曲', threshold: 1, points: 10 },
   { id: 'emptyResponseRate', label: '已记录响应至少 100 次且空结果达到 80%，需先排除上游故障', threshold: 80, points: 0 },
   { id: 'musicOnlyBurst', label: '当日请求达到 1000 且音乐请求占比超过 90%', threshold: 1, points: 10 },
+  { id: 'sessionSharing', label: '单会话 10 分钟内跨多个 IP 高频切换，疑似凭据共享或代理池', threshold: 1, points: 20 },
 ];
-const RULES_JSON = JSON.stringify(RULES);
+const RULES_LUA = `local RISK_RULES = {${RULES.map(rule => `{id='${rule.id}',threshold=${rule.threshold},points=${rule.points}${rule.highThreshold ? `,highThreshold=${rule.highThreshold},highPoints=${rule.highPoints}` : ''}}`).join(',')}}`;
 const POLICY_CACHE_TTL_MS = 3_000;
 const MAX_ENSURED_DAILY_KEYS = 10_000;
 
@@ -115,23 +135,26 @@ export function evaluateRisk(input = {}) {
   const operationCounts = MUSIC_OPERATIONS.map(key => Math.max(0, Number(input.operations?.[key]) || 0));
   const operationTotal = operationCounts.reduce((sum, value) => sum + value, 0);
   const concentration = operationTotal >= 200 && input.musicRequests >= 200 ? Math.floor(Math.max(...operationCounts) / operationTotal * 100) : 0;
+  const hasRoomContext = (Number(input.roomJoins) || 0) > 0 || (Number(input.roomContext) || 0) > 0;
+  const effectiveErrors = input.clientErrors !== undefined ? Math.max(0, Number(input.clientErrors) || 0) : Math.max(0, Number(input.errors) || 0);
   const signals = { ...input,
-    toolClientBurst: !input.dailyEstimated && input.automationClientRequests >= 200 && input.musicRequests >= 200 && input.roomJoins === 0 ? 1 : 0,
-    urlHarvesting: !input.dailyEstimated && input.responseUrlOk >= 500 && input.roomJoins === 0 && input.socketRequests >= 0 && input.socketRequests / input.responseUrlOk <= 0.005 ? 1 : 0,
+    toolClientBurst: !input.dailyEstimated && input.automationClientRequests >= 200 && input.musicRequests >= 200 && !hasRoomContext ? 1 : 0,
+    urlHarvesting: !input.dailyEstimated && input.responseUrlOk >= 500 && !hasRoomContext && input.socketRequests >= 0 && input.socketRequests / input.responseUrlOk <= 0.005 ? 1 : 0,
     emptyResponseRate: input.responseTotal >= 100 ? Math.floor((input.responseEmpty || 0) / input.responseTotal * 100) : 0,
     operationConcentration: input.dailyEstimated ? 0 : concentration,
-    musicWithoutContext: !input.dailyEstimated && input.musicRequests >= 500 && input.roomJoins === 0 && input.socketRequests >= 0 && input.socketRequests / input.musicRequests <= 0.005 ? 1 : 0,
+    musicWithoutContext: !input.dailyEstimated && input.musicRequests >= 500 && !hasRoomContext && input.socketRequests >= 0 && input.socketRequests / input.musicRequests <= 0.005 ? 1 : 0,
     musicIpChanges: input.musicIpCount >= 4 ? input.musicIpChanges : 0,
     roomHopping: input.roomCount >= 10 && input.roomJoins >= 30 ? 1 : 0,
-    highErrorRate: input.errors >= 50 && (input.requests || 0) >= 100 && input.errors / Math.max(1, input.requests || 0) >= 0.3 ? 1 : 0,
+    highErrorRate: effectiveErrors >= 50 && (input.requests || 0) >= 100 && effectiveErrors / Math.max(1, input.requests || 0) >= 0.3 ? 1 : 0,
     musicOnlyBurst: input.requests >= 1000 && input.musicRequests / input.requests > 0.9 ? 1 : 0,
     urlMinuteBurst: input.urlIpMinutePeak,
+    sessionSharing: (Number(input.sessionShared) || 0) > 0 ? 1 : 0,
   };
   const factors = RULES.map(rule => {
     const value = Math.max(0, Number(signals[rule.id]) || 0);
     const points = rule.highThreshold && value >= rule.highThreshold ? rule.highPoints : value >= rule.threshold ? rule.points : 0;
     const window = rule.id === 'musicIpChanges' ? '近 10 分钟' : rule.id === 'urlMinuteBurst' ? '今日滚动 60 秒峰值' : ['ipCount', 'clientCount'].includes(rule.id) ? '近 24 小时' : rule.id === 'sharedAccounts' ? '近 90 天关联' : '北京时间今日';
-  const category = ['ipCount', 'musicIpChanges', 'sharedAccounts', 'untrustedForwarded'].includes(rule.id) ? '网络与代理' : ['authFailures', 'clientCount', 'toolClientBurst'].includes(rule.id) ? '身份与客户端' : ['highErrorRate', 'emptyResponseRate', 'urlHarvesting'].includes(rule.id) ? '响应质量' : '请求行为';
+    const category = ['ipCount', 'musicIpChanges', 'sharedAccounts', 'untrustedForwarded'].includes(rule.id) ? '网络与代理' : ['authFailures', 'clientCount', 'toolClientBurst', 'sessionSharing'].includes(rule.id) ? '身份与客户端' : ['highErrorRate', 'emptyResponseRate', 'urlHarvesting'].includes(rule.id) ? '响应质量' : '请求行为';
     return { id: rule.id, label: rule.label, value, points, threshold: rule.threshold, maxPoints: rule.highPoints || rule.points, matched: value >= rule.threshold, window, category };
   });
   const score = Math.min(100, factors.reduce((sum, factor) => sum + factor.points, 0));
@@ -139,8 +162,29 @@ export function evaluateRisk(input = {}) {
 }
 
 const SCORE_LUA = `
-local function scoreRisk(profile, daily, ips, shared, clients, rooms, now, rules, musicIps, musicChanges)
-  local fields = {'requests', 'music', 'denied', 'minutePeak', 'authFailures', 'roomJoins', 'errors', 'socketRequests', 'operation_url', 'operation_search', 'operation_lrc', 'operation_song', 'operation_playlist', 'operation_search_playlist', 'operation_fm', 'operation_source', 'operation_media', 'musicMinutePeak', 'untrustedForwarded', 'automationClientRequests', 'response_url_ok', 'response_total', 'response_empty', 'urlIpMinutePeak'}
+${RULES_LUA}
+local function resolveEffectiveStatus(profile, statusPrefix, mainScores, mainRecent, blockedScores, blockedRecent, id, now)
+  local status = redis.call('HGET', profile, 'status') or 'normal'
+  if status ~= 'normal' and status ~= 'watch' and status ~= 'blocked' then return nil end
+  if status == 'blocked' then
+    local blockedUntil = tonumber(redis.call('HGET', profile, 'blockedUntil') or '0')
+    if blockedUntil > 0 and now >= blockedUntil then
+      status = 'normal'
+      redis.call('HSET', profile, 'status', 'normal')
+      redis.call('HDEL', profile, 'blockedUntil')
+      redis.call('ZREM', statusPrefix .. 'blocked', id)
+      redis.call('ZADD', statusPrefix .. 'normal', now, id)
+      local prevScore = tonumber(redis.call('HGET', profile, 'score') or '0')
+      redis.call('ZREM', blockedScores, id)
+      redis.call('ZREM', blockedRecent, id)
+      redis.call('ZADD', mainScores, prevScore, id)
+      redis.call('ZADD', mainRecent, now, id)
+    end
+  end
+  return status
+end
+local function scoreRisk(profile, daily, ips, shared, clients, rooms, now, musicIps, musicChanges)
+  local fields = {'requests', 'music', 'denied', 'minutePeak', 'authFailures', 'roomJoins', 'errors', 'socketRequests', 'operation_url', 'operation_search', 'operation_lrc', 'operation_song', 'operation_playlist', 'operation_search_playlist', 'operation_fm', 'operation_source', 'operation_media', 'musicMinutePeak', 'untrustedForwarded', 'automationClientRequests', 'response_url_ok', 'response_total', 'response_empty', 'urlIpMinutePeak', 'roomContext', 'clientErrors', 'sessionShared'}
   local raw = redis.call('HMGET', daily, unpack(fields))
   local counts = {}
   for index, field in ipairs(fields) do counts[field] = tonumber(raw[index]) or 0 end
@@ -158,20 +202,23 @@ local function scoreRisk(profile, daily, ips, shared, clients, rooms, now, rules
   if unknown and tonumber(unknown) >= now - 86400000 then ipCount = ipCount - 1 end
   local requests = count('requests')
   local music = count('music')
+  local hasRoomContext = count('roomJoins') > 0 or count('roomContext') > 0
+  local effectiveErrors = raw[26] ~= false and (tonumber(raw[26]) or 0) or count('errors')
   local values = {denied=count('denied'), ipCount=ipCount, minutePeak=count('minutePeak'), sharedAccounts=shared,
     musicIpChanges=redis.call('ZCOUNT', musicIps, now - 600000, '+inf') >= 4 and redis.call('ZCOUNT', musicChanges, now - 600000, '+inf') or 0,
     authFailures=count('authFailures'), clientCount=redis.call('ZCOUNT', clients, now - 86400000, '+inf'),
     roomHopping=redis.call('ZCARD', rooms) >= 10 and count('roomJoins') >= 30 and 1 or 0,
-    highErrorRate=count('errors') >= 50 and requests >= 100 and count('errors') / math.max(1, requests) >= 0.3 and 1 or 0,
+    highErrorRate=effectiveErrors >= 50 and requests >= 100 and effectiveErrors / math.max(1, requests) >= 0.3 and 1 or 0,
     operationConcentration=not estimated and music >= 200 and operationTotal >= 200 and math.floor(operationMax / operationTotal * 100) or 0,
-    musicWithoutContext=not estimated and music >= 500 and count('roomJoins') == 0 and count('socketRequests') / music <= 0.005 and 1 or 0,
+    musicWithoutContext=not estimated and music >= 500 and not hasRoomContext and count('socketRequests') / music <= 0.005 and 1 or 0,
     musicMinutePeak=count('musicMinutePeak'), urlMinuteBurst=count('urlIpMinutePeak'), untrustedForwarded=count('untrustedForwarded'),
-    toolClientBurst=not estimated and count('automationClientRequests') >= 200 and music >= 200 and count('roomJoins') == 0 and 1 or 0,
-    urlHarvesting=not estimated and count('response_url_ok') >= 500 and count('roomJoins') == 0 and count('socketRequests') / count('response_url_ok') <= 0.005 and 1 or 0,
+    toolClientBurst=not estimated and count('automationClientRequests') >= 200 and music >= 200 and not hasRoomContext and 1 or 0,
+    urlHarvesting=not estimated and count('response_url_ok') >= 500 and not hasRoomContext and count('socketRequests') / count('response_url_ok') <= 0.005 and 1 or 0,
     emptyResponseRate=count('response_total') >= 100 and math.floor(count('response_empty') / count('response_total') * 100) or 0,
-    musicOnlyBurst=requests >= 1000 and music / requests > 0.9 and 1 or 0}
+    musicOnlyBurst=requests >= 1000 and music / requests > 0.9 and 1 or 0,
+    sessionSharing=count('sessionShared') > 0 and 1 or 0}
   local score = 0
-  for _, rule in ipairs(cjson.decode(rules)) do
+  for _, rule in ipairs(RISK_RULES) do
     local value = values[rule.id] or 0
     if rule.highThreshold and value >= rule.highThreshold then score = score + rule.highPoints
     elseif value >= rule.threshold then score = score + rule.points end
@@ -230,16 +277,32 @@ redis.call('HSETNX', KEYS[1], 'status', 'normal')
 redis.call('HSET', KEYS[1], 'lastSeenAt', ARGV[1], 'lastRequestIp', ip, 'lastNetworkIp', ip, 'email', ARGV[5], 'createdAt', ARGV[6])
 redis.call('HDEL', KEYS[1], 'scoreResetAt')
 redis.call('ZADD', KEYS[2], now, id)
-local status = redis.call('HGET', KEYS[1], 'status')
-if status ~= 'normal' and status ~= 'watch' and status ~= 'blocked' then return redis.error_reply('Invalid risk status') end
+local status = resolveEffectiveStatus(KEYS[1], KEYS[10], KEYS[21], KEYS[22], KEYS[23], KEYS[24], id, now)
+if not status then return redis.error_reply('Invalid risk status') end
 redis.call('ZADD', KEYS[10] .. status, now, id)
 redis.call('HINCRBY', KEYS[1], 'requests', 1)
 redis.call('HINCRBY', KEYS[1], kind .. 'Requests', 1)
-local minute = kind == 'image' and tonumber(redis.call('HGET', KEYS[3], 'requests') or '0') or redis.call('HINCRBY', KEYS[3], 'requests', 1)
+if kind == 'image' then
+  local daily = redis.call('HINCRBY', KEYS[4], 'requests', 1)
+  redis.call('HINCRBY', KEYS[4], 'imageRequests', 1)
+  redis.call('EXPIRE', KEYS[4], 3024000)
+  redis.call('ZADD', KEYS[25], daily, id)
+  redis.call('EXPIRE', KEYS[25], 3024000)
+  local score = tonumber(redis.call('HGET', KEYS[1], 'score') or '0')
+  local code = ''
+  if ARGV[21] == '1' and status ~= 'blocked' and redis.call('HGET', KEYS[1], 'humanBypass') ~= '1' and redis.call('HEXISTS', KEYS[1], 'humanPending') == 1 then
+    code = 'ACCOUNT_HUMAN_CHECK_REQUIRED'
+  end
+  local minute = tonumber(redis.call('HGET', KEYS[3], 'requests') or '0')
+  local limitedDaily = math.max(0, daily - tonumber(redis.call('HGET', KEYS[4], 'imageRequests') or '0'))
+  local musicDay = tonumber(redis.call('HGET', KEYS[4], 'music') or '0')
+  return {code, minute, limitedDaily, musicDay, score, 0}
+end
+local minute = redis.call('HINCRBY', KEYS[3], 'requests', 1)
 local daily = redis.call('HINCRBY', KEYS[4], 'requests', 1)
 redis.call('ZADD', KEYS[25], daily, id)
 redis.call('EXPIRE', KEYS[25], 3024000)
-local ipMinute = kind == 'image' and tonumber(redis.call('GET', KEYS[5]) or '0') or redis.call('INCR', KEYS[5])
+local ipMinute = redis.call('INCR', KEYS[5])
 redis.call('EXPIRE', KEYS[3], 120)
 redis.call('EXPIRE', KEYS[4], 3024000)
 redis.call('EXPIRE', KEYS[5], 120)
@@ -261,30 +324,39 @@ if musicMinute > tonumber(redis.call('HGET', KEYS[4], 'musicMinutePeak') or '0')
 if ARGV[18] ~= '' then redis.call('HSET', KEYS[1], 'lastNetworkRoute', ARGV[18]) end
 if ARGV[19] == '1' then redis.call('HINCRBY', KEYS[4], 'untrustedForwarded', 1) end
 if ARGV[20] == '1' then redis.call('HINCRBY', KEYS[4], 'automationClientRequests', 1) end
+if ARGV[28] == '1' then redis.call('HSETNX', KEYS[4], 'roomContext', 1) end
+if ARGV[30] == '1' then redis.call('HINCRBY', KEYS[4], 'sessionShared', 1) end
 local code = ''
+local throttleFactor = (status == 'watch' or ARGV[29] == '1') and 0.5 or 1
+local effectiveMusicMinuteLimit = math.max(1, math.floor(tonumber(ARGV[9]) * throttleFactor))
+local effectiveMusicDayLimit = math.max(1, math.floor(tonumber(ARGV[10]) * throttleFactor))
+local effectiveUrlMinuteLimit = math.max(1, math.floor(tonumber(ARGV[25]) * throttleFactor))
+local effectiveUrlBurstLimit = math.max(1, math.floor(tonumber(ARGV[26]) * throttleFactor))
 -- 账户级取链预算，不按会话或 IP 拆分，使用既有 Hash，不为歌曲或请求新增键
 local urlLimited = false
 if kind == 'music' and (ARGV[12] == 'url' or ARGV[12] == 'source' or ARGV[12] == 'song') then
-  local capacity = tonumber(ARGV[26])
+  local capacity = effectiveUrlBurstLimit
   local previous = tonumber(redis.call('HGET', KEYS[1], 'urlBudgetAt') or now)
   local tokens = math.min(capacity, tonumber(redis.call('HGET', KEYS[1], 'urlBudgetTokens') or capacity)
     + math.max(0, now - previous) * capacity / 10000)
   local urlMinute = redis.call('HINCRBY', KEYS[3], 'urlRequests', 1)
-  urlLimited = tokens < 1 or urlMinute > tonumber(ARGV[25])
+  local ipUrlMinute = ip == 'unknown' and 0 or redis.call('INCR', KEYS[27])
+  if ip ~= 'unknown' then redis.call('EXPIRE', KEYS[27], 120) end
+  urlLimited = tokens < 1 or urlMinute > effectiveUrlMinuteLimit or (ip ~= 'unknown' and ipUrlMinute > tonumber(ARGV[14]))
   if not urlLimited then tokens = tokens - 1 end
   redis.call('HSET', KEYS[1], 'urlBudgetAt', math.max(now, previous), 'urlBudgetTokens', tokens)
 end
 local limitedDaily = daily - tonumber(redis.call('HGET', KEYS[4], 'imageRequests') or '0')
-local limited = kind ~= 'image' and (minute > tonumber(ARGV[7]) or limitedDaily > tonumber(ARGV[8]) or ipMinute > tonumber(ARGV[11])
-  or musicMinute > tonumber(ARGV[9]) or musicDay > tonumber(ARGV[10]) or urlLimited)
-if status == 'blocked' and kind ~= 'image' then code = 'ACCOUNT_RISK_BLOCKED'
+local limited = minute > tonumber(ARGV[7]) or limitedDaily > tonumber(ARGV[8]) or ipMinute > tonumber(ARGV[11])
+  or musicMinute > effectiveMusicMinuteLimit or musicDay > effectiveMusicDayLimit or urlLimited
+if status == 'blocked' then code = 'ACCOUNT_RISK_BLOCKED'
 elseif limited then code = 'ACCOUNT_RATE_LIMITED' end
 if code ~= '' then
   redis.call('HINCRBY', KEYS[1], 'denied', 1)
   redis.call('HINCRBY', KEYS[4], 'denied', 1)
   redis.call('HSET', KEYS[1], 'lastDeniedAt', now, 'lastDeniedCode', code)
 end
-if kind ~= 'image' then redis.call('ZADD', KEYS[6], now, ip) end
+redis.call('ZADD', KEYS[6], now, ip)
 redis.call('ZREMRANGEBYSCORE', KEYS[6], '-inf', now - 86400000)
 redis.call('ZREMRANGEBYRANK', KEYS[6], 0, -501)
 redis.call('EXPIRE', KEYS[6], 172800)
@@ -293,7 +365,7 @@ redis.call('ZREMRANGEBYSCORE', KEYS[7], '-inf', now - 7776000000)
 redis.call('ZREMRANGEBYRANK', KEYS[7], 0, -2001)
 redis.call('EXPIRE', KEYS[7], 7776000)
 local shared = redis.call('ZCARD', KEYS[7])
-if kind ~= 'image' then trackClient(KEYS[13], KEYS[14], ARGV[15], ARGV[16], now) end
+trackClient(KEYS[13], KEYS[14], ARGV[15], ARGV[16], now)
 if ip == 'unknown' then shared = 0 end
 local sequence = redis.call('HGET', KEYS[1], 'requests')
 local isMusic = kind == 'music' or ARGV[13] == '1'
@@ -336,15 +408,30 @@ if isMusic or kind == 'socket' then
   redis.call('LTRIM', KEYS[19], 0, 199)
   redis.call('EXPIRE', KEYS[19], 86400)
 end
-local score = scoreRisk(KEYS[1], KEYS[4], KEYS[6], shared, KEYS[13], KEYS[12], now, ARGV[14], KEYS[15], KEYS[16])
-local urlBurstHuman = kind == 'music' and ARGV[12] == 'url' and ip ~= 'unknown'
+local score = scoreRisk(KEYS[1], KEYS[4], KEYS[6], shared, KEYS[13], KEYS[12], now, KEYS[15], KEYS[16])
+local challengeScoreThreshold = status == 'watch' and 45 or 60
+local urlBurstHuman = kind == 'music' and (ARGV[12] == 'url' or ARGV[12] == 'source') and ip ~= 'unknown'
   and redis.call('ZCOUNT', KEYS[26], '(' .. (now - 60000), now) >= 11
-if ARGV[21] == '1' and ARGV[12] ~= 'refresh' and code ~= 'ACCOUNT_RISK_BLOCKED'
-  and humanGate(KEYS[1], now, ARGV[22], ARGV[23], kind ~= 'image' and ((code == '' and score >= 60) or urlBurstHuman), ARGV[24], id) == 1 then
+local gateOutcome = 0
+if ARGV[21] == '1' and ARGV[12] ~= 'refresh' and code ~= 'ACCOUNT_RISK_BLOCKED' then
+  gateOutcome = humanGate(KEYS[1], now, ARGV[22], ARGV[23], (code == '' and score >= challengeScoreThreshold) or urlBurstHuman, ARGV[24], id)
+end
+if gateOutcome >= 1 then
   code = 'ACCOUNT_HUMAN_CHECK_REQUIRED'
+  if gateOutcome == 2 and status == 'normal' then
+    status = 'watch'
+    redis.call('ZREM', KEYS[10] .. 'normal', id)
+    redis.call('HSET', KEYS[1], 'status', 'watch', 'reason', '当日多次触发异常人机校验，系统自动转为关注观察并收紧取链配额', 'decisionAt', now)
+    redis.call('ZADD', KEYS[10] .. 'watch', now, id)
+    redis.call('LPUSH', KEYS[29], cjson.encode({at=now, previousStatus='normal', status='watch', reason='当日多次触发异常人机校验，系统自动转为关注观察', auto=true}))
+    redis.call('LTRIM', KEYS[29], 0, 99)
+    redis.call('EXPIRE', KEYS[29], 7776000)
+  end
 end
 redis.call('HSET', KEYS[1], 'score', score, 'scoreAt', now)
 redis.call('ZADD', KEYS[8], score, id)
+redis.call('ZADD', KEYS[28], score, id)
+redis.call('EXPIRE', KEYS[28], 604800)
 if status == 'blocked' then
   redis.call('ZREM', KEYS[21], id); redis.call('ZREM', KEYS[22], id)
   redis.call('ZADD', KEYS[23], score, id); redis.call('ZADD', KEYS[24], now, id)
@@ -365,6 +452,27 @@ end
 return {code, minute, limitedDaily, musicDay, score, limited and 1 or 0}
 `;
 
+const MEDIA_CONTINUATION_SCRIPT = `${SCORE_LUA}
+local now = tonumber(ARGV[1])
+local id = ARGV[2]
+local ip = ARGV[3]
+local status = resolveEffectiveStatus(KEYS[1], KEYS[4], KEYS[5], KEYS[6], KEYS[7], KEYS[8], id, now)
+if not status then return redis.error_reply('Invalid risk status') end
+if status == 'blocked' then return {'ACCOUNT_RISK_BLOCKED', 0} end
+if ARGV[4] == '1' and redis.call('HGET', KEYS[1], 'humanBypass') ~= '1' and redis.call('HEXISTS', KEYS[1], 'humanPending') == 1 then
+  return {'ACCOUNT_HUMAN_CHECK_REQUIRED', 0}
+end
+local accountLimit = status == 'watch' and math.max(1, math.floor(tonumber(ARGV[5]) * 0.5)) or tonumber(ARGV[5])
+local accountCount = redis.call('INCR', KEYS[2])
+redis.call('EXPIRE', KEYS[2], 120)
+local ipCount = ip == 'unknown' and 0 or redis.call('INCR', KEYS[3])
+if ip ~= 'unknown' then redis.call('EXPIRE', KEYS[3], 120) end
+if accountCount > accountLimit or (ip ~= 'unknown' and ipCount > tonumber(ARGV[6])) then
+  return {'ACCOUNT_RATE_LIMITED', 1}
+end
+return {'', 0}
+`;
+
 const LOGIN_SCRIPT = `${SCORE_LUA}
 redis.call('HSETNX', KEYS[1], 'firstSeenAt', ARGV[1])
 redis.call('HSETNX', KEYS[1], 'status', 'normal')
@@ -374,8 +482,8 @@ if ARGV[6] == '1' then redis.call('HSETNX', KEYS[1], 'registrationIp', ARGV[3]) 
 redis.call('HINCRBY', KEYS[1], 'loginCount', 1)
 if ARGV[10] == '1' then redis.call('HSET', KEYS[1], 'lastHumanVerifiedAt', ARGV[1]) end
 redis.call('ZADD', KEYS[2], ARGV[1], ARGV[2])
-local status = redis.call('HGET', KEYS[1], 'status')
-if status ~= 'normal' and status ~= 'watch' and status ~= 'blocked' then return redis.error_reply('Invalid risk status') end
+local status = resolveEffectiveStatus(KEYS[1], KEYS[8], KEYS[11], KEYS[12], KEYS[13], KEYS[14], ARGV[2], tonumber(ARGV[1]))
+if not status then return redis.error_reply('Invalid risk status') end
 redis.call('ZADD', KEYS[8] .. status, ARGV[1], ARGV[2])
 local score = tonumber(redis.call('HGET', KEYS[1], 'score') or '0')
 if status == 'blocked' then
@@ -421,17 +529,18 @@ const MUSIC_RESPONSE_SCRIPT = `
       redis.call('EXPIRE', KEYS[3], 86400)
       redis.call('HINCRBY', KEYS[4], 'response_' .. ARGV[3], 1)
       redis.call('HINCRBY', KEYS[4], 'response_total', 1)
-      if ARGV[5] == 'url' and ARGV[3] == 'ok' then redis.call('HINCRBY', KEYS[4], 'response_url_ok', 1) end
+      local isPlaybackLink = ARGV[5] == 'url' or ARGV[5] == 'source'
+      if isPlaybackLink and ARGV[3] == 'ok' then redis.call('HINCRBY', KEYS[4], 'response_url_ok', 1) end
       redis.call('HINCRBY', KEYS[4], 'response_duration_ms', ARGV[4])
       redis.call('EXPIRE', KEYS[4], 3024000)
       local at = tonumber(ARGV[6])
-      if ARGV[5] == 'url' and ARGV[3] == 'ok' and ARGV[7] ~= 'unknown'
+      if isPlaybackLink and ARGV[3] == 'ok' and ARGV[7] ~= 'unknown'
         and tonumber(ARGV[8]) >= 200 and tonumber(ARGV[8]) < 300 then
         local eventTime = tonumber(ARGV[9])
         local latest = redis.call('ZREVRANGE', KEYS[5], 0, 0, 'WITHSCORES')
         local windowEnd = math.max(at, tonumber(latest[2]) or at)
         redis.call('ZREMRANGEBYSCORE', KEYS[5], '-inf', windowEnd - 60000)
-        if eventTime > windowEnd - 60000 then redis.call('ZADD', KEYS[5], eventTime, ARGV[1]) end
+        if eventTime > windowEnd - 60000 then redis.call('ZADD', KEYS[5], eventTime, ARGV[10]) end
         redis.call('ZREMRANGEBYRANK', KEYS[5], 0, -501)
         redis.call('EXPIRE', KEYS[5], 120)
         local count = redis.call('ZCARD', KEYS[5])
@@ -516,16 +625,18 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         local resetAt = tonumber(redis.call('HGET', KEYS[1], 'scoreResetAt') or '0')
         local seen = tonumber(redis.call('HGET', KEYS[1], 'lastSeenAt') or ARGV[1])
         local shared = ARGV[4] == 'unknown' and 0 or redis.call('ZCOUNT', KEYS[4], tonumber(ARGV[1]) - 7776000000, '+inf')
-        local score = resetAt >= seen and 0 or scoreRisk(KEYS[1], KEYS[2], KEYS[3], shared, KEYS[5], KEYS[6], tonumber(ARGV[1]), ARGV[2], KEYS[8], KEYS[9])
+        local score = resetAt >= seen and 0 or scoreRisk(KEYS[1], KEYS[2], KEYS[3], shared, KEYS[5], KEYS[6], tonumber(ARGV[1]), KEYS[8], KEYS[9])
         redis.call('HSET', KEYS[1], 'score', score, 'scoreAt', ARGV[1])
         redis.call('ZADD', KEYS[7], score, ARGV[3])
+        redis.call('ZADD', KEYS[14], score, ARGV[3])
+        redis.call('EXPIRE', KEYS[14], 604800)
         if redis.call('HGET', KEYS[1], 'status') == 'blocked' then
           redis.call('ZREM', KEYS[10], ARGV[3]); redis.call('ZREM', KEYS[11], ARGV[3]); redis.call('ZADD', KEYS[12], score, ARGV[3]); redis.call('ZADD', KEYS[13], seen, ARGV[3])
         else
           redis.call('ZADD', KEYS[10], score, ARGV[3]); redis.call('ZADD', KEYS[11], seen, ARGV[3]); redis.call('ZREM', KEYS[12], ARGV[3]); redis.call('ZREM', KEYS[13], ARGV[3])
         end
         return score
-      `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}recent-ips:${id}`, ipKey(address), `${prefix}clients:${id}`, roomDayKey(id, timestamp), `${prefix}scores`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [String(timestamp), RULES_JSON, id, address, expected] }));
+      `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}recent-ips:${id}`, ipKey(address), `${prefix}clients:${id}`, roomDayKey(id, timestamp), `${prefix}scores`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}day-scores:${dateKey(timestamp)}`], arguments: [String(timestamp), '', id, address, expected] }));
       if (result !== -1) {
         if (!Number.isSafeInteger(result) || result < 0 || result > 100) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风险评分暂不可用，请稍后重试');
         return result;
@@ -558,17 +669,41 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     return policy;
   }
 
+  async function expireTemporaryBlock(id, timestamp) {
+    await run(client => evalRedisScript(client, `${SCORE_LUA}
+      resolveEffectiveStatus(KEYS[1], KEYS[2], KEYS[3], KEYS[4], KEYS[5], KEYS[6], ARGV[1], tonumber(ARGV[2]))
+      return 1
+    `, { keys: [profileKey(id), `${prefix}status:`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [id, String(timestamp)] }));
+  }
+
   async function sessionStatus(id) {
-    const status = await run((client) => client.hGet(profileKey(id), 'status'));
+    const [status, rawBlockedUntil] = await run(async (client) => (
+      typeof client.hmGet === 'function'
+        ? client.hmGet(profileKey(id), ['status', 'blockedUntil'])
+        : [await client.hGet(profileKey(id), 'status'), await client.hGet(profileKey(id), 'blockedUntil')]
+    ));
     if (status !== null && !STATUSES.has(status)) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风控存储暂不可用，请稍后重试');
+    const blockedUntil = Number(rawBlockedUntil || 0);
+    const timestamp = now();
+    if (status === 'blocked' && blockedUntil > 0 && timestamp >= blockedUntil) {
+      await expireTemporaryBlock(id, timestamp);
+      return 'normal';
+    }
     return status || 'normal';
   }
 
   async function assertAllowed(id, { human = false } = {}) {
-    const [status, pending, bypass] = human
-      ? await run(client => client.hmGet(profileKey(id), ['status', 'humanPending', 'humanBypass']))
-      : [await sessionStatus(id)];
+    const [rawStatus, rawBlockedUntil, pending, bypass] = human
+      ? await run(client => client.hmGet(profileKey(id), ['status', 'blockedUntil', 'humanPending', 'humanBypass']))
+      : [await sessionStatus(id), null, null, null];
+    let status = rawStatus;
     if (status !== null && status !== undefined && !STATUSES.has(status)) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风控存储暂不可用，请稍后重试');
+    const blockedUntil = Number(rawBlockedUntil || 0);
+    const timestamp = now();
+    if (human && status === 'blocked' && blockedUntil > 0 && timestamp >= blockedUntil) {
+      await expireTemporaryBlock(id, timestamp);
+      status = 'normal';
+    }
     if (status === 'blocked') throw new RiskControlError('ACCOUNT_RISK_BLOCKED', '账户访问已受限，请联系管理员复核', 403);
     const config = getRuntimeConfig();
     if (human && config.riskChallengeEnabled && config.turnstileEnabled && pending && bypass !== '1') {
@@ -589,7 +724,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     await refreshScore(id);
   }
 
-  async function consume(account, { ip, kind = 'api', operation = '', eventName = '', music = false, userAgent = '', network = {} } = {}) {
+  async function consume(account, { ip, kind = 'api', operation = '', eventName = '', music = false, userAgent = '', network = {}, inRoom = false, legacyUnbound = false, sessionShared = false } = {}) {
     const id = accountId(account?.id);
     const timestamp = now();
     const address = cleanIp(ip);
@@ -603,11 +738,11 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const minuteBucket = Math.floor(timestamp / 60_000);
     const runtimeConfig = getRuntimeConfig();
     const options = {
-      keys: [profileKey(id), `${prefix}accounts`, `${prefix}minute:${id}:${minuteBucket}`, `${prefix}day-cn:${id}:${today}`, `${addressIpKey}:minute:${minuteBucket}`, `${prefix}recent-ips:${id}`, addressIpKey, `${prefix}scores`, `${prefix}alert:${id}`, `${prefix}status:`, `${prefix}events`, `${prefix}room-day:${id}:${today}`, `${prefix}clients:${id}`, `${prefix}client-info:${id}`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}request-ips:${id}`, `${prefix}request-ip-counts:${id}`, `${prefix}request-events:${id}`, `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}today-requests:${today}`, `${prefix}url-window:${id}:${addressHash}`],
-      arguments: [String(timestamp), id, address, category, String(account.email || ''), String(account.createdAt || 0), ...[policy.minuteLimit, policy.dayLimit, policy.musicMinuteLimit, policy.musicDayLimit, policy.ipMinuteLimit].map(String), action, music ? '1' : '0', RULES_JSON, ...clientSignal(userAgent), requestId, ['direct', 'trusted_proxy'].includes(network.route) ? network.route : '', network.untrustedForwarded === true ? '1' : '0', /curl|wget|python-requests|httpx|headless|selenium|playwright|okhttp|dart\//iu.test(String(userAgent).slice(0, 320)) ? '1' : '0', runtimeConfig.riskChallengeEnabled && runtimeConfig.turnstileEnabled ? '1' : '0', today, randomBytes(24).toString('hex'), String(eventName || '').replace(/[\r\n\x00-\x1f\x7f]/gu, '').slice(0, 96)],
+      keys: [profileKey(id), `${prefix}accounts`, `${prefix}minute:${id}:${minuteBucket}`, `${prefix}day-cn:${id}:${today}`, `${addressIpKey}:minute:${minuteBucket}`, `${prefix}recent-ips:${id}`, addressIpKey, `${prefix}scores`, `${prefix}alert:${id}`, `${prefix}status:`, `${prefix}events`, `${prefix}room-day:${id}:${today}`, `${prefix}clients:${id}`, `${prefix}client-info:${id}`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}request-ips:${id}`, `${prefix}request-ip-counts:${id}`, `${prefix}request-events:${id}`, `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}today-requests:${today}`, `${prefix}url-window:${id}:${addressHash}`, `${addressIpKey}:url-minute:${minuteBucket}`, `${prefix}day-scores:${today}`, `${prefix}decisions:${id}`],
+      arguments: [String(timestamp), id, address, category, String(account.email || ''), String(account.createdAt || 0), ...[policy.minuteLimit, policy.dayLimit, policy.musicMinuteLimit, policy.musicDayLimit, policy.ipMinuteLimit].map(String), action, music ? '1' : '0', String(policy.ipUrlMinuteLimit), ...clientSignal(userAgent), requestId, ['direct', 'trusted_proxy'].includes(network.route) ? network.route : '', network.untrustedForwarded === true ? '1' : '0', isAutomationUserAgent(userAgent) ? '1' : '0', runtimeConfig.riskChallengeEnabled && runtimeConfig.turnstileEnabled ? '1' : '0', today, randomBytes(24).toString('hex'), String(eventName || '').replace(/[\r\n\x00-\x1f\x7f]/gu, '').slice(0, 96)],
     };
     const result = await run(client => evalRedisScript(client, CONSUME_SCRIPT, {
-      ...options, arguments: [...options.arguments.slice(0, -1), riskChallengeChannel(client, prefix), String(policy.urlMinuteLimit), String(policy.urlBurstLimit), options.arguments.at(-1)],
+      ...options, arguments: [...options.arguments.slice(0, -1), riskChallengeChannel(client, prefix), String(policy.urlMinuteLimit), String(policy.urlBurstLimit), options.arguments.at(-1), inRoom ? '1' : '0', legacyUnbound ? '1' : '0', sessionShared ? '1' : '0'],
     }));
     if (!Array.isArray(result) || result.length !== 6 || !['', 'ACCOUNT_RISK_BLOCKED', 'ACCOUNT_RATE_LIMITED', 'ACCOUNT_HUMAN_CHECK_REQUIRED'].includes(result[0])
       || result.slice(1).some((value) => !Number.isSafeInteger(value) || value < 0)
@@ -619,6 +754,32 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const dailyExhausted = Number(result[2]) > policy.dayLimit || Number(result[3]) > policy.musicDayLimit;
     const retryAfter = dailyExhausted ? riskDayRemaining(timestamp) : 60 - Math.floor(timestamp / 1000) % 60;
     return { allowed: !code, code, requestId, at: timestamp, status: ['ACCOUNT_RISK_BLOCKED', 'ACCOUNT_HUMAN_CHECK_REQUIRED'].includes(code) ? 403 : 429, limited: code !== 'ACCOUNT_HUMAN_CHECK_REQUIRED' && Number(result[5]) === 1, retryAfter, minute: Number(result[1]), daily: Number(result[2]), musicDaily: Number(result[3]), score: Number(result[4]) };
+  }
+
+  async function consumeMediaContinuation(account, { ip } = {}) {
+    const id = accountId(account?.id);
+    const timestamp = now();
+    const address = cleanIp(ip);
+    const addressHash = createHash('sha256').update(address).digest('hex');
+    const addressIpKey = `${prefix}ip:${addressHash}`;
+    const minuteBucket = Math.floor(timestamp / 60_000);
+    const runtimeConfig = getRuntimeConfig();
+    const result = await run(client => evalRedisScript(client, MEDIA_CONTINUATION_SCRIPT, {
+      keys: [profileKey(id), `${prefix}media-cont:${id}:${minuteBucket}`, `${addressIpKey}:media-cont:${minuteBucket}`, `${prefix}status:`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`],
+      arguments: [String(timestamp), id, address, runtimeConfig.riskChallengeEnabled && runtimeConfig.turnstileEnabled ? '1' : '0', String(MEDIA_CONTINUATION_ACCOUNT_LIMIT), String(MEDIA_CONTINUATION_IP_LIMIT)],
+    }));
+    if (!Array.isArray(result) || result.length !== 2 || !['', 'ACCOUNT_RISK_BLOCKED', 'ACCOUNT_RATE_LIMITED', 'ACCOUNT_HUMAN_CHECK_REQUIRED'].includes(result[0])) {
+      throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风控存储暂不可用，请稍后重试');
+    }
+    const code = String(result[0]);
+    const retryAfter = 60 - Math.floor(timestamp / 1000) % 60;
+    return {
+      allowed: !code,
+      code,
+      status: ['ACCOUNT_RISK_BLOCKED', 'ACCOUNT_HUMAN_CHECK_REQUIRED'].includes(code) ? 403 : 429,
+      limited: Number(result[1]) === 1,
+      retryAfter,
+    };
   }
 
   async function recordAiCall(id, { taskType = 'text' } = {}) {
@@ -696,9 +857,13 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const timestamp = now();
     if (!event || event.at < timestamp - DAY || event.at > timestamp) throw new RiskControlError('RISK_RESPONSE_INVALID', '歌曲响应摘要无效', 400);
     event.ip = cleanIp(input.ip);
+    const returnedSong = event.songs?.[0];
+    const targetSongId = returnedSong?.id || event.requestedSongId;
+    const targetSource = returnedSong?.source || event.source;
+    const songMember = targetSongId ? `${targetSource || event.operation}:${targetSongId}` : event.requestId;
     // 每个响应只执行一次固定规模脚本，去重和淘汰在同一原子操作完成
     const recorded = await run(client => evalRedisScript(client, MUSIC_RESPONSE_SCRIPT, { keys: [profileKey(id), `${prefix}music-response-order:${id}`, `${prefix}music-responses:${id}`, dailyKey(id, event.at), `${prefix}url-window:${id}:${createHash('sha256').update(event.ip).digest('hex')}`, dailyKey(id, timestamp)],
-      arguments: [event.requestId, JSON.stringify(event), event.outcome, String(event.durationMs), event.operation, String(timestamp), event.ip, String(event.status), String(event.at)] }));
+      arguments: [event.requestId, JSON.stringify(event), event.outcome, String(event.durationMs), event.operation, String(timestamp), event.ip, String(event.status), String(event.at), songMember] }));
     if (recorded === 2) await refreshScore(id);
   }
 
@@ -709,11 +874,14 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const timestamp = requestAt;
     const groupId = createHash('sha256').update(JSON.stringify(error)).digest('hex').slice(0, 24);
     const event = { ...error, at: timestamp, groupId };
+    const clientAttributable = isClientAttributableError(error);
     await ensureDaily(accountId(id), timestamp);
     const recorded = await run(client => evalRedisScript(client, `
       if redis.call('HEXISTS', KEYS[1], 'firstSeenAt') == 0 then return 0 end
       redis.call('HINCRBY', KEYS[1], 'errors', 1)
       redis.call('HINCRBY', KEYS[2], 'errors', 1)
+      redis.call('HSETNX', KEYS[2], 'clientErrors', 0)
+      if ARGV[2] == '1' then redis.call('HINCRBY', KEYS[2], 'clientErrors', 1) end
       redis.call('EXPIRE', KEYS[2], 3024000)
       local event = cjson.decode(ARGV[1])
       local groupId = event.groupId
@@ -738,7 +906,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('EXPIRE', KEYS[3], 7776000)
       redis.call('EXPIRE', KEYS[4], 7776000)
       return 1
-    `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}error-groups:${id}`, `${prefix}error-meta:${id}`, `${prefix}error-events:${id}`], arguments: [JSON.stringify(event)] }));
+    `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}error-groups:${id}`, `${prefix}error-meta:${id}`, `${prefix}error-events:${id}`], arguments: [JSON.stringify(event), clientAttributable ? '1' : '0'] }));
     if (recorded !== 1) return;
     await refreshScore(id);
   }
@@ -877,6 +1045,9 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       const counts = Object.fromEntries(Object.entries(daily).map(([name, value]) => [name, Number(value)]));
       const evaluated = evaluateRisk({ musicMinutePeak: counts.musicMinutePeak, untrustedForwarded: counts.untrustedForwarded, automationClientRequests: counts.automationClientRequests, responseUrlOk: counts.response_url_ok, responseTotal: counts.response_total, responseEmpty: counts.response_empty, denied: counts.denied, minutePeak: counts.minutePeak, ipCount, sharedAccounts, musicIpCount, musicIpChanges,
         authFailures: counts.authFailures, clientCount, roomCount, errors: counts.errors,
+        clientErrors: Object.hasOwn(daily, 'clientErrors') ? counts.clientErrors : undefined,
+        roomContext: counts.roomContext || 0,
+        sessionShared: counts.sessionShared || 0,
         requests: counts.requests, musicRequests: counts.music, urlIpMinutePeak: counts.urlIpMinutePeak || 0, socketRequests: counts.socketRequests || 0, roomJoins: counts.roomJoins || 0,
         operations: Object.fromEntries(MUSIC_OPERATIONS.map(key => [key, counts[`operation_${key}`] || 0])), dailyEstimated: estimated === 'utc-conservative', accountAge: Number(profile.createdAt) > 0 ? timestamp - Number(profile.createdAt) : -1 });
       if (Number(profile.scoreResetAt || 0) >= Number(profile.lastSeenAt || 0)) {
@@ -885,9 +1056,30 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         evaluated.reasons = [];
         evaluated.factors = evaluated.factors.map(factor => ({ ...factor, points: 0, matched: false }));
       }
+      const rawBlockedUntil = Number(profile.blockedUntil || 0);
+      const tempBlockExpired = profile.status === 'blocked' && rawBlockedUntil > 0 && timestamp >= rawBlockedUntil;
+      const effectiveStatus = tempBlockExpired ? 'normal' : (profile.status || 'normal');
+      const blockedUntil = effectiveStatus === 'blocked' ? rawBlockedUntil : 0;
+      if (tempBlockExpired) {
+        void expireTemporaryBlock(id, timestamp).catch(() => {});
+      }
+      const storedScore = Number(profile.score || 0);
+      const scoredAt = Number(profile.scoreAt || 0);
+      const scoreStaleDay = storedScore > 0 && scoredAt > 0 && dateKey(scoredAt) !== dateKey(timestamp);
+      const effectiveSampledScore = scoreStaleDay ? evaluated.score : storedScore;
+      if (scoreStaleDay && effectiveSampledScore !== storedScore) {
+        void evalRedisScript(client, `
+          if tonumber(redis.call('HGET', KEYS[1], 'scoreAt') or '0') ~= tonumber(ARGV[1]) then return 0 end
+          local nextScore = tonumber(ARGV[3]) or 0
+          redis.call('HSET', KEYS[1], 'score', nextScore)
+          redis.call('ZADD', KEYS[2], nextScore, ARGV[2])
+          if redis.call('HGET', KEYS[1], 'status') ~= 'blocked' then redis.call('ZADD', KEYS[3], nextScore, ARGV[2]) end
+          return 1
+        `, { keys: [profileKey(id), `${prefix}scores`, `${prefix}main-scores`], arguments: [String(scoredAt), id, String(effectiveSampledScore)] }).catch(() => {});
+      }
       return {
         humanChallenge: humanChallengeSnapshot(profile, dateKey(timestamp)),
-        id, email: profile.email || '', status: profile.status || 'normal', tags: (() => { const parsed = safeJsonParse(profile.tags || '[]', []); return Array.isArray(parsed) ? parsed : []; })(), note: profile.note || '', reason: profile.reason || '',
+        id, email: profile.email || '', status: effectiveStatus, blockedUntil, tags: (() => { const parsed = safeJsonParse(profile.tags || '[]', []); return Array.isArray(parsed) ? parsed : []; })(), note: profile.note || '', reason: profile.reason || '',
         createdAt: Number(profile.createdAt || 0), firstSeenAt: Number(profile.firstSeenAt), lastSeenAt: Number(profile.lastSeenAt),
         registrationIp: profile.registrationIp || '', lastLoginIp: profile.lastLoginIp || '', lastRequestIp: profile.lastRequestIp || '', lastLoginAt: Number(profile.lastLoginAt || 0), loginCount: Number(profile.loginCount || 0),
         requests: Number(profile.requests || 0), musicRequests: Number(profile.musicRequests || 0), socketRequests: Number(profile.socketRequests || 0), denied: Number(profile.denied || 0), errors: Number(profile.errors || 0),
@@ -895,7 +1087,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         nickname: profile.nickname || '', networkIp: profile.lastNetworkIp || profile.lastRequestIp || profile.lastLoginIp || '', lastRoomId: profile.lastRoomId || '', lastRoomAt: Number(profile.lastRoomAt || 0),
         roomJoins: Number(profile.roomJoins || 0), roomCount, roomHistoryCount, clientCount,
         authFailures: Number(profile.authFailures || 0), lastAuthFailureAt: Number(profile.lastAuthFailureAt || 0),
-        lastNetworkRoute: profile.lastNetworkRoute || '', lastHumanVerifiedAt: Number(profile.lastHumanVerifiedAt || 0), sampledScore: Number(profile.score || 0), scoredAt: Number(profile.scoreAt || 0),
+        lastNetworkRoute: profile.lastNetworkRoute || '', lastHumanVerifiedAt: Number(profile.lastHumanVerifiedAt || 0), sampledScore: effectiveSampledScore, scoredAt,
         ...safeIdentity(account, profile),
         daily: counts, dailyEstimated: estimated === 'utc-conservative', ipCount, sharedAccounts, musicIpCount, musicIpChanges,
         ...evaluated,
@@ -946,20 +1138,44 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     for (let offset = 0; offset < total; offset += 100) {
       if (Date.now() - startedAt > 5000) throw new RiskControlError('RISK_SEARCH_TIMEOUT', '搜索超时，请使用完整账户 ID、完整邮箱或 IP 重试');
       const ids = await run(client => client.zRange(key, offset, offset + 99));
-      const found = await run(client => Promise.all(ids.map(async id => {
-        const [rawAccount, fields, nicknames] = await Promise.all([
-          client.get(`openmusic:account:${id}`),
-          client.hmGet(profileKey(id), ['nickname', 'email', 'registrationIp', 'lastLoginIp', 'lastRequestIp', 'firstSeenAt', 'tags']),
-          client.zRange(`${prefix}nicknames:${id}`, now() - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
-        ]);
-        if (!fields[5]) return null;
-        const account = safeJsonParse(rawAccount, null);
-        const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
-        const matched = !account?.deletedAt && matchesRiskAccountName(normalized, account || {}, [fields[0], ...nicknames]);
-        const exactIdentity = id === query || identity.roomUserId === query;
-        const subjectMatched = Array.isArray(account?.identities) && account.identities.some(entry => typeof entry.subject === 'string' && entry.subject === query);
-        return matched || exactIdentity || (!account?.deletedAt && subjectMatched) ? id : null;
-      })));
+      const minNicknameAt = now() - HISTORY_SEC * 1000;
+      const found = await run(async client => {
+        if (typeof client.multi === 'function' && ids.length) {
+          const batch = client.multi();
+          for (const id of ids) {
+            batch.get(`openmusic:account:${id}`);
+            batch.hmGet(profileKey(id), ['nickname', 'email', 'registrationIp', 'lastLoginIp', 'lastRequestIp', 'firstSeenAt', 'tags']);
+            batch.zRange(`${prefix}nicknames:${id}`, minNicknameAt, '+inf', { BY: 'SCORE' });
+          }
+          const rows = await batch.exec();
+          return ids.map((id, index) => {
+            const rawAccount = rows[index * 3];
+            const fields = rows[index * 3 + 1] || [];
+            const nicknames = rows[index * 3 + 2] || [];
+            if (!fields[5]) return null;
+            const account = safeJsonParse(rawAccount, null);
+            const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
+            const matched = !account?.deletedAt && matchesRiskAccountName(normalized, account || {}, [fields[0], ...nicknames]);
+            const exactIdentity = id === query || identity.roomUserId === query;
+            const subjectMatched = Array.isArray(account?.identities) && account.identities.some(entry => typeof entry.subject === 'string' && entry.subject === query);
+            return matched || exactIdentity || (!account?.deletedAt && subjectMatched) ? id : null;
+          });
+        }
+        return Promise.all(ids.map(async id => {
+          const [rawAccount, fields, nicknames] = await Promise.all([
+            client.get(`openmusic:account:${id}`),
+            client.hmGet(profileKey(id), ['nickname', 'email', 'registrationIp', 'lastLoginIp', 'lastRequestIp', 'firstSeenAt', 'tags']),
+            client.zRange(`${prefix}nicknames:${id}`, minNicknameAt, '+inf', { BY: 'SCORE' }),
+          ]);
+          if (!fields[5]) return null;
+          const account = safeJsonParse(rawAccount, null);
+          const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
+          const matched = !account?.deletedAt && matchesRiskAccountName(normalized, account || {}, [fields[0], ...nicknames]);
+          const exactIdentity = id === query || identity.roomUserId === query;
+          const subjectMatched = Array.isArray(account?.identities) && account.identities.some(entry => typeof entry.subject === 'string' && entry.subject === query);
+          return matched || exactIdentity || (!account?.deletedAt && subjectMatched) ? id : null;
+        }));
+      });
       matches.push(...found.filter(Boolean));
     }
     await run(client => evalRedisScript(client, `
@@ -1032,9 +1248,10 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     }
     const query = q.trim();
     async function readPage(key) {
+      const todayScoreKey = `${prefix}day-scores:${dateKey(now())}`;
       const [total, ids, high, blocked] = await run((client) => Promise.all([
         client.zCard(key), client.zRangeWithScores(key, (currentPage - 1) * size, currentPage * size - 1, { REV: true }),
-        client.zCount(`${prefix}scores`, 60, '+inf'), client.zCard(`${prefix}status:blocked`),
+        client.zCount(todayScoreKey, 60, '+inf'), client.zCard(`${prefix}status:blocked`),
       ]));
       const items = (await Promise.all(ids.map(async entry => {
         const item = await summary(entry.value);
@@ -1162,15 +1379,25 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
 
   async function setDecision(id, input) {
     accountId(id);
+    const rawDuration = input?.durationMinutes;
+    const durationMinutes = rawDuration === undefined || rawDuration === null || rawDuration === 0 ? 0 : rawDuration;
     if (!input || !STATUSES.has(input.status) || !Array.isArray(input.tags) || input.tags.length > 10 || input.tags.some((tag) => typeof tag !== 'string' || !tag.trim() || tag.length > 24) || typeof input.note !== 'string' || input.note.length > 500 || typeof input.reason !== 'string' || !input.reason.trim() || input.reason.length > 200) {
       throw new RiskControlError('RISK_DECISION_INVALID', '处置状态、标签、备注或处置原因无效', 400);
     }
-    const decision = { status: input.status, tags: [...new Set(input.tags.map((tag) => tag.trim()))], note: input.note, reason: input.reason.trim() };
+    if (!Number.isSafeInteger(durationMinutes) || durationMinutes < 0 || durationMinutes > MAX_TEMP_BLOCK_MINUTES || (input.status !== 'blocked' && durationMinutes > 0)) {
+      throw new RiskControlError('RISK_DECISION_INVALID', '临时限制时长需为 1 至 43200 分钟，且仅对限制访问生效', 400);
+    }
+    const timestamp = now();
+    const blockedUntil = input.status === 'blocked' && durationMinutes > 0 ? timestamp + durationMinutes * 60_000 : 0;
+    const decision = { status: input.status, blockedUntil, durationMinutes, tags: [...new Set(input.tags.map((tag) => tag.trim()))], note: input.note, reason: input.reason.trim() };
     await run((client) => evalRedisScript(client, `
       if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
       local previous = redis.call('HGET', KEYS[1], 'status') or 'normal'
       redis.call('ZREM', KEYS[2] .. previous, ARGV[1])
       redis.call('HSET', KEYS[1], 'status', ARGV[2], 'tags', ARGV[3], 'note', ARGV[4], 'reason', ARGV[5], 'decisionAt', ARGV[6])
+      local untilAt = tonumber(ARGV[7]) or 0
+      if ARGV[2] == 'blocked' and untilAt > 0 then redis.call('HSET', KEYS[1], 'blockedUntil', untilAt)
+      else redis.call('HDEL', KEYS[1], 'blockedUntil') end
       redis.call('ZADD', KEYS[2] .. ARGV[2], ARGV[6], ARGV[1])
       local score = tonumber(redis.call('HGET', KEYS[1], 'score') or '0')
       local seen = tonumber(redis.call('HGET', KEYS[1], 'lastSeenAt') or ARGV[6])
@@ -1180,11 +1407,11 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       else
         redis.call('ZADD', KEYS[4], score, ARGV[1]); redis.call('ZADD', KEYS[5], seen, ARGV[1]); redis.call('ZREM', KEYS[6], ARGV[1]); redis.call('ZREM', KEYS[7], ARGV[1])
       end
-      redis.call('LPUSH', KEYS[3], cjson.encode({at=tonumber(ARGV[6]), previousStatus=previous, status=ARGV[2], reason=ARGV[5]}))
+      redis.call('LPUSH', KEYS[3], cjson.encode({at=tonumber(ARGV[6]), previousStatus=previous, status=ARGV[2], reason=ARGV[5], blockedUntil=untilAt > 0 and untilAt or nil}))
       redis.call('LTRIM', KEYS[3], 0, 99)
       redis.call('EXPIRE', KEYS[3], 7776000)
       return 1
-    `, { keys: [profileKey(id), `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}scores`], arguments: [id, decision.status, JSON.stringify(decision.tags), decision.note, decision.reason, String(now())] }).then((result) => {
+    `, { keys: [profileKey(id), `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}scores`], arguments: [id, decision.status, JSON.stringify(decision.tags), decision.note, decision.reason, String(timestamp), String(blockedUntil)] }).then((result) => {
       if (!result) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     }));
     return decision;
@@ -1205,19 +1432,21 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       if latestIp == 'unknown' then latestIp = '' end
       redis.call('HSET', KEYS[1], 'status', 'normal', 'score', 0, 'scoreAt', ARGV[1], 'scoreResetAt', ARGV[1], 'decisionAt', ARGV[1])
       if latestIp ~= '' then redis.call('HSET', KEYS[1], 'lastNetworkIp', latestIp, 'lastRequestIp', latestIp) end
-      redis.call('HDEL', KEYS[1], 'humanPending', 'humanCooldownUntil', 'lastHumanVerifiedAt')
+      redis.call('HDEL', KEYS[1], 'blockedUntil', 'humanPending', 'humanCooldownUntil', 'lastHumanVerifiedAt')
       redis.call('ZREM', KEYS[5], ARGV[2])
       redis.call('ZREM', KEYS[6], ARGV[2])
       redis.call('ZADD', KEYS[3], 0, ARGV[2])
       redis.call('ZADD', KEYS[4], ARGV[1], ARGV[2])
       redis.call('ZADD', KEYS[9], 0, ARGV[2])
+      redis.call('ZADD', KEYS[10], 0, ARGV[2])
+      redis.call('EXPIRE', KEYS[10], 604800)
       for _, status in ipairs({'normal', 'watch', 'blocked'}) do redis.call('ZREM', KEYS[7] .. status, ARGV[2]) end
       redis.call('ZADD', KEYS[7] .. 'normal', ARGV[1], ARGV[2])
       redis.call('LPUSH', KEYS[8], cjson.encode({at=tonumber(ARGV[1]), previousStatus=ARGV[3], status='normal', reason=ARGV[4], reset=true}))
       redis.call('LTRIM', KEYS[8], 0, 99)
       redis.call('EXPIRE', KEYS[8], 7776000)
       return cjson.encode({ found = 1, latestIp = latestIp })
-    `, { keys: [profileKey(id), `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}scores`], arguments: [String(timestamp), id, previousStatus, reason] }));
+    `, { keys: [profileKey(id), `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}scores`, `${prefix}day-scores:${dateKey(timestamp)}`], arguments: [String(timestamp), id, previousStatus, reason] }));
     const parsed = safeJsonParse(result, {});
     if (!parsed?.found) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     return { ok: true, status: 'normal', score: 0, latestIp: parsed.latestIp || '', resetAt: timestamp };
@@ -1297,7 +1526,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     }
   }
 
-  return { humanChallengeStatus, completeHumanChallenge, forceHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, recordAiCall, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
+  return { humanChallengeStatus, completeHumanChallenge, forceHumanChallenge, setHumanChallengeBypass, getPolicy, setPolicy, sessionStatus, assertAllowed, recordLogin, consume, consumeMediaContinuation, recordAiCall, recordMusicResponse, recordOutcome, recordRoomVisit, recordNickname, recordAuthFailure, list, detail, setDecision, resetRisk, events, clearHistory };
 }
 
 export const riskControl = createRiskControl();

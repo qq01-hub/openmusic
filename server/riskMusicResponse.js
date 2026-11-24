@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 const SOURCES = new Set(['netease', 'tencent', 'qq', 'kugou', 'kuwo', 'migu', 'bilibili', 'qishui']);
 const OPERATIONS = new Set(['url', 'lrc', 'song', 'search', 'playlist', 'search_playlist', 'fm', 'source', 'media']);
 const OUTCOMES = new Set(['ok', 'empty', 'failed', 'substituted', 'aborted']);
@@ -28,7 +30,13 @@ export function musicRequestContext(path, query = {}) {
   if (path === '/api/qishui-source') { operation = 'source'; source = 'qishui'; }
   if (path === '/api/media-proxy') operation = 'media';
   if (!OPERATIONS.has(operation)) return null;
-  return { operation, source, requestedSongId: ['song', 'url', 'lrc'].includes(operation) ? songId(query.id) : '' };
+  let requestedSongId = '';
+  if (['song', 'url', 'lrc'].includes(operation)) {
+    requestedSongId = songId(query.id);
+  } else if (operation === 'source' && typeof query.t === 'string' && query.t.trim()) {
+    requestedSongId = `qs_${createHash('sha256').update(query.t.trim()).digest('hex').slice(0, 20)}`;
+  }
+  return { operation, source, requestedSongId };
 }
 
 export function shouldRecordMusicResponse(context) {

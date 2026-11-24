@@ -1,7 +1,19 @@
 import { isMobileDevice } from './audioUnlock';
 import { getBufferedAheadSeconds, isAudioBufferedForPlayback } from './audioReadiness';
 
-export function waitForAudioCanPlay(audio: HTMLAudioElement, timeoutMs?: number): Promise<void> {
+function createWaitAbortedError(): Error {
+  const error = new Error('音频缓冲等待已取消');
+  error.name = 'AbortError';
+  return error;
+}
+
+export function waitForAudioCanPlay(
+  audio: HTMLAudioElement,
+  timeoutMs?: number,
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const signal = options?.signal;
+  if (signal?.aborted) return Promise.reject(createWaitAbortedError());
   const timeout = timeoutMs ?? (isMobileDevice() ? 12000 : 15000);
   if (isAudioBufferedForPlayback(audio)) return Promise.resolve();
 
@@ -13,11 +25,16 @@ export function waitForAudioCanPlay(audio: HTMLAudioElement, timeoutMs?: number)
       audio.removeEventListener('canplaythrough', onReady);
       audio.removeEventListener('progress', onReady);
       audio.removeEventListener('loadeddata', onReady);
+      signal?.removeEventListener('abort', onAbort);
     };
     const onReady = () => {
       if (!isAudioBufferedForPlayback(audio)) return;
       cleanup();
       resolve();
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(createWaitAbortedError());
     };
     timer = window.setTimeout(() => {
       cleanup();
@@ -31,6 +48,7 @@ export function waitForAudioCanPlay(audio: HTMLAudioElement, timeoutMs?: number)
     audio.addEventListener('canplaythrough', onReady);
     audio.addEventListener('progress', onReady);
     audio.addEventListener('loadeddata', onReady);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 

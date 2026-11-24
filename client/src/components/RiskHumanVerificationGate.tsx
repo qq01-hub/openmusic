@@ -41,7 +41,7 @@ export default function RiskHumanVerificationGate() {
       }
     } catch (reason) {
       if (mounted.current && revision === identityRevision.current && requiredLoad.current) {
-        setState(previous => previous || { pending: true, challengeId: '', siteKey: '', passes: 0, dailyLimit: 2 });
+        setState(previous => previous || { pending: true, challengeId: '', siteKey: '', passes: 0, dailyLimit: 0 });
         setError(reason instanceof Error ? reason.message : '验证状态暂不可用，请重试');
       }
     } finally { inFlight.current = false; if (mounted.current && revision !== identityRevision.current) void load(); }
