@@ -25,12 +25,12 @@ export default function PermanentDecisionPopup({ open, notice, onClose }: Props)
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
       <div
-        className={`relative w-full max-w-md animate-fade-in rounded-2xl border bg-netease-dark p-5 shadow-2xl backdrop-blur-xl ${
+        className={`room-feature-dialog relative w-full max-w-md animate-fade-in rounded-2xl border p-5 shadow-2xl ${
           approved ? 'border-emerald-400/20' : 'border-amber-400/20'
         }`}
         onClick={(e) => e.stopPropagation()}

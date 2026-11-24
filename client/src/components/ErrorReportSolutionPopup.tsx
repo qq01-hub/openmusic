@@ -21,12 +21,12 @@ export default function ErrorReportSolutionPopup({ open, notice, onClose }: Prop
     <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
       <button
         type="button"
-        className="absolute inset-0 bg-[#08090c] backdrop-blur-sm"
+        className="absolute inset-0 room-feature-scrim"
         onClick={onClose}
         aria-label="关闭"
       />
       <div
-        className="relative w-full max-w-md animate-fade-in rounded-2xl border border-emerald-400/20 bg-netease-dark p-5 shadow-2xl backdrop-blur-xl"
+        className="room-feature-dialog relative w-full max-w-md animate-fade-in rounded-2xl border border-emerald-400/20 p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-3 flex items-center justify-between gap-2">

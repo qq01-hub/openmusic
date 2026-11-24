@@ -217,7 +217,7 @@ export default function RoomThemeColorPicker() {
       {open && (
         <div
           ref={panelRef}
-          className="absolute right-0 top-[calc(100%+8px)] z-[100] w-[calc(220px+1.5rem)] rounded-2xl border border-white/10 bg-[#18181d]/95 py-3 shadow-2xl shadow-black/50 backdrop-blur-xl"
+          className="absolute right-0 top-[calc(100%+8px)] z-[100] w-[calc(220px+1.5rem)] rounded-2xl border border-white/10 bg-[#141419]/84 py-3 shadow-2xl shadow-black/50 backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]"
           style={panelShiftX ? { transform: `translateX(${panelShiftX}px)` } : undefined}
         >
           <div className="mb-2 flex items-center justify-between px-3">

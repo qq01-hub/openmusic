@@ -83,7 +83,7 @@ export default function RiskHumanVerificationGate() {
     finally { if (isCurrent()) { submitting.current = false; setBusy(false); setToken(''); setWidgetRevision(value => value + 1); } }
   };
   if (!state?.pending) return null;
-  return <div className="fixed inset-0 z-[250] flex items-start justify-center overflow-y-auto bg-[#08090c] p-5 backdrop-blur-sm">
+  return <div className="fixed inset-0 z-[250] flex items-start justify-center overflow-y-auto room-feature-scrim p-5">
     <section ref={dialog} onKeyDown={event => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); }
       if (event.key !== 'Tab') return;
@@ -92,7 +92,7 @@ export default function RiskHumanVerificationGate() {
       if (!first) { event.preventDefault(); return; }
       if (event.shiftKey && (document.activeElement === first || document.activeElement?.tagName === 'H2')) { event.preventDefault(); last.focus(); }
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    }} role="dialog" aria-modal="true" aria-labelledby="risk-human-title" className="my-auto w-full max-w-md shrink-0 space-y-5 rounded-2xl border border-white/15 bg-netease-dark p-6 text-white shadow-2xl">
+    }} role="dialog" aria-modal="true" aria-labelledby="risk-human-title" className="room-feature-dialog my-auto w-full max-w-md shrink-0 space-y-5 rounded-2xl border border-white/15 p-6 text-white shadow-2xl">
       <h2 id="risk-human-title" className="text-xl font-semibold" tabIndex={-1}>请确认是你在访问</h2>
       <p className="text-sm leading-6 text-white/65">检测到异常访问，请先完成验证，未通过前无法继续获取资源</p>
       {state.siteKey && <HumanVerification key={widgetRevision} siteKey={state.siteKey} action="risk_challenge" cdata={state.challengeId} onToken={setToken} />}

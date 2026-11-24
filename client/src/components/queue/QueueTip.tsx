@@ -6,7 +6,7 @@ interface Props {
   children: ReactNode;
 }
 
-const TIP_CLASS = 'pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-white/10 bg-[#1a1a1a]/95 px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl backdrop-blur-md';
+const TIP_CLASS = 'pointer-events-none z-[220] max-w-[min(280px,calc(100vw-24px))] rounded-lg border border-white/10 bg-[#141419]/84 px-2.5 py-1.5 text-xs leading-snug text-white/90 shadow-xl backdrop-blur-md [-webkit-backdrop-filter:blur(12px)]';
 
 function QueueTip({ content, children }: Props) {
   const [show, setShow] = useState(false);

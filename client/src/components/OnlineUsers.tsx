@@ -361,7 +361,7 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY
       </Tooltip>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-72 rounded-2xl border border-netease-border/70 bg-netease-dark/95 p-3 shadow-2xl backdrop-blur z-30">
+        <div className="absolute right-0 top-full mt-2 w-72 rounded-2xl border border-netease-border/70 bg-[#141419]/84 p-3 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] z-30">
           <div className="mb-2 flex items-center justify-between">
             <div>
               <h3 className="text-sm font-medium text-white">房间用户</h3>

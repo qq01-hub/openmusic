@@ -101,7 +101,7 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
     };
   }, [onReady, revision]);
 
-  const connectionNotice = error && <div role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-[180] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-netease-dark/95 px-4 py-3 text-sm text-white shadow-lg">
+  const connectionNotice = error && <div role="status" aria-live="polite" className="fixed bottom-5 left-1/2 z-[180] w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-xl border border-white/15 bg-[#141419]/82 px-4 py-3 text-sm text-white shadow-lg backdrop-blur-md [-webkit-backdrop-filter:blur(12px)]">
     <span>{retrying ? error : '服务暂不可用，可稍后重试连接'}</span>
     <button type="button" className="ml-3 rounded px-2 py-1 text-amber-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white" onClick={() => setRevision(value => value + 1)}>重试连接</button>
   </div>;

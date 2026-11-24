@@ -41,6 +41,14 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
 }
 
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .room-desk-pet [data-desk-pet-menu="true"] {
+    background: rgb(20 20 25 / 0.84);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+  }
+}
+
 .room-desk-pet [data-desk-pet-menu="true"] button:focus-visible {
   outline: 2px solid var(--om-accent);
   outline-offset: -2px;

@@ -95,7 +95,7 @@ export default function FavoriteCategorySelect({
       id={listboxId}
       role="listbox"
       aria-label={`为 ${songName} 选择收藏分类`}
-      className="fixed z-[130] max-h-[280px] overflow-y-auto rounded-xl border border-white/10 bg-netease-bg/95 py-1 shadow-xl backdrop-blur-md animate-fade-in"
+      className="fixed z-[130] max-h-[280px] overflow-y-auto rounded-xl border border-white/10 bg-[#141419]/84 py-1 shadow-xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] animate-fade-in"
       style={menuStyle}
     >
       {options.map((option) => (

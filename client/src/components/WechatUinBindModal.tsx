@@ -142,7 +142,7 @@ export default function WechatUinBindModal({ open, mode, roomId, onClose, onComp
   }, [open, mode, roomId, retryKey]);
 
   return (
-    <Modal open={open} zIndex={100} closeOnMaskClick={false} panelClassName="relative w-full max-w-[520px] animate-fade-in rounded-2xl border border-white/10 bg-netease-dark p-6 shadow-2xl">
+    <Modal open={open} zIndex={100} closeOnMaskClick={false} panelClassName="room-feature-dialog relative w-full max-w-[520px] animate-fade-in rounded-2xl border border-white/10 p-6 shadow-2xl">
       <div className="mb-4 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-base font-semibold text-white">{mode === 'bind' ? '微信身份绑定' : '微信身份找回'}</h3>

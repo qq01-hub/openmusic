@@ -675,7 +675,7 @@ export default function RoomMusicAccountPanel({
         {SECURITY_NOTE}
       </p>
       {secondVerifyUrl ? (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-[#08090c] p-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center room-feature-scrim p-4">
           <div className="flex h-[min(620px,90vh)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-white/15 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 text-sm font-medium text-black">
               <span>汽水安全验证</span>

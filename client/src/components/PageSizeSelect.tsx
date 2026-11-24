@@ -58,7 +58,7 @@ export default function PageSizeSelect<T extends number>({
       ref={menuRef}
       role="listbox"
       aria-label="每页条数"
-      className="fixed z-[100] rounded-xl border border-white/10 bg-netease-bg/95 py-1 shadow-xl backdrop-blur-md animate-fade-in"
+      className="fixed z-[100] rounded-xl border border-white/10 bg-[#141419]/84 py-1 shadow-xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)] animate-fade-in"
       style={{
         left: menuStyle.left,
         bottom: menuStyle.bottom,

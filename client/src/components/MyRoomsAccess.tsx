@@ -51,7 +51,7 @@ export default function MyRoomsAccess() {
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        panelClassName="relative w-full max-w-lg rounded-3xl border border-white/10 bg-[#11131a] p-5 shadow-2xl"
+        panelClassName="room-feature-dialog relative w-full max-w-lg rounded-3xl border border-white/10 p-5 shadow-2xl"
       >
         <section role="dialog" aria-modal="true" aria-label="我的房间">
           <div className="flex items-center justify-between">

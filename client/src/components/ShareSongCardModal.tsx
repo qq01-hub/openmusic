@@ -57,7 +57,7 @@ export default function ShareSongCardModal({
       open={open}
       onClose={onCancel}
       zIndex={120}
-      panelClassName="relative w-full max-w-sm animate-fade-in rounded-2xl border border-white/10 bg-netease-dark p-5 shadow-2xl"
+      panelClassName="room-feature-dialog relative w-full max-w-sm animate-fade-in rounded-2xl border border-white/10 p-5 shadow-2xl"
     >
       <div className="mb-3 flex items-center justify-between">
         <h2 className="text-sm font-medium text-white">分享到聊天</h2>

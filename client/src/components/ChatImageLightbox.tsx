@@ -166,7 +166,7 @@ export default function ChatImageLightbox({ imageUrl, onClose }: Props) {
       </div>
 
       <div className="image-viewer-actions pointer-events-none absolute inset-x-0 bottom-8 z-20 flex justify-center px-4 sm:bottom-10">
-        <div className="pointer-events-auto flex h-11 items-center gap-1 rounded-full bg-[#08090c] px-3 shadow-lg backdrop-blur-sm">
+        <div className="pointer-events-auto flex h-11 items-center gap-1 rounded-full border border-white/10 bg-[#141419]/75 px-3 shadow-lg backdrop-blur-md [-webkit-backdrop-filter:blur(12px)]">
           <button
             type="button"
             className={toolbarButtonClass}

@@ -43,12 +43,13 @@ export default function Modal({
   mask = true,
   closeOnMaskClick = true,
   zIndex = 80,
-  panelClassName = 'relative w-full max-w-sm animate-fade-in rounded-2xl border border-white/10 bg-netease-dark p-6 shadow-2xl',
+  panelClassName = 'room-feature-dialog relative w-full max-w-sm animate-fade-in rounded-2xl border border-white/10 p-6 shadow-2xl',
   containerClassName = 'fixed inset-0 flex items-center justify-center p-4',
 }: Props) {
   if (!open) return null;
 
-  const maskClassName = 'modal-mask pointer-events-auto absolute inset-0 bg-[#08090c] backdrop-blur-sm';
+  const maskClassName = 'modal-mask pointer-events-auto absolute inset-0 room-feature-scrim';
+  const hasSurfaceClass = /\b(room-feature-dialog|account-modal-panel)\b/.test(panelClassName);
 
   return createPortal(
     <div
@@ -69,7 +70,7 @@ export default function Modal({
         )
       )}
       <div
-        className={`room-modal-panel ${panelClassName}`}
+        className={`room-modal-panel ${hasSurfaceClass ? '' : 'room-feature-dialog '}${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
       >

@@ -57,7 +57,7 @@ export default function QueueSystemToast() {
       {isReconnecting ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-2">
           <p
-            className="flex max-w-full items-center gap-1.5 truncate rounded-full border border-white/20 bg-black px-3 py-1 text-center text-[11px] leading-4 text-white shadow-lg"
+            className="flex max-w-full items-center gap-1.5 truncate rounded-full border border-white/20 bg-[#141419]/80 px-3 py-1 text-center text-[11px] leading-4 text-white shadow-lg backdrop-blur-md [-webkit-backdrop-filter:blur(12px)]"
             role="status"
             aria-live="polite"
           >
@@ -68,7 +68,7 @@ export default function QueueSystemToast() {
       ) : showOperation ? (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-2">
           <p
-            className={`max-w-full truncate rounded-full border border-white/20 bg-black px-3 py-1 text-center text-[11px] leading-4 text-white shadow-lg transition-opacity duration-300 ${
+            className={`max-w-full truncate rounded-full border border-white/20 bg-[#141419]/80 px-3 py-1 text-center text-[11px] leading-4 text-white shadow-lg backdrop-blur-md [-webkit-backdrop-filter:blur(12px)] transition-opacity duration-300 ${
               phase === 'exit' ? 'opacity-0' : 'opacity-100 animate-fade-in'
             }`}
             role="status"

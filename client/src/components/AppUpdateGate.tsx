@@ -126,7 +126,7 @@ export default function AppUpdateGate() {
         onClose={onLater}
         closeOnMaskClick={false}
         zIndex={90}
-        panelClassName="relative w-full max-w-[19rem] animate-fade-in overflow-hidden rounded-2xl border border-white/10 bg-netease-dark shadow-2xl"
+        panelClassName="room-feature-dialog relative w-full max-w-[19rem] animate-fade-in overflow-hidden rounded-2xl border border-white/10 shadow-2xl"
       >
         <div className="px-5 pb-5 pt-6">
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-amber-400/15">

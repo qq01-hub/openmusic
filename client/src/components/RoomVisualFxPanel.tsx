@@ -44,7 +44,7 @@ export default function RoomVisualFxPanel({
         className={`absolute right-2 top-[3.75rem] bottom-20 z-10 flex max-h-[min(78vh,calc(100%-5.5rem))] w-[13rem] flex-col overflow-hidden sm:right-3 sm:w-[13.5rem] ${
           dragging
             ? 'rounded-2xl border border-transparent bg-transparent shadow-none'
-            : 'rounded-2xl border border-white/15 bg-[#14161c]/92 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]'
+            : 'rounded-2xl border border-white/15 bg-[#141419]/80 shadow-2xl backdrop-blur-xl [-webkit-backdrop-filter:blur(20px)]'
         }`}
         onClick={(e) => e.stopPropagation()}
       >

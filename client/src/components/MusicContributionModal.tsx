@@ -295,8 +295,8 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
 
   return (
     <div className="fixed inset-0 z-[110] flex items-end justify-center p-4 sm:items-center">
-      <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-md" onClick={onClose} aria-label="关闭" />
-      <div className="relative max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-[28px] border border-white/10 bg-[#101012]/95 p-5 shadow-2xl animate-fade-in sm:p-7">
+      <button type="button" className="absolute inset-0 room-feature-scrim backdrop-blur-md" onClick={onClose} aria-label="关闭" />
+      <div className="room-feature-dialog relative max-h-[calc(100dvh-2rem)] w-full max-w-2xl overflow-y-auto rounded-[28px] border border-white/10 p-5 shadow-2xl animate-fade-in sm:p-7">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-rose-200">
@@ -407,7 +407,7 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
         </div>
       </div>
       {secondVerifyUrl ? (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-[#08090c] p-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center room-feature-scrim p-4">
           <div className="flex h-[min(620px,90vh)] w-full max-w-md flex-col overflow-hidden rounded-xl border border-white/15 bg-white shadow-2xl">
             <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 text-sm font-medium text-black">
               <span>汽水安全验证</span>
@@ -432,8 +432,8 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
       ) : null}
       {revokeOpen ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-          <button type="button" className="absolute inset-0 bg-[#08090c] backdrop-blur-sm" onClick={() => setRevokeOpen(false)} aria-label="关闭取消共享弹框" />
-          <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-[#17171b] p-5 shadow-2xl animate-fade-in">
+          <button type="button" className="absolute inset-0 room-feature-scrim" onClick={() => setRevokeOpen(false)} aria-label="关闭取消共享弹框" />
+          <div className="room-feature-dialog relative w-full max-w-sm rounded-2xl border border-white/10 p-5 shadow-2xl animate-fade-in">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-base font-semibold text-white">取消共享</h3>

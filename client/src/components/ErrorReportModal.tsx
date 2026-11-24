@@ -108,7 +108,7 @@ export default function ErrorReportModal({ open, onClose }: Props) {
   };
 
   return (
-    <Modal open={open} onClose={close} panelClassName="relative w-full max-w-md animate-fade-in rounded-2xl border border-white/10 bg-netease-dark p-5 shadow-2xl">
+    <Modal open={open} onClose={close} panelClassName="room-feature-dialog relative w-full max-w-md animate-fade-in rounded-2xl border border-white/10 p-5 shadow-2xl">
       <h3 className="text-base font-semibold text-white">上报错误 / 提交意见</h3>
       <div className="mt-3 flex gap-1 rounded-xl border border-white/10 bg-black/20 p-1">
         {REPORT_TYPES.map((item) => (
