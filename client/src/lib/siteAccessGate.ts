@@ -1,6 +1,7 @@
 /** 全站封禁命中后冻结前端，避免已打开的页面继续狂刷 API / 重连 */
 
 import { softBlockMessage } from './softBlock';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 let blocked = false;
 let frozen = false;
@@ -45,6 +46,7 @@ function startRecoveryPolling() {
   if (typeof window === 'undefined') return;
   if (recoveryTimer != null) return;
   recoveryTimer = window.setInterval(() => {
+    if (isHostPageHidden()) return;
     void tryRecoverSiteAccess();
   }, RECOVERY_POLL_MS);
   // 立刻探一次，解封后尽快自动回来
@@ -65,6 +67,10 @@ function bindRecoveryListeners() {
 
   window.addEventListener('online', () => {
     if (blocked) void tryRecoverSiteAccess();
+  });
+
+  subscribeHostVisibility(() => {
+    if (blocked && !isHostPageHidden()) void tryRecoverSiteAccess();
   });
 }
 

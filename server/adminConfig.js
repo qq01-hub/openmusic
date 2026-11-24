@@ -22,9 +22,11 @@ const RESERVED_PREFIXES = [
 
 let cached = {
   mtimeMs: -1,
+  checkedAt: 0,
   entryPath: DEFAULT_ENTRY_PATH,
   entryPathCustomized: false,
 };
+const STAT_CHECK_INTERVAL_MS = 1000;
 
 function normalizeEntryPath(raw) {
   let p = String(raw || '').trim();
@@ -67,17 +69,24 @@ function readConfigFromDisk() {
   }
 }
 
-function refreshCache() {
+function refreshCache(forceStat = false) {
+  const now = Date.now();
+  if (!forceStat && cached.checkedAt > 0 && now - cached.checkedAt < STAT_CHECK_INTERVAL_MS) {
+    return cached;
+  }
   let mtimeMs = 0;
   try {
     mtimeMs = fs.statSync(CONFIG_PATH).mtimeMs;
   } catch {
-    cached = { mtimeMs: 0, entryPath: DEFAULT_ENTRY_PATH, entryPathCustomized: false };
+    cached = { mtimeMs: 0, checkedAt: now, entryPath: DEFAULT_ENTRY_PATH, entryPathCustomized: false };
     return cached;
   }
-  if (cached.mtimeMs === mtimeMs) return cached;
+  if (cached.mtimeMs === mtimeMs) {
+    cached.checkedAt = now;
+    return cached;
+  }
   const cfg = readConfigFromDisk();
-  cached = { mtimeMs, ...cfg };
+  cached = { mtimeMs, checkedAt: now, ...cfg };
   return cached;
 }
 
@@ -103,7 +112,7 @@ export function migrateLegacyAdminEntryConfig() {
       mode: 0o600,
       flag: 'wx',
     });
-    cached = { mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs, ...payload };
+    cached = { mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs, checkedAt: Date.now(), ...payload };
   } catch (err) {
     if (err?.code !== 'EEXIST') {
       console.warn('admin-config: 旧站点入口兼容标记写入失败:', err?.message || err);
@@ -123,13 +132,13 @@ export function setAdminEntryPath(raw, opts = {}) {
   if (opts.requireCustom && entryPath === DEFAULT_ENTRY_PATH) {
     return { success: false, error: '初始设置须将登录地址改为非 /admin 的随机路径' };
   }
-  const prev = refreshCache();
+  const prev = refreshCache(true);
   // 一旦用过非默认路径即标记已自定义；之后即使改回 /admin 也不再强制
   const entryPathCustomized = prev.entryPathCustomized || entryPath !== DEFAULT_ENTRY_PATH;
   try {
     const payload = { entryPath, entryPathCustomized };
     fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-    cached = { mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs, entryPath, entryPathCustomized };
+    cached = { mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs, checkedAt: Date.now(), entryPath, entryPathCustomized };
     return { success: true, entryPath, entryPathCustomized };
   } catch (err) {
     console.error('admin-config write error:', err?.message || err);

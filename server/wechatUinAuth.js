@@ -88,17 +88,32 @@ export function createWechatUinStore({ redis, enabled } = {}) {
     return true;
   }
 
+  async function deleteMatchedKeys(client, pattern) {
+    const pending = [];
+    for await (const entry of client.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+      if (Array.isArray(entry)) {
+        for (const item of entry) {
+          if (typeof item === 'string' && item) pending.push(item);
+        }
+      } else if (typeof entry === 'string' && entry) {
+        pending.push(entry);
+      }
+      while (pending.length >= 200) {
+        await client.del(pending.splice(0, 200));
+      }
+    }
+    if (pending.length > 0) {
+      await client.del(pending);
+    }
+  }
+
   async function clearBindingsForRoom(roomId) {
     if (!isAvailable()) return false;
     const rid = normalizeRoomId(roomId);
     const client = getStoreRedis();
     if (!rid || typeof client.scanIterator !== 'function') return false;
-    const bindKeys = [];
-    for await (const key of client.scanIterator({ MATCH: `${BIND_PREFIX}*:${rid}` })) bindKeys.push(key);
-    const profileKeys = [];
-    for await (const key of client.scanIterator({ MATCH: `${PROFILE_PREFIX}*:${rid}` })) profileKeys.push(key);
-    if (bindKeys.length) await client.del(...bindKeys);
-    if (profileKeys.length) await client.del(...profileKeys);
+    await deleteMatchedKeys(client, `${BIND_PREFIX}*:${rid}`);
+    await deleteMatchedKeys(client, `${PROFILE_PREFIX}*:${rid}`);
     return true;
   }
 

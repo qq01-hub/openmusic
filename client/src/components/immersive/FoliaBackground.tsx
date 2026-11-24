@@ -14,6 +14,7 @@ import { readGalaxyAudioBands, getTopographyFrequencyBins512, resumeGalaxyAudioC
 import { stageLyricPaletteLive, subscribeStageLyricPalette } from '../../lib/stageLyricPaletteLive';
 import type { QueueItem } from '../../types';
 import { loadFoliaStage, resetFoliaStageLoader } from '../../lib/foliaStageLoader';
+import { isHostPageHidden, subscribeHostVisibility } from '../../hooks/useVisualRenderPolicy';
 export { preloadFoliaStage } from '../../lib/foliaStageLoader';
 
 type Track = Pick<QueueItem, 'queueId' | 'id' | 'source' | 'name' | 'artist' | 'pic' | 'url' | 'duration' | 'lrc'>;
@@ -181,8 +182,10 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
     let lastMap: ReturnType<typeof getCurrentBeatMap> = null;
     let lastKey = '';
     const tick = (now: number) => {
+      raf = 0;
+      if (isHostPageHidden()) return;
       raf = requestAnimationFrame(tick);
-      if (document.hidden || now - last < 33) return;
+      if (now - last < 33) return;
       last = now;
       if (clock.current.isPlaying) resumeGalaxyAudioContext();
       const bands = readGalaxyAudioBands(1 / 30);
@@ -199,8 +202,23 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
         lyricOffsetSeconds: clock.current.lyricOffsetSeconds,
         bands: { ...bands, lowMid: bands.mid, power: bands.energy }, spectrum: getTopographyFrequencyBins512() });
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    const syncVisibility = () => {
+      if (isHostPageHidden()) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+        return;
+      }
+      if (!raf) {
+        last = 0;
+        raf = requestAnimationFrame(tick);
+      }
+    };
+    const unsubscribe = subscribeHostVisibility(syncVisibility);
+    syncVisibility();
+    return () => {
+      unsubscribe();
+      cancelAnimationFrame(raf);
+    };
   }, [ready]);
   return <div className="pointer-events-auto absolute inset-0 z-10">
     {analyzeBeats && <GalaxyBeatMapDriver song={song} isPlaying={isPlaying} />}

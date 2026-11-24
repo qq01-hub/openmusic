@@ -24,37 +24,49 @@ class MainActivity : FlutterActivity() {
                 when (call.method) {
                     "vibrate" -> {
                         val vibrator = if (android.os.Build.VERSION.SDK_INT >= 31) {
-                            getSystemService(VibratorManager::class.java).defaultVibrator
-                        } else getSystemService(VIBRATOR_SERVICE) as Vibrator
-                        if (android.os.Build.VERSION.SDK_INT >= 26) {
-                            vibrator.vibrate(
-                                VibrationEffect.createOneShot(
-                                    24,
-                                    VibrationEffect.DEFAULT_AMPLITUDE,
-                                ),
-                            )
+                            getSystemService(VibratorManager::class.java)?.defaultVibrator
                         } else {
                             @Suppress("DEPRECATION")
-                            vibrator.vibrate(24)
+                            getSystemService(VIBRATOR_SERVICE) as? Vibrator
+                        }
+                        if (vibrator != null && vibrator.hasVibrator()) {
+                            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                vibrator.vibrate(
+                                    VibrationEffect.createOneShot(
+                                        24,
+                                        VibrationEffect.DEFAULT_AMPLITUDE,
+                                    ),
+                                )
+                            } else {
+                                @Suppress("DEPRECATION")
+                                vibrator.vibrate(24)
+                            }
                         }
                         result.success(mapOf("ok" to true))
                     }
                     "share" -> {
                         val text = call.argument<String>("text")?.take(2000).orEmpty()
-                        startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, text)
-                        }, "分享"))
-                        result.success(mapOf("ok" to true))
+                        val launched = runCatching {
+                            startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_TEXT, text)
+                            }, "分享"))
+                        }.isSuccess
+                        if (launched) result.success(mapOf("ok" to true))
+                        else result.error("SHARE_UNAVAILABLE", "当前设备无可用分享应用", null)
                     }
                     "openExternal" -> {
                         val raw = call.argument<String>("url").orEmpty()
                         val uri = runCatching { Uri.parse(raw) }.getOrNull()
-                        if (uri == null || uri.scheme !in setOf("https", "http")) {
+                        val scheme = uri?.scheme?.lowercase()
+                        if (uri == null || scheme !in setOf("https", "http")) {
                             result.error("INVALID_URL", "仅允许 http/https", null)
                         } else {
-                            startActivity(Intent(Intent.ACTION_VIEW, uri))
-                            result.success(mapOf("ok" to true))
+                            val launched = runCatching {
+                                startActivity(Intent(Intent.ACTION_VIEW, uri))
+                            }.isSuccess
+                            if (launched) result.success(mapOf("ok" to true))
+                            else result.error("OPEN_EXTERNAL_UNAVAILABLE", "当前设备未安装可用浏览器", null)
                         }
                     }
                     "updatePlaybackNotification" -> {

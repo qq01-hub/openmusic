@@ -64,11 +64,14 @@ async function probeMetingUrl(source, id) {
 
   if (response.status >= 300 && response.status < 400) {
     const location = normalizeUrl(response.headers.get('location'));
+    await response.body?.cancel?.().catch(() => {});
     return isPlayableHttpUrl(location);
   }
 
-  if (response.status === 404 || response.status === 403) return false;
-  if (response.status >= 400) return false;
+  if (response.status === 404 || response.status === 403 || response.status >= 400) {
+    await response.body?.cancel?.().catch(() => {});
+    return false;
+  }
 
   const text = await response.text();
   const url = parseUrlPayload(text);
@@ -84,7 +87,10 @@ async function probeMetingUrl(source, id) {
       { redirect: 'manual' },
       12000,
     );
-    if (!sourceResponse.ok) return false;
+    if (!sourceResponse.ok) {
+      await sourceResponse.body?.cancel?.().catch(() => {});
+      return false;
+    }
     return parseQishuiSourcePayload(await sourceResponse.text());
   }
 

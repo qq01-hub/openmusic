@@ -11,6 +11,62 @@
     </style>
     <script>
       (function () {
+        var hostPaused = false;
+        var nextRafHandle = 1;
+        var activeNativeRafIds = new Map();
+        var pausedRafCallbacks = new Map();
+        var nativeRaf = typeof window.requestAnimationFrame === 'function'
+          ? window.requestAnimationFrame.bind(window)
+          : null;
+        var nativeCaf = typeof window.cancelAnimationFrame === 'function'
+          ? window.cancelAnimationFrame.bind(window)
+          : null;
+
+        function scheduleNativeRaf(handle, callback) {
+          if (!nativeRaf) return;
+          var nativeId = nativeRaf(function (timestamp) {
+            activeNativeRafIds.delete(handle);
+            if (hostPaused) {
+              pausedRafCallbacks.set(handle, callback);
+              return;
+            }
+            callback(timestamp);
+          });
+          activeNativeRafIds.set(handle, nativeId);
+        }
+
+        function setHostPaused(nextPaused) {
+          var shouldPause = Boolean(nextPaused);
+          if (hostPaused === shouldPause) return;
+          hostPaused = shouldPause;
+          if (!hostPaused && pausedRafCallbacks.size > 0) {
+            var entries = Array.from(pausedRafCallbacks.entries());
+            pausedRafCallbacks.clear();
+            entries.forEach(function (entry) {
+              scheduleNativeRaf(entry[0], entry[1]);
+            });
+          }
+        }
+
+        if (nativeRaf && nativeCaf) {
+          window.requestAnimationFrame = function (callback) {
+            var handle = nextRafHandle++;
+            if (hostPaused) {
+              pausedRafCallbacks.set(handle, callback);
+              return handle;
+            }
+            scheduleNativeRaf(handle, callback);
+            return handle;
+          };
+          window.cancelAnimationFrame = function (handle) {
+            pausedRafCallbacks.delete(handle);
+            if (activeNativeRafIds.has(handle)) {
+              nativeCaf(activeNativeRafIds.get(handle));
+              activeNativeRafIds.delete(handle);
+            }
+          };
+        }
+
         var mediaCallbacks = [];
         var propertyReady = false;
         var audioListeners = [];
@@ -327,11 +383,17 @@
           if (data.type === 'mineradio-sonic-workshop-audio') window.__mineradioApplyAudio(data.samples);
           if (data.type === 'mineradio-sonic-workshop-media') window.__mineradioApplyMedia(data.media);
           if (data.type === 'mineradio-sonic-workshop-properties') window.__mineradioApplyProperties(data.properties);
+          if (data.type === 'mineradio-sonic-workshop-visibility') setHostPaused(data.paused);
         });
 
+        var propertyRetryCount = 0;
+        var MAX_PROPERTY_RETRIES = 100;
         setTimeout(function retryProperties() {
           if (!propertyReady && applyDefaultProperties()) propertyReady = true;
-          if (!propertyReady) setTimeout(retryProperties, 120);
+          if (!propertyReady && propertyRetryCount < MAX_PROPERTY_RETRIES) {
+            propertyRetryCount += 1;
+            setTimeout(retryProperties, 120);
+          }
         }, 120);
       })();
     </script>

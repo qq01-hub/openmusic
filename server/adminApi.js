@@ -397,12 +397,28 @@ const LOGIN_WINDOW_MS = 60_000;
 const LOGIN_WINDOW_MAX = 5;
 const LOCK_BASE_MS = 60_000;
 const LOCK_MAX_MS = 60 * 60 * 1000;
+const MAX_LOGIN_GUARD_ENTRIES = 10_000;
+const MAX_GATE_ATTEMPT_ENTRIES = 10_000;
 
 function getLoginGuard(ip) {
   const key = ip || 'unknown';
   let entry = loginGuard.get(key);
   if (!entry) {
-    entry = { windowStart: Date.now(), windowCount: 0, failCount: 0, lockedUntil: 0 };
+    const now = Date.now();
+    if (loginGuard.size >= MAX_LOGIN_GUARD_ENTRIES) {
+      for (const [oldIp, oldEntry] of loginGuard.entries()) {
+        if (oldEntry.lockedUntil <= now && now - oldEntry.lastAttemptAt > LOCK_MAX_MS) {
+          loginGuard.delete(oldIp);
+        }
+        if (loginGuard.size < MAX_LOGIN_GUARD_ENTRIES) break;
+      }
+      while (loginGuard.size >= MAX_LOGIN_GUARD_ENTRIES) {
+        const oldestIp = loginGuard.keys().next().value;
+        if (oldestIp === undefined) break;
+        loginGuard.delete(oldestIp);
+      }
+    }
+    entry = { windowStart: now, windowCount: 0, failCount: 0, lockedUntil: 0, lastAttemptAt: now };
     loginGuard.set(key, entry);
   }
   return entry;
@@ -435,6 +451,7 @@ function getLoginBlock(ip) {
 function noteLoginAttempt(ip) {
   const entry = getLoginGuard(ip);
   const now = Date.now();
+  entry.lastAttemptAt = now;
   if (now - entry.windowStart > LOGIN_WINDOW_MS) {
     entry.windowStart = now;
     entry.windowCount = 0;
@@ -444,21 +461,25 @@ function noteLoginAttempt(ip) {
 
 function noteLoginFailure(ip) {
   const entry = getLoginGuard(ip);
+  const now = Date.now();
+  entry.lastAttemptAt = now;
   entry.failCount += 1;
   // 每累计 5 次失败锁定一次，时长 1m → 2m → 4m … 封顶 1h
   if (entry.failCount % 5 === 0) {
     const tier = Math.max(0, Math.floor(entry.failCount / 5) - 1);
     const lockMs = Math.min(LOCK_MAX_MS, LOCK_BASE_MS * (2 ** tier));
-    entry.lockedUntil = Date.now() + lockMs;
+    entry.lockedUntil = now + lockMs;
   }
 }
 
 function noteLoginSuccess(ip) {
   const entry = getLoginGuard(ip);
+  const now = Date.now();
   entry.failCount = 0;
   entry.lockedUntil = 0;
   entry.windowCount = 0;
-  entry.windowStart = Date.now();
+  entry.windowStart = now;
+  entry.lastAttemptAt = now;
 }
 
 // 入口路径探测限流（防枚举）
@@ -467,6 +488,17 @@ function isGateRateLimited(ip) {
   const now = Date.now();
   const entry = gateAttempts.get(ip);
   if (!entry || now - entry.windowStart > 60_000) {
+    if (!entry && gateAttempts.size >= MAX_GATE_ATTEMPT_ENTRIES) {
+      for (const [oldIp, oldEntry] of gateAttempts.entries()) {
+        if (now - oldEntry.windowStart > 60_000) gateAttempts.delete(oldIp);
+        if (gateAttempts.size < MAX_GATE_ATTEMPT_ENTRIES) break;
+      }
+      while (gateAttempts.size >= MAX_GATE_ATTEMPT_ENTRIES) {
+        const oldestIp = gateAttempts.keys().next().value;
+        if (oldestIp === undefined) break;
+        gateAttempts.delete(oldestIp);
+      }
+    }
     gateAttempts.set(ip, { windowStart: now, count: 1 });
     return false;
   }
@@ -477,7 +509,9 @@ function isGateRateLimited(ip) {
 setInterval(() => {
   const now = Date.now();
   for (const [ip, entry] of loginGuard.entries()) {
-    if (entry.lockedUntil < now && now - entry.windowStart > 120_000 && entry.failCount === 0) {
+    const staleAfterFailure = entry.failCount > 0 && now - entry.lastAttemptAt > LOCK_MAX_MS;
+    const idleClean = entry.failCount === 0 && now - entry.windowStart > 120_000;
+    if (entry.lockedUntil <= now && (idleClean || staleAfterFailure)) {
       loginGuard.delete(ip);
     }
   }

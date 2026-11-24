@@ -14,10 +14,20 @@ export default function AdminChart({ option, label }: { option: EChartsCoreOptio
     if (!container.current) return;
     const instance = init(container.current);
     chart.current = instance;
-    const observer = new ResizeObserver(() => instance.resize());
+    let resizeRafId = 0;
+    const observer = new ResizeObserver(() => {
+      if (resizeRafId) return;
+      resizeRafId = window.requestAnimationFrame(() => {
+        resizeRafId = 0;
+        const el = container.current;
+        if (!el || el.clientWidth <= 0 || el.clientHeight <= 0) return;
+        instance.resize();
+      });
+    });
     observer.observe(container.current);
     return () => {
       observer.disconnect();
+      if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
       chart.current = undefined;
       instance.dispose();
     };

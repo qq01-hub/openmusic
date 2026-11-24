@@ -48,6 +48,8 @@ function LyricsContent({
   const scrollTimer = useRef<ReturnType<typeof setTimeout>>();
   const lastActiveIndexRef = useRef(-1);
   const programmaticScrollRef = useRef(false);
+  const programmaticRafRef = useRef<number | null>(null);
+  const programmaticTimerRef = useRef<number | null>(null);
   const needsInstantSnapRef = useRef(true);
   const [showTranslation, setShowTranslation] = useState(
     () => roomVisualFxLive.current.lyricShowTranslation !== false,
@@ -77,6 +79,17 @@ function LyricsContent({
       : displayLines.length;
   const visibleLines = displayLines.slice(windowStart, windowEnd);
 
+  const clearProgrammaticTimers = useCallback(() => {
+    if (programmaticRafRef.current !== null) {
+      cancelAnimationFrame(programmaticRafRef.current);
+      programmaticRafRef.current = null;
+    }
+    if (programmaticTimerRef.current !== null) {
+      window.clearTimeout(programmaticTimerRef.current);
+      programmaticTimerRef.current = null;
+    }
+  }, []);
+
   const scrollActiveToCenter = useCallback((behavior: ScrollBehavior = 'smooth') => {
     const container = containerRef.current;
     const active = activeRef.current;
@@ -91,20 +104,23 @@ function LyricsContent({
     const top = Math.max(0, nextTop);
     if (Math.abs(container.scrollTop - top) < 1) return;
 
+    clearProgrammaticTimers();
     programmaticScrollRef.current = true;
     container.scrollTo({ top, behavior });
     if (behavior === 'instant') {
       // instant 同步完成，下一帧再放开 scroll 监听
-      requestAnimationFrame(() => {
+      programmaticRafRef.current = requestAnimationFrame(() => {
+        programmaticRafRef.current = null;
         programmaticScrollRef.current = false;
       });
       return;
     }
     // smooth 期间忽略 scroll 事件，避免误判为手动滚动
-    window.setTimeout(() => {
+    programmaticTimerRef.current = window.setTimeout(() => {
+      programmaticTimerRef.current = null;
       programmaticScrollRef.current = false;
     }, 450);
-  }, []);
+  }, [clearProgrammaticTimers]);
 
   useEffect(() => {
     setManualScroll(false);
@@ -136,7 +152,10 @@ function LyricsContent({
     scrollTimer.current = setTimeout(() => setManualScroll(false), SCROLL_IDLE_MS);
   };
 
-  useEffect(() => () => clearTimeout(scrollTimer.current), []);
+  useEffect(() => () => {
+    clearTimeout(scrollTimer.current);
+    clearProgrammaticTimers();
+  }, [clearProgrammaticTimers]);
 
   if (displayLines.length === 0) {
     return (

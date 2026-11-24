@@ -12,6 +12,7 @@ import {
   LYRIC_FX_SLIDERS,
   LYRIC_TYPOGRAPHY_SLIDERS,
 } from '../RoomVisualFxSettingsBody';
+import Tooltip from '../Tooltip';
 
 interface Props {
   value: RoomVisualFxSettings;
@@ -71,46 +72,51 @@ export default function ImmersiveLyricFxControls({
 
       <FxSectionLabel>文字颜色</FxSectionLabel>
       <div className={`lyric-color-grid ${dragging ? 'pointer-events-none invisible' : ''}`}>
-        <button
-          type="button"
-          className={`lyric-swatch auto${lyricColorAuto ? ' active' : ''}`}
-          title="封面取色"
-          onClick={() => patchLyricPalette(onPatch, { lyricColorMode: 'auto' })}
-        >
-          AUTO
-        </button>
+        <Tooltip content="封面取色" side="top">
+          <button
+            type="button"
+            className={`lyric-swatch auto${lyricColorAuto ? ' active' : ''}`}
+            aria-label="封面取色"
+            onClick={() => patchLyricPalette(onPatch, { lyricColorMode: 'auto' })}
+          >
+            AUTO
+          </button>
+        </Tooltip>
         {LYRIC_COLOR_PRESETS.map((preset) => {
           const active = !lyricColorAuto && preset.color === lyricColor;
           return (
-            <button
-              key={preset.color}
-              type="button"
-              className={`lyric-swatch${active ? ' active' : ''}`}
-              title={preset.name}
-              style={{ ['--swatch' as string]: preset.color }}
-              onClick={() =>
-                patchLyricPalette(onPatch, {
-                  lyricColorMode: 'custom',
-                  lyricColor: preset.color,
-                })
-              }
-            />
+            <Tooltip key={preset.color} content={preset.name} side="top">
+              <button
+                type="button"
+                className={`lyric-swatch${active ? ' active' : ''}`}
+                aria-label={preset.name}
+                style={{ ['--swatch' as string]: preset.color }}
+                onClick={() =>
+                  patchLyricPalette(onPatch, {
+                    lyricColorMode: 'custom',
+                    lyricColor: preset.color,
+                  })
+                }
+              />
+            </Tooltip>
           );
         })}
       </div>
       <div className={`lyric-color-row ${dragging ? 'pointer-events-none invisible' : ''}`}>
-        <input
-          type="color"
-          className="lyric-color-picker"
-          value={lyricColor}
-          title="色轮取色"
-          onChange={(e) =>
-            patchLyricPalette(onPatch, {
-              lyricColorMode: 'custom',
-              lyricColor: e.target.value.toLowerCase(),
-            })
-          }
-        />
+        <Tooltip content="色轮取色" side="top">
+          <input
+            type="color"
+            className="lyric-color-picker"
+            value={lyricColor}
+            aria-label="色轮取色"
+            onChange={(e) =>
+              patchLyricPalette(onPatch, {
+                lyricColorMode: 'custom',
+                lyricColor: e.target.value.toLowerCase(),
+              })
+            }
+          />
+        </Tooltip>
         <div className="lyric-color-value">
           {lyricColorAuto ? '封面取色' : lyricColor.toUpperCase()}
         </div>
@@ -125,18 +131,20 @@ export default function ImmersiveLyricFxControls({
 
       <FxSectionLabel>跟唱高亮</FxSectionLabel>
       <div className={`lyric-color-row ${dragging ? 'pointer-events-none invisible' : ''}`}>
-        <input
-          type="color"
-          className="lyric-color-picker"
-          value={value.lyricHighlightColor}
-          title="高亮取色"
-          onChange={(e) =>
-            patchLyricPalette(onPatch, {
-              lyricHighlightMode: 'custom',
-              lyricHighlightColor: e.target.value.toLowerCase(),
-            })
-          }
-        />
+        <Tooltip content="高亮取色" side="top">
+          <input
+            type="color"
+            className="lyric-color-picker"
+            value={value.lyricHighlightColor}
+            aria-label="高亮取色"
+            onChange={(e) =>
+              patchLyricPalette(onPatch, {
+                lyricHighlightMode: 'custom',
+                lyricHighlightColor: e.target.value.toLowerCase(),
+              })
+            }
+          />
+        </Tooltip>
         <div className="lyric-color-value">
           {value.lyricHighlightMode === 'custom'
             ? value.lyricHighlightColor.toUpperCase()
@@ -160,20 +168,22 @@ export default function ImmersiveLyricFxControls({
           }
         }}
       >
-        <input
-          type="color"
-          className="lyric-color-picker"
-          value={value.lyricGlowColor}
-          title="溢光取色"
-          disabled={value.lyricGlowLinked !== false}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) =>
-            patchLyricPalette(onPatch, {
-              lyricGlowLinked: false,
-              lyricGlowColor: e.target.value.toLowerCase(),
-            })
-          }
-        />
+        <Tooltip content="溢光取色" side="top">
+          <input
+            type="color"
+            className="lyric-color-picker"
+            value={value.lyricGlowColor}
+            aria-label="溢光取色"
+            disabled={value.lyricGlowLinked !== false}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) =>
+              patchLyricPalette(onPatch, {
+                lyricGlowLinked: false,
+                lyricGlowColor: e.target.value.toLowerCase(),
+              })
+            }
+          />
+        </Tooltip>
         <div className="lyric-color-value">
           {value.lyricGlowLinked !== false ? '跟随高亮' : value.lyricGlowColor.toUpperCase()}
         </div>

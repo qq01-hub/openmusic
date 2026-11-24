@@ -221,6 +221,7 @@ const WX_COOKIE_NAME = /^(wxuin|wxsid|wxloadtime|mm_lang|skey|_?wx|webwx|MM_)/i;
 
 const wxLoginCookieJar = new Map();
 const WX_LOGIN_JAR_TTL_MS = 5 * 60 * 1000;
+const WX_LOGIN_JAR_MAX_ENTRIES = 2000;
 export const WECHAT_LOGIN_PROOF_COOKIE = 'openmusic_wx_login_proof';
 export const WECHAT_LOGIN_PROOF_TTL_SEC = 5 * 60;
 const WX_PROOF_FALLBACK_SECRET = randomBytes(32).toString('hex');
@@ -333,11 +334,19 @@ function rememberLoginCookies(target, bodyText, upstream) {
   if (!wxsid || !/^\d{1,32}$/u.test(String(wxuin || '').trim())) return null;
   const cookieStr = collectRawUpstreamCookies(upstream);
   if (cookieStr) {
-    const entry = { cookies: cookieStr, at: Date.now() };
+    const now = Date.now();
+    const entry = { cookies: cookieStr, at: now };
+    wxLoginCookieJar.delete(wxsid);
     wxLoginCookieJar.set(wxsid, entry);
+    wxLoginCookieJar.delete(`uin:${wxuin}`);
     wxLoginCookieJar.set(`uin:${wxuin}`, entry);
     for (const [key, jarEntry] of wxLoginCookieJar) {
-      if (Date.now() - jarEntry.at > WX_LOGIN_JAR_TTL_MS) wxLoginCookieJar.delete(key);
+      if (now - jarEntry.at > WX_LOGIN_JAR_TTL_MS) wxLoginCookieJar.delete(key);
+    }
+    while (wxLoginCookieJar.size > WX_LOGIN_JAR_MAX_ENTRIES) {
+      const oldestKey = wxLoginCookieJar.keys().next().value;
+      if (oldestKey === undefined) break;
+      wxLoginCookieJar.delete(oldestKey);
     }
   }
   return String(wxuin).trim();

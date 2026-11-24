@@ -638,7 +638,12 @@ async function attemptRoomRejoin(trigger: string) {
       useRoomStore.getState().setReconnecting(false);
       clearReconnectSchedule();
       // 重连后自动同步本地头像
-      const localAvatar = localStorage.getItem('avatar_url') || '';
+      let localAvatar = '';
+      try {
+        localAvatar = localStorage.getItem('avatar_url') || '';
+      } catch {
+        localAvatar = '';
+      }
       if (localAvatar && !res.room.userAvatarUrls?.[res.socketId || '']) {
         emitWithAck('set_user_avatar', { avatar_url: localAvatar }, { success: false }).catch(() => { });
       }
@@ -1019,6 +1024,7 @@ export function useSocket() {
         return;
       }
       window.setTimeout(() => {
+        if (humanChallengeRequired) return;
         connected.current = false;
         socketConnectRequested = false;
         s.connect();
@@ -1157,7 +1163,12 @@ export function useSocket() {
           applyJoinResponse(session, res);
           void applyCachedOwnerRoomConfigAfterJoin(res.room, res.socketId);
           // 加入后自动同步本地头像到服务器（非阻塞）
-          const localAvatar = localStorage.getItem('avatar_url') || '';
+          let localAvatar = '';
+          try {
+            localAvatar = localStorage.getItem('avatar_url') || '';
+          } catch {
+            localAvatar = '';
+          }
           if (localAvatar && !res.room.userAvatarUrls?.[res.socketId || '']) {
             emitWithAck('set_user_avatar', { avatar_url: localAvatar }, { success: false }).catch(() => { });
           }

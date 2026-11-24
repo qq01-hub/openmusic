@@ -28,9 +28,15 @@ export type QFaceLoadPriority = typeof QFaceLoadPriority[keyof typeof QFaceLoadP
 export type QFaceImageState = 'idle' | 'loading' | 'loaded' | 'decoded' | 'rendered';
 
 const MAX_CONCURRENT_DECODE = 8;
-/** 全套约 214 个，会话内尽量常驻，避免进房反复解码 */
-const LRU_MAX_DECODED = 256;
-const MAX_POOLED_DISPLAY_PER_ID = 8;
+/** 限制常驻解码图与 Blob URL 数量，离屏后按 LRU 回收内存 */
+const LRU_MAX_DECODED = 96;
+const MAX_POOLED_DISPLAY_PER_ID = 3;
+
+function revokeObjectUrl(url: string): void {
+  if (typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') {
+    URL.revokeObjectURL(url);
+  }
+}
 
 interface QueueEntry {
   id: string;
@@ -55,6 +61,8 @@ class QFaceImageLoader {
   private objectUrls = new Map<string, string>();
   /** 卸载后停泊的已解码显示节点，进房可直接复用 */
   private displayPool = new Map<string, HTMLImageElement[]>();
+  /** 当前挂载展示中的引用计数，避免回收正在显示的节点与 Blob URL */
+  private activeDisplayCount = new Map<string, number>();
   private lruOrder: string[] = [];
   private stateListeners = new Set<StateListener>();
 
@@ -134,6 +142,7 @@ class QFaceImageLoader {
     img.className = options?.className || '';
     img.alt = options?.alt || '';
     img.draggable = false;
+    this.activeDisplayCount.set(id, (this.activeDisplayCount.get(id) ?? 0) + 1);
     this.touchLru(id);
     return img;
   }
@@ -147,13 +156,26 @@ class QFaceImageLoader {
     img.onload = null;
     img.onerror = null;
 
-    let pool = this.displayPool.get(id);
-    if (!pool) {
-      pool = [];
-      this.displayPool.set(id, pool);
+    const nextActive = (this.activeDisplayCount.get(id) ?? 0) - 1;
+    if (nextActive > 0) {
+      this.activeDisplayCount.set(id, nextActive);
+    } else {
+      this.activeDisplayCount.delete(id);
     }
-    if (pool.length < MAX_POOLED_DISPLAY_PER_ID) {
-      pool.push(img);
+
+    if (this.decodedImages.has(id) || this.objectUrls.has(id)) {
+      let pool = this.displayPool.get(id);
+      if (!pool) {
+        pool = [];
+        this.displayPool.set(id, pool);
+      }
+      if (pool.length < MAX_POOLED_DISPLAY_PER_ID) {
+        pool.push(img);
+      }
+    }
+
+    if (nextActive <= 0) {
+      this.evictLruIfNeeded();
     }
   }
 
@@ -262,7 +284,14 @@ class QFaceImageLoader {
 
     try {
       const objectUrl = await resolveQFaceAssetBlobUrl(url);
+      const existing = this.objectUrls.get(id);
+      if (existing) {
+        revokeObjectUrl(objectUrl);
+        return existing;
+      }
       this.objectUrls.set(id, objectUrl);
+      this.touchLru(id);
+      this.evictLruIfNeeded();
       return objectUrl;
     } catch {
       throw new Error(`QQ 表情加载失败: ${id}`);
@@ -278,7 +307,14 @@ class QFaceImageLoader {
     await Promise.all(unique.map(async (id) => {
       if (this.objectUrls.has(id)) return;
       const objectUrl = await tryHydrateQFaceAssetBlobUrl(this.urlForId(id));
-      if (objectUrl) this.objectUrls.set(id, objectUrl);
+      if (!objectUrl) return;
+      if (this.objectUrls.has(id)) {
+        revokeObjectUrl(objectUrl);
+        return;
+      }
+      this.objectUrls.set(id, objectUrl);
+      this.touchLru(id);
+      this.evictLruIfNeeded();
     }));
   }
 
@@ -326,17 +362,28 @@ class QFaceImageLoader {
   }
 
   private evictLruIfNeeded(): void {
-    while (this.lruOrder.length > LRU_MAX_DECODED) {
-      const evictId = this.lruOrder.shift()!;
-      const state = this.getState(evictId);
-      // 仍在页面上展示的不驱逐主图
-      if (state === 'rendered') continue;
-
+    if (this.decodedImages.size <= LRU_MAX_DECODED && this.objectUrls.size <= LRU_MAX_DECODED) {
+      return;
+    }
+    for (
+      let index = 0;
+      index < this.lruOrder.length
+        && (this.decodedImages.size > LRU_MAX_DECODED || this.objectUrls.size > LRU_MAX_DECODED);
+    ) {
+      const evictId = this.lruOrder[index];
+      if ((this.activeDisplayCount.get(evictId) ?? 0) > 0 || this.entries.has(evictId)) {
+        index += 1;
+        continue;
+      }
+      this.lruOrder.splice(index, 1);
       this.decodedImages.delete(evictId);
       this.displayPool.delete(evictId);
-      if (state === 'decoded' || state === 'loaded') {
-        this.setState(evictId, 'loaded');
+      const objectUrl = this.objectUrls.get(evictId);
+      if (objectUrl) {
+        this.objectUrls.delete(evictId);
+        revokeObjectUrl(objectUrl);
       }
+      this.setState(evictId, 'idle');
     }
   }
 }

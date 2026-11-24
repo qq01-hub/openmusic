@@ -12,7 +12,7 @@ function removeSkipRequestLocally(requestId: string) {
 }
 
 export default function JumpRequestBanner() {
-  const room = useRoomStore((s) => s.room);
+  const skipRequests = useRoomStore((s) => s.room?.skipRequests);
   const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
   const { approveSkip, rejectSkip } = useSocket();
   const pendingIdsRef = useRef(new Set<string>());
@@ -39,10 +39,7 @@ export default function JumpRequestBanner() {
     }
   }, [rejectSkip]);
 
-  if (!room || !canControlPlayback) return null;
-
-  const skipRequests = room.skipRequests ?? [];
-  if (skipRequests.length === 0) return null;
+  if (!canControlPlayback || !skipRequests?.length) return null;
 
   return (
     <div className="mb-4 space-y-2">

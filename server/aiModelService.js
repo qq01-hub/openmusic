@@ -35,9 +35,11 @@ const siliconFlowActiveByPool = new Map();
 const aiPoolHealth = new Map();
 let siliconFlowActiveRequests = 0;
 let siliconFlowDrainTimer = null;
+let siliconFlowDrainAt = 0;
 
 const AI_POOL_BACKOFF_BASE_MS = 5_000;
 const AI_POOL_BACKOFF_MAX_MS = 5 * 60_000;
+const AI_POOL_HEALTH_MAX_ENTRIES = 256;
 
 function getAiPoolHealth(poolId) {
   return aiPoolHealth.get(String(poolId || '')) || {
@@ -51,17 +53,34 @@ function markAiPoolSuccess(poolId) {
   if (poolId) aiPoolHealth.delete(String(poolId));
 }
 
+function pruneAiPoolHealth(now) {
+  for (const [key, entry] of aiPoolHealth.entries()) {
+    if (entry.cooldownUntil + AI_POOL_BACKOFF_MAX_MS <= now) {
+      aiPoolHealth.delete(key);
+    }
+  }
+  while (aiPoolHealth.size >= AI_POOL_HEALTH_MAX_ENTRIES) {
+    const oldestKey = aiPoolHealth.keys().next().value;
+    if (oldestKey === undefined) break;
+    aiPoolHealth.delete(oldestKey);
+  }
+}
+
 function markAiPoolFailure(poolId, error) {
   if (!poolId) return;
+  const now = Date.now();
+  pruneAiPoolHealth(now);
   const previous = getAiPoolHealth(poolId);
   const failures = Math.min(previous.consecutiveFailures + 1, 10);
   const authFailure = [401, 403, 404].includes(Number(error?.status));
   const backoffMs = authFailure
     ? AI_POOL_BACKOFF_MAX_MS
     : Math.min(AI_POOL_BACKOFF_BASE_MS * (2 ** (failures - 1)), AI_POOL_BACKOFF_MAX_MS);
-  aiPoolHealth.set(String(poolId), {
+  const normalizedId = String(poolId);
+  aiPoolHealth.delete(normalizedId);
+  aiPoolHealth.set(normalizedId, {
     consecutiveFailures: failures,
-    cooldownUntil: Date.now() + backoffMs,
+    cooldownUntil: now + backoffMs,
     lastError: String(error?.message || '调用失败').slice(0, 200),
   });
 }
@@ -364,11 +383,36 @@ function compareSiliconFlowRequests(a, b) {
 }
 
 function scheduleSiliconFlowDrain(delayMs) {
-  if (siliconFlowDrainTimer) return;
+  const safeDelay = Math.max(1, Math.ceil(delayMs));
+  const targetAt = Date.now() + safeDelay;
+  if (siliconFlowDrainTimer && siliconFlowDrainAt > 0 && siliconFlowDrainAt <= targetAt) return;
+  if (siliconFlowDrainTimer) {
+    clearTimeout(siliconFlowDrainTimer);
+    siliconFlowDrainTimer = null;
+  }
+  siliconFlowDrainAt = targetAt;
   siliconFlowDrainTimer = setTimeout(() => {
     siliconFlowDrainTimer = null;
+    siliconFlowDrainAt = 0;
     drainSiliconFlowQueue();
-  }, delayMs);
+  }, safeDelay);
+}
+
+function canDispatchPoolRequest(request) {
+  const { maxRequestsPerMinute, maxTokensPerMinute } = request.rateLimits;
+  const tokenUsage = siliconFlowUsageTokens(request.poolId);
+  const exceedsRequestLimit = siliconFlowUsageRequests(request.poolId) >= maxRequestsPerMinute;
+  const exceedsTokenLimit = tokenUsage + request.tokens > maxTokensPerMinute;
+  return !exceedsRequestLimit && !exceedsTokenLimit;
+}
+
+function earliestPoolUnlockAt(poolId, fallbackNow) {
+  for (const item of siliconFlowUsage) {
+    if (item.poolId === poolId) {
+      return item.at + SILICONFLOW_WINDOW_MS;
+    }
+  }
+  return fallbackNow + SILICONFLOW_WINDOW_MS;
 }
 
 function drainSiliconFlowQueue() {
@@ -379,18 +423,25 @@ function drainSiliconFlowQueue() {
     siliconFlowQueue.sort(compareSiliconFlowRequests);
     let index = siliconFlowQueue.findIndex((request) => (
       getRoomRequestCount(request.roomId) < getDynamicRoomRequestLimit(request.roomId)
+      && canDispatchPoolRequest(request)
     ));
-    if (index < 0) index = 0;
-    const nextRequest = siliconFlowQueue[index];
-    const { maxRequestsPerMinute, maxTokensPerMinute } = nextRequest.rateLimits;
-    const tokenUsage = siliconFlowUsageTokens(nextRequest.poolId);
-    const exceedsRequestLimit = siliconFlowUsageRequests(nextRequest.poolId) >= maxRequestsPerMinute;
-    const exceedsTokenLimit = tokenUsage + nextRequest.tokens > maxTokensPerMinute;
-    if (exceedsRequestLimit || exceedsTokenLimit) {
-      const nextAllowedAt = (siliconFlowUsage[0]?.at || now) + SILICONFLOW_WINDOW_MS;
-      scheduleSiliconFlowDrain(Math.max(1, nextAllowedAt - now));
+    if (index < 0) {
+      index = siliconFlowQueue.findIndex((request) => canDispatchPoolRequest(request));
+    }
+    if (index < 0) {
+      let earliestAllowedAt = Infinity;
+      const checkedPools = new Set();
+      for (const queued of siliconFlowQueue) {
+        if (checkedPools.has(queued.poolId)) continue;
+        checkedPools.add(queued.poolId);
+        const candidateAt = earliestPoolUnlockAt(queued.poolId, now);
+        if (candidateAt < earliestAllowedAt) earliestAllowedAt = candidateAt;
+      }
+      if (!Number.isFinite(earliestAllowedAt)) earliestAllowedAt = now + SILICONFLOW_WINDOW_MS;
+      scheduleSiliconFlowDrain(Math.max(1, earliestAllowedAt - now));
       return;
     }
+    const nextRequest = siliconFlowQueue[index];
 
     siliconFlowQueue.splice(index, 1);
     siliconFlowUsage.push({ at: now, tokens: nextRequest.tokens, poolId: nextRequest.poolId });

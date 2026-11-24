@@ -12,8 +12,10 @@ import {
 } from '../lib/appVersion';
 import { setGuidePauseReason } from '../lib/guidePause';
 import { getDisplayUpdateNotes } from '../lib/updateNotes';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 const POLL_MS = 3 * 60 * 1000;
+const MIN_CHECK_GAP_MS = 15 * 1000;
 
 export default function AppUpdateGate() {
   const location = useLocation();
@@ -31,11 +33,18 @@ export default function AppUpdateGate() {
   useEffect(() => {
     let cancelled = false;
     let timer: number | undefined;
-    const controllers: AbortController[] = [];
+    const controllers = new Set<AbortController>();
+    let inFlight = false;
+    let lastCheckAt = 0;
 
-    const check = async () => {
+    const check = async (force = false) => {
+      const now = Date.now();
+      if (cancelled || inFlight) return;
+      if (!force && (document.hidden || now - lastCheckAt < MIN_CHECK_GAP_MS)) return;
+      inFlight = true;
+      lastCheckAt = now;
       const ac = new AbortController();
-      controllers.push(ac);
+      controllers.add(ac);
       try {
         const info = await fetchRemoteAppVersion(ac.signal);
         if (cancelled || !info) return;
@@ -50,24 +59,30 @@ export default function AppUpdateGate() {
         setOpen(true);
       } catch {
         // ignore network errors
+      } finally {
+        controllers.delete(ac);
+        inFlight = false;
       }
     };
 
-    void check();
-    timer = window.setInterval(() => void check(), POLL_MS);
+    void check(true);
+    timer = window.setInterval(() => {
+      if (!isHostPageHidden()) void check();
+    }, POLL_MS);
 
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void check();
+      if (!isHostPageHidden()) void check();
     };
-    document.addEventListener('visibilitychange', onVisible);
+    const unsubscribeVisibility = subscribeHostVisibility(onVisible);
     window.addEventListener('focus', onVisible);
 
     return () => {
       cancelled = true;
       if (timer) window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisible);
+      unsubscribeVisibility();
       window.removeEventListener('focus', onVisible);
       for (const ac of controllers) ac.abort();
+      controllers.clear();
     };
   }, []);
 

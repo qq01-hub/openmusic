@@ -45,13 +45,29 @@ export default function SystemUpgradePanel({ active }: { active: boolean }) {
       }
     } finally { loading.current = false; }
   }, []);
+  const running = isRunning(status);
   useEffect(() => {
     if (!active || expired) return;
     const controller = new AbortController();
     void refresh(controller.signal);
-    const timer = window.setInterval(() => void refresh(controller.signal), 5000);
-    return () => { controller.abort(); window.clearInterval(timer); };
+    return () => { controller.abort(); };
   }, [active, expired, refresh]);
+  useEffect(() => {
+    if (!active || expired || !running) return;
+    const controller = new AbortController();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') void refresh(controller.signal);
+    };
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refresh(controller.signal);
+    }, 5000);
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      controller.abort();
+      window.clearInterval(timer);
+    };
+  }, [active, expired, running, refresh]);
 
   const check = async () => {
     setAction('check');

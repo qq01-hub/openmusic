@@ -41,8 +41,11 @@ export async function resolveSongCoverUrl(source, id, thumbPx = 96) {
   let url = '';
   if (response.status >= 300 && response.status < 400) {
     url = normalizeResolvedUrl(response.headers.get('location'));
+    await response.body?.cancel?.().catch(() => {});
   } else if (response.ok) {
     url = normalizeResolvedUrl(await response.text());
+  } else {
+    await response.body?.cancel?.().catch(() => {});
   }
 
   if (!isHttpUrl(url)) return '';

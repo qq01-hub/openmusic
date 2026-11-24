@@ -1,5 +1,5 @@
 import { customAlphabet } from "nanoid";
-import { scrypt, scryptSync, randomBytes, timingSafeEqual } from "crypto";
+import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { claimAccountRooms } from "./accountRooms.js";
 import { fetchMetingFmSongs, normalizeFmMode, DEFAULT_FM_MODE, FM_MODE_OFF } from "./metingFm.js";
 import { importNeteasePlaylist, importQqPlaylist, importKugouPlaylist, importQishuiPlaylist } from "./playlistImport.js";
@@ -573,10 +573,93 @@ export function validateRoomPassword(password) {
   return { ok: true, password: trimmed };
 }
 
-function hashPassword(password) {
+const GRAPHEME_SEGMENTER = typeof Intl !== "undefined" && Intl.Segmenter
+  ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+  : null;
+const MAX_ROOM_USER_METADATA_ENTRIES = 500;
+const MAX_ROOM_OWNER_JOIN_ENTRIES = 200;
+const MAX_ROOM_THROTTLE_ENTRIES = 300;
+
+function lazyRoomResult(room) {
+  let cached;
+  let computed = false;
+  return {
+    get room() {
+      if (!computed) {
+        computed = true;
+        cached = serializeRoom(room);
+      }
+      return cached;
+    },
+  };
+}
+
+function collectProtectedRoomUserIds(room) {
+  const protectedIds = new Set();
+  if (room.creatorId) protectedIds.add(room.creatorId);
+  if (room.ownerId) protectedIds.add(room.ownerId);
+  for (const id of room.users?.keys?.() || []) protectedIds.add(id);
+  for (const id of room.adminIds || []) protectedIds.add(id);
+  for (const id of room.mutedUserIds || []) protectedIds.add(id);
+  for (const id of room.bannedUserIds || []) protectedIds.add(id);
+  for (const id of room.memberTiers?.keys?.() || []) protectedIds.add(id);
+  if (room.current?.requestedById) protectedIds.add(room.current.requestedById);
+  for (const item of room.queue || []) {
+    if (item?.requestedById) protectedIds.add(item.requestedById);
+  }
+  for (const msg of room.messages || []) {
+    if (msg?.userId) protectedIds.add(msg.userId);
+  }
+  return protectedIds;
+}
+
+function trimBoundedSet(set, maxSize, protectedIds) {
+  if (!set || set.size <= maxSize) return;
+  for (const id of set) {
+    if (set.size <= maxSize) break;
+    if (!protectedIds.has(id)) set.delete(id);
+  }
+}
+
+function trimBoundedMap(map, maxSize, protectedIds) {
+  if (!map || map.size <= maxSize) return;
+  for (const key of map.keys()) {
+    if (map.size <= maxSize) break;
+    if (!protectedIds.has(key)) map.delete(key);
+  }
+}
+
+function pruneRoomUserMetadata(room) {
+  if (!room) return;
+  const needsPrune = (room.knownUserIds?.size || 0) > MAX_ROOM_USER_METADATA_ENTRIES
+    || (room.chatVisibleSinceByUserId?.size || 0) > MAX_ROOM_USER_METADATA_ENTRIES
+    || (room.chatClearedAtByUserId?.size || 0) > MAX_ROOM_USER_METADATA_ENTRIES
+    || (room.userNicknames?.size || 0) > MAX_ROOM_USER_METADATA_ENTRIES
+    || (room.userAvatarUrls?.size || 0) > MAX_ROOM_USER_METADATA_ENTRIES
+    || (room.ownerLastJoinedAtByUserId?.size || 0) > MAX_ROOM_OWNER_JOIN_ENTRIES
+    || (room.lastJoinNoticeAt?.size || 0) > MAX_ROOM_THROTTLE_ENTRIES
+    || (room.lastSongRequestAt?.size || 0) > MAX_ROOM_THROTTLE_ENTRIES;
+  if (!needsPrune) return;
+  const protectedIds = collectProtectedRoomUserIds(room);
+  trimBoundedSet(room.knownUserIds, MAX_ROOM_USER_METADATA_ENTRIES, protectedIds);
+  trimBoundedMap(room.chatVisibleSinceByUserId, MAX_ROOM_USER_METADATA_ENTRIES, protectedIds);
+  trimBoundedMap(room.chatClearedAtByUserId, MAX_ROOM_USER_METADATA_ENTRIES, protectedIds);
+  trimBoundedMap(room.userNicknames, MAX_ROOM_USER_METADATA_ENTRIES, protectedIds);
+  trimBoundedMap(room.userAvatarUrls, MAX_ROOM_USER_METADATA_ENTRIES, protectedIds);
+  trimBoundedMap(room.ownerLastJoinedAtByUserId, MAX_ROOM_OWNER_JOIN_ENTRIES, protectedIds);
+  trimBoundedMap(room.lastJoinNoticeAt, MAX_ROOM_THROTTLE_ENTRIES, protectedIds);
+  trimBoundedMap(room.lastSongRequestAt, MAX_ROOM_THROTTLE_ENTRIES, protectedIds);
+}
+
+async function hashPassword(password) {
   const normalized = normalizeRoomPasswordInput(password);
   const salt = randomBytes(16);
-  const hash = scryptSync(normalized, salt, 32);
+  const hash = await new Promise((resolve, reject) => {
+    scrypt(normalized, salt, 32, (error, derivedKey) => {
+      if (error) reject(error);
+      else resolve(derivedKey);
+    });
+  });
   return `${salt.toString("hex")}:${hash.toString("hex")}`;
 }
 
@@ -678,7 +761,11 @@ function destroyRoomNow(roomId) {
   void deleteRoomChatImages(id).catch((err) => {
     console.error(`删除房间 ${id} 聊天图片失败:`, err?.message || err);
   });
-  void deleteRoomFromStorage(id, room.ownerAccountId || '');
+  void deleteRoomFromStorage(id, room.ownerAccountId || '').catch((err) => {
+    console.error(`删除房间 ${id} 存储失败:`, err?.message || err);
+  });
+  clearRoomAiContext(id);
+  clearRoomAiUserState(id);
   return true;
 }
 
@@ -713,6 +800,7 @@ function sweepStaleEmptyRooms() {
   const hardLimitMs = Math.max(60 * 60 * 1000, (ttlMs > 0 ? ttlMs : 60_000) * 2);
 
   for (const room of rooms.values()) {
+    pruneRoomUserMetadata(room);
     if (room.users.size > 0) continue;
     if (protectedRoomIds.has(room.id)) continue;
 
@@ -761,13 +849,14 @@ function decryptRoomPassword(room) {
   return decryptSensitiveValue(ciphertext, roomPasswordEncryptionScope(room.id));
 }
 
-function applyRoomPassword(room, password) {
+async function applyRoomPassword(room, password) {
   const plain = String(password || '');
-  room.passwordHash = plain ? hashPassword(plain) : null;
+  room.passwordHash = plain ? await hashPassword(plain) : null;
   room.passwordEncrypted = plain ? encryptRoomPassword(room.id, plain) : null;
 }
 
 export function snapshotRoomForStorage(room) {
+  pruneRoomUserMetadata(room);
   return {
     id: room.id,
     name: room.name,
@@ -1130,7 +1219,7 @@ export async function initRooms() {
         if (room.users.size === 0 && room.destroyTimer) continue;
         // 在线但没有播放/队列变化的房间无需每 30 秒重复写 Redis；状态变更路径
         // 会主动调用 persistRoom，避免中午在线房间多时产生无意义写 IO。
-        if (room.isPlaying || room.queue.length > 0) {
+        if (room.isPlaying && room.current) {
           persistRoom(room);
         }
       }
@@ -1144,11 +1233,10 @@ function truncateByGrapheme(text, maxChars) {
   const str = String(text || "");
   const limit = Math.max(0, Number(maxChars) || 0);
   if (!str || limit <= 0) return "";
-  if (typeof Intl !== "undefined" && Intl.Segmenter) {
-    const seg = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  if (GRAPHEME_SEGMENTER) {
     let out = "";
     let count = 0;
-    for (const { segment } of seg.segment(str)) {
+    for (const { segment } of GRAPHEME_SEGMENTER.segment(str)) {
       if (count >= limit) break;
       out += segment;
       count += 1;
@@ -2182,7 +2270,7 @@ function normalizeSongDurationMs(value) {
   return Math.round(duration < 10_000 ? duration * 1000 : duration);
 }
 
-export function createRoom({ name, password, creatorId, creatorDeviceId, creatorIp, ownerAccountId } = {}) {
+export async function createRoom({ name, password, creatorId, creatorDeviceId, creatorIp, ownerAccountId } = {}) {
   const pwd = validateRoomPassword(password);
   if (!pwd.ok) return { error: pwd.error };
 
@@ -2192,10 +2280,10 @@ export function createRoom({ name, password, creatorId, creatorDeviceId, creator
   } while (rooms.has(roomId));
 
   const trimmed = pwd.password;
-  const passwordHash = trimmed ? hashPassword(trimmed) : null;
   if (trimmed && !hasRoomCredentialEncryptionKey()) {
     return { error: '房间密码加密服务未就绪，请稍后重试' };
   }
+  const passwordHash = trimmed ? await hashPassword(trimmed) : null;
   const room = createEmptyRoom(roomId, name, passwordHash);
   room.passwordEncrypted = trimmed ? encryptRoomPassword(roomId, trimmed) : null;
   const reservedCreator = sanitizeCreatorId(creatorId);
@@ -2264,7 +2352,7 @@ export function findIdleOwnedRoom({ creatorId, creatorDeviceId } = {}) {
 /**
  * 复用空闲自建房：可更新名称/密码，清空残留播放状态，并重新挂销毁倒计时。
  */
-export function reuseIdleOwnedRoom(roomId, { name, password } = {}) {
+export async function reuseIdleOwnedRoom(roomId, { name, password } = {}) {
   const id = String(roomId || "").toUpperCase();
   const room = rooms.get(id);
   if (!room) return null;
@@ -2280,7 +2368,7 @@ export function reuseIdleOwnedRoom(roomId, { name, password } = {}) {
     if (trimmed && !hasRoomCredentialEncryptionKey()) {
       return { error: '房间密码加密服务未就绪，请稍后重试' };
     }
-    applyRoomPassword(room, trimmed);
+    await applyRoomPassword(room, trimmed);
     room.isLocked = Boolean(trimmed);
   }
 
@@ -2691,6 +2779,7 @@ export function adminDestroyRoom(roomId) {
   cancelRoomDestroy(room);
   clearAllPendingLeaveClears(room);
   clearSkipRequestExpiryTimersForRoom(id);
+  cancelQueuedRoomSave(id);
   protectedRoomIds.delete(id);
   const redis = getRedisClient();
   if (redis) {
@@ -3022,10 +3111,10 @@ export function renameRoom(roomId, actorId, name, connectionId = null) {
   room.name = normalizeRoomName(name, room.id);
   persistRoom(room);
   invalidateRoomsListCache();
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
-export function setRoomLock(roomId, actorId, options = {}, connectionId = null) {
+export async function setRoomLock(roomId, actorId, options = {}, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
   const denied = requireCreator(room, actorId, connectionId);
@@ -3034,7 +3123,7 @@ export function setRoomLock(roomId, actorId, options = {}, connectionId = null) 
   const locked = Boolean(options.locked);
   if (!locked) {
     room.isLocked = false;
-    applyRoomPassword(room, '');
+    await applyRoomPassword(room, '');
   } else {
     const pwd = validateRoomPassword(options.password);
     if (!pwd.ok) return { error: pwd.error };
@@ -3043,12 +3132,12 @@ export function setRoomLock(roomId, actorId, options = {}, connectionId = null) 
     if (trimmed && !hasRoomCredentialEncryptionKey()) {
       return { error: '房间密码加密服务未就绪，请稍后重试' };
     }
-    applyRoomPassword(room, trimmed);
+    await applyRoomPassword(room, trimmed);
   }
 
   persistRoom(room);
   invalidateRoomsListCache();
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomAdmin(roomId, actorId, targetUserId, admin = true, connectionId = null) {
@@ -3074,7 +3163,7 @@ export function setRoomAdmin(roomId, actorId, targetUserId, admin = true, connec
     if (!target) return { error: "用户不在房间中" };
     if (!isEligibleOwner(target)) return { error: "不能设置 TV 用户为管理员" };
     if (isAppointedAdmin(room, targetId)) {
-      return { room: serializeRoom(room) };
+      return lazyRoomResult(room);
     }
     if (appointedCount >= getRoomMaxAdmins(room)) {
       return { error: `管理员最多 ${getRoomMaxAdmins(room)} 人` };
@@ -3083,7 +3172,7 @@ export function setRoomAdmin(roomId, actorId, targetUserId, admin = true, connec
     auto.delete(targetId);
   } else {
     if (!admins.has(targetId) && !auto.has(targetId)) {
-      return { room: serializeRoom(room) };
+      return lazyRoomResult(room);
     }
     admins.delete(targetId);
     auto.delete(targetId);
@@ -3111,7 +3200,7 @@ export async function setRoomPlaylistRoaming(roomId, actorId, payload = {}, conn
     clearNextRandom(room);
     persistRoom(room);
     if (room.playlistRoaming.enabled && !room.current && room.queue.length === 0) void ensureNextRandom(room);
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   }
   if (hasDedupeByName && !payload?.clear && !payload?.input) {
     if (!room.playlistRoaming) return { error: "请先指定至少一个歌单" };
@@ -3123,7 +3212,7 @@ export async function setRoomPlaylistRoaming(roomId, actorId, payload = {}, conn
     clearNextRandom(room);
     persistRoom(room);
     if (!room.current && room.queue.length === 0) void ensureNextRandom(room);
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   }
 
   if (payload?.clear === true) {
@@ -3141,7 +3230,7 @@ export async function setRoomPlaylistRoaming(roomId, actorId, payload = {}, conn
     clearNextRandom(room);
     persistRoom(room);
     if (!room.current && room.queue.length === 0) void ensureNextRandom(room);
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   }
 
   const platform = String(payload?.platform || "").trim();
@@ -3168,7 +3257,7 @@ export async function setRoomPlaylistRoaming(roomId, actorId, payload = {}, conn
     clearNextRandom(room);
     persistRoom(room);
     if (!room.current && room.queue.length === 0) void ensureNextRandom(room);
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   } catch (error) {
     return { error: String(error?.message || "歌单加载失败").slice(0, 200) };
   }
@@ -3186,7 +3275,7 @@ export function setRoomFmMode(roomId, actorId, mode, connectionId = null, source
     nextMode = DEFAULT_FM_MODE;
   }
   if (room.neteaseFmMode === nextMode && normalizeFmSource(room.fmSource) === nextSource) {
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   }
 
   // 记住关闭前的模式，重新开启时恢复
@@ -3208,7 +3297,7 @@ export function setRoomFmMode(roomId, actorId, mode, connectionId = null, source
     void ensureNextRandom(room);
   }
 
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setQishuiProxyEnabled(roomId, actorId, enabled, connectionId = null, percent = DEFAULT_QISHUI_PROXY_PERCENT) {
@@ -3218,7 +3307,7 @@ export function setQishuiProxyEnabled(roomId, actorId, enabled, connectionId = n
   room.qishuiProxyEnabled = enabled === true;
   room.qishuiProxyPercent = normalizeQishuiProxyPercent(percent);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 更新房间音源账号公开缓存（VIP Cookie 在 Meting；无 VIP Cookie 在 musicAccountSecrets） */
@@ -3235,7 +3324,7 @@ export function setRoomMusicAccountsCache(roomId, accounts) {
   }
   room.musicAccounts = next;
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function patchRoomMusicAccountCache(roomId, platform, account, options = {}) {
@@ -3254,7 +3343,7 @@ export function patchRoomMusicAccountCache(roomId, platform, account, options = 
   }
   room.musicAccountSecrets = secrets;
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 读取房间私有音源凭证，仅供服务端调用 Meting 定制接口。 */
@@ -3297,7 +3386,7 @@ export function clearRoomMusicAccountSecret(roomId, platform = "netease") {
   if (platform === "qishui" || platform === "all") secrets.qishui = null;
   room.musicAccountSecrets = secrets;
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomPlayMode(roomId, actorId, mode, connectionId = null) {
@@ -3320,7 +3409,7 @@ export function setRoomPlayMode(roomId, actorId, mode, connectionId = null) {
   }
   room.favoriteShuffleUserId = nextMode === "favorite-shuffle" ? String(actorId || "").trim() || null : null;
   if (sameMode && !['favorite-shuffle', 'artist-shuffle'].includes(nextMode)) {
-    return { room: serializeRoom(room) };
+    return lazyRoomResult(room);
   }
   clearNextRandom(room);
   room.randomBatch = [];
@@ -3330,7 +3419,7 @@ export function setRoomPlayMode(roomId, actorId, mode, connectionId = null) {
     room.lastRandomRetryAt = 0;
   }
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export async function setRoomArtistShuffle(roomId, actorId, options, connectionId = null) {
@@ -3420,7 +3509,7 @@ export function setRoomMemberTier(roomId, actorId, targetUserId, payload = {}, c
   );
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function removeRoomMemberTier(roomId, actorId, targetUserId, connectionId = null) {
@@ -3440,7 +3529,7 @@ export function removeRoomMemberTier(roomId, actorId, targetUserId, connectionId
 
   room.memberTiers.delete(userId);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomAdminSelfManageMemberTier(roomId, actorId, enabled, connectionId = null) {
@@ -3451,7 +3540,7 @@ export function setRoomAdminSelfManageMemberTier(roomId, actorId, enabled, conne
 
   room.adminSelfManageMemberTierEnabled = Boolean(enabled);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomMemberSettings(roomId, actorId, settings = {}, connectionId = null) {
@@ -3465,7 +3554,7 @@ export function setRoomMemberSettings(roomId, actorId, settings = {}, connection
     ...settings,
   });
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function adjustRoomLyrics(roomId, actorId, payload, connectionId = null) {
@@ -3485,7 +3574,7 @@ export function adjustRoomLyrics(roomId, actorId, payload, connectionId = null) 
   if (key.length > 300) return { error: "歌曲标识过长", code: "LYRIC_OFFSET_INVALID" };
   const requests = room.lyricAdjustmentRequests ||= new Map();
   const requestKey = `${actorId}:${requestId}`;
-  if (requests.has(requestKey)) return { room: serializeRoom(room) };
+  if (requests.has(requestKey)) return lazyRoomResult(room);
   const offsets = room.lyricOffsets ||= {};
   const next = (offsets[key] || 0) + delta;
   if (Math.abs(next) > 30) return { error: "歌词最多提前或延后 30 秒", code: "LYRIC_OFFSET_LIMIT" };
@@ -3497,7 +3586,7 @@ export function adjustRoomLyrics(roomId, actorId, payload, connectionId = null) 
   requests.set(requestKey, true);
   if (requests.size > 100) requests.delete(requests.keys().next().value);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomPlaybackRate(roomId, actorId, playbackRate, connectionId = null) {
@@ -3540,7 +3629,7 @@ export function setRoomJoinNotice(roomId, actorId, settings = {}, connectionId =
     room.joinNoticeCooldownSec = normalizeJoinNoticeCooldownSec(settings.cooldownSec);
   }
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomAiSettings(roomId, actorId, settings = {}, connectionId = null) {
@@ -3566,7 +3655,7 @@ export function setRoomAiSettings(roomId, actorId, settings = {}, connectionId =
     room.roomAiPersona = persona;
   }
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 进房前判断：是否为本房已知成员（须在 addUser 写入 knownUserIds 之前调用） */
@@ -3804,7 +3893,7 @@ export function setChatMute(roomId, actorId, options = {}, connectionId = null) 
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setRoomAnnouncement(roomId, actorId, options = {}, connectionId = null) {
@@ -3823,7 +3912,7 @@ export function setRoomAnnouncement(roomId, actorId, options = {}, connectionId 
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 房主设置自定义封面；传空字符串取消自定义，恢复跟随当前歌曲 */
@@ -3841,7 +3930,7 @@ export function setRoomCustomCover(roomId, actorId, coverUrl, connectionId = nul
   room.customCoverUrl = next;
   persistRoom(room);
   invalidateRoomsListCache();
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 进房是否可查看聊天历史 */
@@ -3863,7 +3952,7 @@ export function setChatHistoryVisibleOnJoin(roomId, actorId, enabled, connection
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 聊天室是否显示头像（仅房主） */
@@ -3876,7 +3965,7 @@ export function setChatShowAvatars(roomId, actorId, enabled, connectionId = null
 
   room.chatShowAvatars = Boolean(enabled);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 /** 房间右上角成员列表是否隐藏 IP 归属（仅房主） */
@@ -3889,7 +3978,7 @@ export function setRoomHideIpLocation(roomId, actorId, hidden, connectionId = nu
 
   room.hideIpLocation = Boolean(hidden);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function setSongRequestEnabled(roomId, actorId, options = {}, connectionId = null) {
@@ -3956,7 +4045,7 @@ export function setSongRequestEnabled(roomId, actorId, options = {}, connectionI
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function banRoomSong(roomId, actorId, song, connectionId = null) {
@@ -3988,7 +4077,7 @@ export function banRoomSong(roomId, actorId, song, connectionId = null) {
   room.randomBatch = (room.randomBatch || []).filter((item) => !isSongBanned(room, item));
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function unbanRoomSong(roomId, actorId, name, connectionId = null) {
@@ -4007,7 +4096,7 @@ export function unbanRoomSong(roomId, actorId, name, connectionId = null) {
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function addRoomForbiddenWord(roomId, actorId, word, connectionId = null) {
@@ -4035,7 +4124,7 @@ export function addRoomForbiddenWord(roomId, actorId, word, connectionId = null)
   list.push(entry);
   room.forbiddenWords = serializeForbiddenWords(list);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function removeRoomForbiddenWord(roomId, actorId, word, connectionId = null) {
@@ -4056,7 +4145,7 @@ export function removeRoomForbiddenWord(roomId, actorId, word, connectionId = nu
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 function applyNicknameToRoomState(room, userId, nextNickname) {
@@ -4101,7 +4190,7 @@ export function renameUser(roomId, socketId, nickname) {
 
   applyNicknameToRoomState(room, socketId, nextNickname);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function adminRenameRoomUser(roomId, userId, nickname) {
@@ -4165,7 +4254,7 @@ export function setUserAvatar(roomId, socketId, avatarUrl) {
   if (raw && !url) return { error: '头像格式不支持或图片过大' };
   rememberUserAvatar(room, socketId, url);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export async function kickUser(roomId, actorId, targetUserId, connectionId = null) {
@@ -4768,7 +4857,7 @@ export function clearQueue(roomId, userId, connectionId = null) {
   room.jumpRequests = room.current ? room.jumpRequests.filter((r) => r.queueId === room.current.queueId) : [];
   clearNextRandom(room);
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 // function trimRandomHistory(room) {
@@ -4961,6 +5050,10 @@ async function ensureNextRandom(room) {
     clearNextRandom(room);
     return;
   }
+  if (normalizePlayMode(room.playMode) === "loop-one" && room.current) {
+    clearNextRandom(room);
+    return;
+  }
   // 漫游已关闭：不预取，队列放空后自然停止
   if ((!room.playlistRoaming || room.playlistRoaming.enabled === false) && !['favorite-shuffle', 'artist-shuffle'].includes(normalizePlayMode(room.playMode)) && (room.neteaseFmMode || DEFAULT_FM_MODE) === FM_MODE_OFF) {
     clearNextRandom(room);
@@ -5128,7 +5221,7 @@ function takeNextFromQueue(room) {
 
 function recycleFinishedSongToQueue(room, finishedSong) {
   const mode = normalizePlayMode(room.playMode);
-  if (!finishedSong || (mode !== "loop-all" && mode !== "shuffle-loop")) {
+  if (!finishedSong || !finishedSong.requestedById || (mode !== "loop-all" && mode !== "shuffle-loop")) {
     room.lastRecycledQueueId = null;
     return;
   }
@@ -5759,7 +5852,7 @@ export async function finishCurrentSong(roomId, socketId, connectionId, queueId)
   if (!room) return { error: "房间不存在" };
   if (!isControllerConnection(room, socketId, connectionId)) return { error: "仅房主或管理员可结束歌曲" };
   if (!room.current) return { error: "当前没有正在播放的歌曲" };
-  if (queueId && room.current.queueId !== queueId) return { room: serializeRoom(room) };
+  if (queueId && room.current.queueId !== queueId) return lazyRoomResult(room);
 
   await withPlaybackLock(room, async () => {
     if (!room.current) return;
@@ -5768,7 +5861,7 @@ export async function finishCurrentSong(roomId, socketId, connectionId, queueId)
     await playNextUnlocked(room, { allowFetchRandom: false, finishedSong: finished });
   });
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export async function advancePlaybackIfEnded(roomId, options = {}) {
@@ -5948,7 +6041,7 @@ export function reorderQueue(roomId, actorId, orderedQueueIds, movedQueueId = nu
   }
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export async function approveJump(roomId, socketId, requestId, connectionId = null) {
@@ -5970,7 +6063,7 @@ export async function approveJump(roomId, socketId, requestId, connectionId = nu
   });
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function rejectJump(roomId, socketId, requestId, connectionId = null) {
@@ -5983,7 +6076,7 @@ export function rejectJump(roomId, socketId, requestId, connectionId = null) {
   if (room.jumpRequests.length === before) return { error: "申请不存在" };
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function requestSkip(roomId, socketId) {
@@ -6009,7 +6102,7 @@ export function requestSkip(roomId, socketId) {
   scheduleSkipRequestExpiry(roomId, created.id, created.requestedAt);
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export async function approveSkip(roomId, socketId, requestId, connectionId = null) {
@@ -6025,7 +6118,7 @@ export async function approveSkip(roomId, socketId, requestId, connectionId = nu
   await playNext(room, { allowFetchRandom: false, forceAdvance: true });
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 export function rejectSkip(roomId, socketId, requestId, connectionId = null) {
@@ -6040,7 +6133,7 @@ export function rejectSkip(roomId, socketId, requestId, connectionId = null) {
   clearSkipRequestExpiryTimer(roomId, requestId);
 
   persistRoom(room);
-  return { room: serializeRoom(room) };
+  return lazyRoomResult(room);
 }
 
 const MAX_REACTION_EMOJI_LEN = 32;

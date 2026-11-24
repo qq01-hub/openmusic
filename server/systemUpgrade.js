@@ -16,16 +16,26 @@ export function requestUpdater(operation, body) {
       socketPath, path: `/${operation}`, method: operation === 'status' ? 'GET' : 'POST',
       headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
     }, response => {
-      let text = '';
+      const chunks = [];
+      let totalBytes = 0;
       response.on('data', chunk => {
-        text += chunk;
-        if (Buffer.byteLength(text) > 64 * 1024) request.destroy(new Error('response too large'));
+        const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += chunkBuffer.length;
+        if (totalBytes > 64 * 1024) {
+          request.destroy(new Error('response too large'));
+          return;
+        }
+        chunks.push(chunkBuffer);
       });
       response.on('error', reject);
       response.on('end', () => {
         try {
+          const text = Buffer.concat(chunks, totalBytes).toString('utf8');
           const result = JSON.parse(text);
-          if (response.statusCode >= 400) reject(Object.assign(new Error(result.error), { status: response.statusCode, code: result.code }));
+          const errorMessage = typeof result?.error === 'string' && result.error.trim()
+            ? result.error
+            : `升级服务返回错误 (${response.statusCode})`;
+          if (response.statusCode >= 400) reject(Object.assign(new Error(errorMessage), { status: response.statusCode, code: result?.code }));
           else resolve(result);
         } catch { reject(new Error('invalid update response')); }
       });

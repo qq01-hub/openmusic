@@ -32,6 +32,9 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
   const [switchProgress, setSwitchProgress] = useState(0);
   const [switchError, setSwitchError] = useState<RoomVisualMode | null>(null);
   const timerRef = useRef<number | null>(null);
+  const progressTimerRef = useRef<number | null>(null);
+  const switchGenRef = useRef(0);
+  const mountedRef = useRef(true);
   const warmPreset = (mode: RoomVisualMode) => {
     if (mode === 'folia') void preloadFoliaStage().catch(() => {});
   };
@@ -55,39 +58,83 @@ export default function RoomVisualPresetGrid({ value, onChange }: Props) {
   );
 
   useEffect(
-    () => () => {
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    () => {
+      mountedRef.current = true;
+      return () => {
+        mountedRef.current = false;
+        switchGenRef.current += 1;
+        if (progressTimerRef.current !== null) {
+          window.clearInterval(progressTimerRef.current);
+          progressTimerRef.current = null;
+        }
+        if (timerRef.current !== null) {
+          window.clearTimeout(timerRef.current);
+          timerRef.current = null;
+        }
+      };
     },
     [],
   );
 
   const handleSelect = useCallback(
     async (mode: RoomVisualMode) => {
-      if (mode === value) return;
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      if (mode === value) {
+        if (switchingMode !== null) {
+          switchGenRef.current += 1;
+          if (progressTimerRef.current !== null) {
+            window.clearInterval(progressTimerRef.current);
+            progressTimerRef.current = null;
+          }
+          if (timerRef.current !== null) {
+            window.clearTimeout(timerRef.current);
+            timerRef.current = null;
+          }
+          setSwitchingMode(null);
+          setSwitchError(null);
+        }
+        return;
+      }
+      const gen = switchGenRef.current + 1;
+      switchGenRef.current = gen;
+      if (progressTimerRef.current !== null) {
+        window.clearInterval(progressTimerRef.current);
+        progressTimerRef.current = null;
+      }
+      if (timerRef.current !== null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
       setSwitchError(null);
       setSwitchingMode(mode);
       setSwitchProgress(8);
       const startedAt = Date.now();
       const progressTimer = window.setInterval(() => {
+        if (!mountedRef.current || switchGenRef.current !== gen) return;
         setSwitchProgress((current) => Math.min(92, Math.max(current, Math.round(8 + (Date.now() - startedAt) / 18))));
       }, 80);
+      progressTimerRef.current = progressTimer;
       try {
         if (mode === 'folia') await preloadFoliaStage();
+        if (!mountedRef.current || switchGenRef.current !== gen) return;
         onChange(mode);
         setSwitchProgress(100);
       } catch {
+        if (!mountedRef.current || switchGenRef.current !== gen) return;
         setSwitchError(mode);
         return;
       } finally {
         window.clearInterval(progressTimer);
-        timerRef.current = window.setTimeout(() => {
-          setSwitchingMode(null);
-          timerRef.current = null;
-        }, PULSE_MS);
+        if (progressTimerRef.current === progressTimer) progressTimerRef.current = null;
+        if (mountedRef.current && switchGenRef.current === gen) {
+          timerRef.current = window.setTimeout(() => {
+            if (!mountedRef.current || switchGenRef.current !== gen) return;
+            setSwitchingMode(null);
+            timerRef.current = null;
+          }, PULSE_MS);
+        }
       }
     },
-    [onChange, value],
+    [onChange, switchingMode, value],
   );
 
   return (

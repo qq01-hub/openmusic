@@ -421,6 +421,12 @@ function orderedEndpoints(apis, platform, operation, now) {
   return [selected, ...failovers];
 }
 
+async function cancelResponseBody(response) {
+  try {
+    await response?.body?.cancel?.();
+  } catch {}
+}
+
 async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = false) {
   const variables = operationVariables(query);
   const headers = {};
@@ -479,8 +485,12 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
       signal: controller.signal,
       redirect: 'error',
     });
-    if (response.status >= 500) throw new Error(`自定义音乐接口返回 ${response.status}`);
+    if (response.status >= 500) {
+      await cancelResponseBody(response);
+      throw new Error(`自定义音乐接口返回 ${response.status}`);
+    }
     if (!response.ok) {
+      await cancelResponseBody(response);
       const error = new Error(`自定义音乐接口返回 ${response.status}`);
       error.status = response.status;
       error.countsForCircuit = response.status !== 404;
@@ -488,6 +498,7 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
     }
     const contentLength = Number(response.headers.get('content-length') || 0);
     if (Number.isFinite(contentLength) && contentLength > MAX_RESPONSE_BYTES) {
+      await cancelResponseBody(response);
       throw new Error(`自定义音乐接口响应过大（>${MAX_RESPONSE_BYTES} bytes）`);
     }
     const text = await readResponseTextLimited(response, MAX_RESPONSE_BYTES);

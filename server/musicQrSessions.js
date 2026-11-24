@@ -14,6 +14,7 @@ import { decryptSensitiveValue, encryptSensitiveValue } from './roomCredentialCr
 const SESSION_TTL_MS = 10 * 60 * 1000;
 const CONFIRMED_TTL_MS = 2 * 60 * 1000;
 const BINDING_LOCK_MS = 30 * 1000;
+const MAX_LOCAL_SESSIONS = 2000;
 const sessions = new Map();
 const REDIS_PREFIX = 'openmusic:music-qr:';
 
@@ -48,7 +49,7 @@ async function loadSession(id) {
       await redis.del(redisKey(id));
       return null;
     }
-    sessions.set(id, session);
+    cacheSession(id, session);
     return session;
   } catch { return null; }
 }
@@ -112,6 +113,17 @@ function cleanExpired() {
   }
 }
 
+function cacheSession(id, session) {
+  cleanExpired();
+  sessions.delete(id);
+  sessions.set(id, session);
+  while (sessions.size > MAX_LOCAL_SESSIONS) {
+    const oldestId = sessions.keys().next().value;
+    if (oldestId === undefined) break;
+    sessions.delete(oldestId);
+  }
+}
+
 async function requireOwnedSession({ sessionId, ownerId, purpose, roomId = '' }) {
   cleanExpired();
   const session = await loadSession(text(sessionId));
@@ -143,7 +155,7 @@ export async function createManagedMusicQrSession({ ownerId, platform, purpose, 
     credential: '',
     expiresAt: Date.now() + SESSION_TTL_MS,
   };
-  sessions.set(sessionId, session);
+  cacheSession(sessionId, session);
   try { await persistSession(sessionId, session); } catch (err) {
     sessions.delete(sessionId);
     return { ok: false, error: `扫码会话保存失败：${err.message}` };

@@ -25,6 +25,16 @@ function isSameOriginApiUrl(url: string): boolean {
   }
 }
 
+function isWechatAccountBindRequest(pathname: string, body: BodyInit | null | undefined): boolean {
+  if (pathname !== '/api/auth/wechat/account' || typeof body !== 'string') return false;
+  try {
+    const parsed = JSON.parse(body) as { action?: unknown } | null;
+    return Boolean(parsed && typeof parsed === 'object' && parsed.action === 'bind');
+  } catch {
+    return false;
+  }
+}
+
 function blockedSyntheticResponse(): Response {
   const code = getSiteAccessBlockCode() || SOFT_BLOCK_CODES.SITE_BAN;
   // 本地短路：不发网络请求。DevTools 里看起来像接口返回，实为前端冻结后的假响应。
@@ -80,7 +90,7 @@ export async function fetchWithTimeout(
 
   try {
     const pathname = sameOriginApi ? new URL(url, window.location.origin).pathname.toLowerCase() : '';
-    const wechatBinding = pathname === '/api/auth/wechat/account' && typeof initFinal.body === 'string' && JSON.parse(initFinal.body).action === 'bind';
+    const wechatBinding = isWechatAccountBindRequest(pathname, initFinal.body);
     if (['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account'].includes(pathname) && method === 'POST' && !wechatBinding) { forgetAccountAccess(); setDeviceSession(''); }
     const generation = getAccountSessionGeneration();
     const assertCurrent = () => {

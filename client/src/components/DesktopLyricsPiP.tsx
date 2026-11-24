@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Captions } from 'lucide-react';
 import type { QueueItem } from '../types';
 import { useTrackLyrics } from '../hooks/useTrackLyrics';
@@ -9,6 +9,7 @@ import { filterDisplayLyrics, getCoverUrl, LYRIC_SYNC_LEAD_SEC } from '../api/mu
 import { findActiveLyricIndex } from '../lib/lyricActiveIndex';
 import { createElectronLyricsPayload, isElectronRenderer } from '../lib/electronLyrics';
 import { getSourceShortLabel } from '../lib/sourceLabels';
+import { useSignedApiUrl } from '../lib/signedApiUrl';
 import Tooltip from './Tooltip';
 
 interface Props { song: QueueItem | null; }
@@ -47,12 +48,21 @@ function useDesktopLyricsState(song: QueueItem | null) {
 
 function DesktopLyricsContent({ song }: Props) {
   const { displayLines, activeIndex } = useDesktopLyricsState(song);
-  if (!song) return null;
+  const rawCoverUrl = song ? getCoverUrl(song, 'thumb') : null;
+  const signedCoverUrl = useSignedApiUrl(rawCoverUrl);
+  if (!song) {
+    return (
+      <main className="desktop-lyrics" aria-live="polite">
+        <div className="desktop-lyrics__meta"><span className="desktop-lyrics__title">OpenMusic</span></div>
+        <div className="desktop-lyrics__stage"><div className="desktop-lyrics__empty">暂无播放歌曲</div></div>
+      </main>
+    );
+  }
   const active = activeIndex >= 0 ? displayLines[activeIndex] : null;
   const next = activeIndex >= 0 ? displayLines[activeIndex + 1] : null;
   return (
     <main className="desktop-lyrics" aria-live="polite">
-      <img key={`${song.source}:${song.id}:${song.pic}`} className="desktop-lyrics__art" src={getCoverUrl(song, 'thumb')} alt="" aria-hidden="true" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.opacity = '0'; }} />
+      {signedCoverUrl && <img key={`${song.source}:${song.id}:${signedCoverUrl}`} className="desktop-lyrics__art" src={signedCoverUrl} alt="" aria-hidden="true" referrerPolicy="no-referrer" onError={event => { event.currentTarget.style.opacity = '0'; }} />}
       <div className="desktop-lyrics__meta"><span className="desktop-lyrics__title">{song.name}</span><span>·</span><span>{song.artist}</span><span>·</span><span>{getSourceShortLabel(song.source || 'netease')}</span></div>
       <div className="desktop-lyrics__stage">
         {active ? <><div className="desktop-lyrics__line desktop-lyrics__line--active">{active.text}</div>{active.translation && <div className="desktop-lyrics__translation">{active.translation}</div>}{next && <div className="desktop-lyrics__line desktop-lyrics__line--near">{next.text}</div>}</> : <div className="desktop-lyrics__empty">{displayLines.length ? displayLines[0].text : '暂无歌词'}</div>}
@@ -64,6 +74,8 @@ function DesktopLyricsContent({ song }: Props) {
 
 function ElectronLyrics({ song, onClose }: Props & { onClose: () => void }) {
   const { displayLines, activeIndex } = useDesktopLyricsState(song);
+  const rawCoverUrl = song ? getCoverUrl(song, 'thumb') : null;
+  const signedCoverUrl = useSignedApiUrl(rawCoverUrl);
   const api = window.electronAPI!;
   const active = activeIndex >= 0 ? displayLines[activeIndex] : null;
   const next = activeIndex >= 0 ? displayLines[activeIndex + 1] : null;
@@ -74,17 +86,25 @@ function ElectronLyrics({ song, onClose }: Props & { onClose: () => void }) {
   }, [api, onClose]);
 
   useEffect(() => {
-    if (!song) return;
+    if (!song) {
+      api.updateLyrics(createElectronLyricsPayload({
+        title: 'OpenMusic',
+        artist: '',
+        source: '',
+        activeText: '暂无播放歌曲',
+      }));
+      return;
+    }
     api.updateLyrics(createElectronLyricsPayload({
       title: song.name,
       artist: song.artist,
       source: getSourceShortLabel(song.source || 'netease'),
-      pic: song.pic,
+      pic: signedCoverUrl || song.pic,
       activeText: active?.text || (displayLines.length ? displayLines[0].text : '暂无歌词'),
       translation: active?.translation,
       nextText: next?.text,
     }));
-  }, [active?.text, active?.translation, api, displayLines, next?.text, song]);
+  }, [active?.text, active?.translation, api, displayLines, next?.text, signedCoverUrl, song]);
 
   return null;
 }
@@ -93,6 +113,10 @@ export default function DesktopLyricsPiP({ song }: Props) {
   const electron = isElectronRenderer();
   const [opened, setOpened] = useState(false);
   const [pipWindow, setPipWindow] = useState<Window | null>(null);
+  const openedRef = useRef(false);
+  const pipWindowRef = useRef<Window | null>(null);
+  openedRef.current = opened;
+  pipWindowRef.current = pipWindow;
   const close = useCallback(() => { setOpened(false); setPipWindow(null); }, []);
 
   const open = useCallback(async () => {
@@ -114,6 +138,20 @@ export default function DesktopLyricsPiP({ song }: Props) {
   }, [close, electron, opened, pipWindow]);
 
   useEffect(() => { if (pipWindow?.closed) close(); }, [close, pipWindow]);
+  useEffect(() => () => {
+    if (pipWindowRef.current && !pipWindowRef.current.closed) {
+      pipWindowRef.current.close();
+    }
+    if (electron && openedRef.current) {
+      window.electronAPI?.updateLyrics(createElectronLyricsPayload({
+        title: 'OpenMusic',
+        artist: '',
+        source: '',
+        activeText: '暂无歌词',
+      }));
+      void window.electronAPI?.closeLyrics().catch(() => {});
+    }
+  }, [electron]);
   const isOpen = electron ? opened : Boolean(pipWindow);
   return <>
     <Tooltip content={isOpen ? '关闭桌面歌词' : '桌面歌词'}>

@@ -902,9 +902,10 @@ export function startFileHelperScanner(
 ) {
   const seen = new Set<string>();
   let running = false;
+  let stopped = false;
 
   const tick = async () => {
-    if (running) return;
+    if (running || stopped) return;
     running = true;
     try {
       let result: ScanResult = { imported: 0, skipped: 0, stickerIds: [], unsupported: 0 };
@@ -914,6 +915,7 @@ export function startFileHelperScanner(
         const doc = getDocument();
         if (doc) result = await scanFileHelperDocument(doc, seen);
       }
+      if (stopped) return;
       if ((result.imported > 0 || result.skipped > 0 || result.unsupported > 0) && onScan) onScan(result);
     } finally {
       running = false;
@@ -924,6 +926,7 @@ export function startFileHelperScanner(
   void tick();
 
   return () => {
+    stopped = true;
     window.clearInterval(timer);
   };
 }

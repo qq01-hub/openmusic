@@ -180,7 +180,11 @@ export function readGroundEqSettingsStorage(): StoredGroundEqSettings {
 
 export function writeGroundEqSettingsStorage(settings: StoredGroundEqSettings) {
   if (typeof window === 'undefined') return;
-  window.localStorage.setItem(GROUND_EQ_STORAGE_KEY, JSON.stringify(normalizeGroundEqSettings(settings)));
+  try {
+    window.localStorage.setItem(GROUND_EQ_STORAGE_KEY, JSON.stringify(normalizeGroundEqSettings(settings)));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export function readGroundEqBandValue(bands: number[], band: GroundEqBandId) {

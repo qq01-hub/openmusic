@@ -507,32 +507,33 @@ export default function RoomImmersiveShell({
       >
         <SlidersHorizontal className="h-[21px] w-[21px]" />
       </button>
-      <button
-        type="button"
-        id="fx-fab-hide-btn"
-        onMouseEnter={() => {
-          holdChrome();
-          revealFxFab();
-        }}
-        onMouseLeave={() => {
-          releaseChrome();
-          scheduleFxFabHide();
-        }}
-        onClick={(e) => {
-          e.stopPropagation();
-          setFxFabAutoHide((prev) => {
-            const next = !prev;
-            if (!next) setFxFabPeek(true);
-            return next;
-          });
-        }}
-        className={`immersive-fx-fab-hide ${fxFabAutoHide ? 'on' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !visualSettingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
-        style={{ pointerEvents: 'auto' }}
-        title={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'}
-        aria-label={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'}
-      >
-        <ChevronLeft className="h-3 w-3" />
-      </button>
+      <Tooltip content={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'} side="left">
+        <button
+          type="button"
+          id="fx-fab-hide-btn"
+          onMouseEnter={() => {
+            holdChrome();
+            revealFxFab();
+          }}
+          onMouseLeave={() => {
+            releaseChrome();
+            scheduleFxFabHide();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setFxFabAutoHide((prev) => {
+              const next = !prev;
+              if (!next) setFxFabPeek(true);
+              return next;
+            });
+          }}
+          className={`immersive-fx-fab-hide ${fxFabAutoHide ? 'on' : ''} ${chatDocked ? 'chat-docked' : ''} ${fxFabAutoHide && !fxFabPeek && !visualSettingsOpen ? 'auto-hidden' : ''} ${chromeIdle ? 'idle-hidden' : ''}`}
+          style={{ pointerEvents: 'auto' }}
+          aria-label={fxFabAutoHide ? '取消自动隐藏视觉控制台' : '自动隐藏视觉控制台'}
+        >
+          <ChevronLeft className="h-3 w-3" />
+        </button>
+      </Tooltip>
 
       <div
         ref={searchPanelRef}

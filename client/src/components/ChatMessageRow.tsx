@@ -172,6 +172,16 @@ function renderAiInlineText(
 }
 
 const animatedAiMessageIds = new Set<string>();
+const MAX_ANIMATED_AI_MESSAGE_IDS = 500;
+
+function rememberAnimatedAiMessageId(msgId: string) {
+  animatedAiMessageIds.add(msgId);
+  while (animatedAiMessageIds.size > MAX_ANIMATED_AI_MESSAGE_IDS) {
+    const oldest = animatedAiMessageIds.values().next().value;
+    if (oldest === undefined) break;
+    animatedAiMessageIds.delete(oldest);
+  }
+}
 
 function sliceTextPreserveFaceTokens(raw: string, targetChars: number): string {
   if (targetChars >= raw.length) return raw;
@@ -222,7 +232,7 @@ function AiMessageContent({
       setVisibleChars(messageText.length);
       return;
     }
-    animatedAiMessageIds.add(msgId);
+    rememberAnimatedAiMessageId(msgId);
     const total = messageText.length;
     if (total <= 0) {
       shouldAnimate.current = false;

@@ -240,6 +240,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   const welcomeConfettiIdsRef = useRef(new Set<string>());
   const welcomeConfettiCooldownRef = useRef(new Map<string, number>());
   const pendingWelcomeConfettiRef = useRef(false);
+  const welcomeConfettiRafRef = useRef<number | null>(null);
   const chatConfettiRootRef = useRef<HTMLDivElement | null>(null);
   const listContainerRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<VariableSizeList>(null);
@@ -324,7 +325,9 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
 
   const scheduleWelcomeConfetti = useCallback(() => {
     pendingWelcomeConfettiRef.current = true;
-    requestAnimationFrame(() => {
+    if (welcomeConfettiRafRef.current !== null) cancelAnimationFrame(welcomeConfettiRafRef.current);
+    welcomeConfettiRafRef.current = requestAnimationFrame(() => {
+      welcomeConfettiRafRef.current = null;
       flushWelcomeConfetti();
     });
   }, [flushWelcomeConfetti]);
@@ -378,9 +381,14 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     stickToBottomRef.current = true;
     setShowScrollToBottom(false);
     setShowLoadOlderHint(false);
+    loadingOlderRef.current = false;
     welcomeConfettiIdsRef.current.clear();
     welcomeConfettiCooldownRef.current.clear();
     pendingWelcomeConfettiRef.current = false;
+    if (welcomeConfettiRafRef.current !== null) {
+      cancelAnimationFrame(welcomeConfettiRafRef.current);
+      welcomeConfettiRafRef.current = null;
+    }
     setRevealedPureImages(new Set());
     rowHeightsRef.current.clear();
     pendingRowHeightsRef.current.clear();
@@ -503,18 +511,30 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
     loadingOlderRef.current = true;
     useChatStore.getState().setLoadingOlder(true);
 
-    void loadChatHistory(oldest.timestamp, oldest.id).then((res) => {
-      loadingOlderRef.current = false;
-      const current = useChatStore.getState();
-      if (current.roomId !== requestRoomId || current.chatClearedAt !== requestState.chatClearedAt) return;
-      if (!res.success || !res.messages?.length) {
-        useChatStore.getState().setLoadingOlder(false);
-        if (res.success) useChatStore.getState().prependOlder([], false);
-        return;
-      }
+    void loadChatHistory(oldest.timestamp, oldest.id)
+      .then((res) => {
+        loadingOlderRef.current = false;
+        const current = useChatStore.getState();
+        if (current.roomId !== requestRoomId) return;
+        if (current.chatClearedAt !== requestState.chatClearedAt) {
+          current.setLoadingOlder(false);
+          return;
+        }
+        if (!res.success || !res.messages?.length) {
+          current.setLoadingOlder(false);
+          if (res.success) current.prependOlder([], false);
+          return;
+        }
 
-      useChatStore.getState().prependOlder(res.messages, Boolean(res.hasMore));
-    });
+        current.prependOlder(res.messages, Boolean(res.hasMore));
+      })
+      .catch(() => {
+        loadingOlderRef.current = false;
+        const current = useChatStore.getState();
+        if (current.roomId === requestRoomId) {
+          current.setLoadingOlder(false);
+        }
+      });
   }, [chatScrollRoot, roomMeta.id, hasMoreOlder, loadChatHistory]);
 
   const onVirtualScroll = useCallback((props: ListOnScrollProps) => {
@@ -526,6 +546,7 @@ const ChatMessageList = forwardRef<ChatMessageListHandle, Props>(function ChatMe
   useEffect(() => () => {
     if (scrollbarHideTimerRef.current !== null) window.clearTimeout(scrollbarHideTimerRef.current);
     if (measureFrameRef.current !== null) cancelAnimationFrame(measureFrameRef.current);
+    if (welcomeConfettiRafRef.current !== null) cancelAnimationFrame(welcomeConfettiRafRef.current);
   }, []);
 
   const handleRevealPureImage = useCallback((messageId: string) => {

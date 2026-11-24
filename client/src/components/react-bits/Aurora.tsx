@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Renderer, Program, Mesh, Color, Triangle } from 'ogl';
+import { isHostPageHidden, subscribeHostVisibility } from '../../hooks/useVisualRenderPolicy';
 
 const VERT = `#version 300 es
 in vec2 position;
@@ -207,7 +208,7 @@ export default function Aurora({
     let heldStops = propsRef.current.colorStops;
     const update = (t: number) => {
       animateId = 0;
-      if (document.hidden || !visible) return;
+      if (isHostPageHidden() || !visible) return;
       animateId = requestAnimationFrame(update);
       if (t - lastFrame < 1000 / 30 - .5) return;
       lastFrame = t;
@@ -229,7 +230,7 @@ export default function Aurora({
     const syncVisibility = () => {
       cancelAnimationFrame(animateId);
       animateId = 0;
-      if (!document.hidden && visible) {
+      if (!isHostPageHidden() && visible) {
         lastFrame = -Infinity;
         animateId = requestAnimationFrame(update);
       }
@@ -243,7 +244,7 @@ export default function Aurora({
       propsRef.current.onUnavailable?.();
     };
     visibilityObserver.observe(ctn);
-    document.addEventListener('visibilitychange', syncVisibility);
+    const unsubscribeVisibility = subscribeHostVisibility(syncVisibility);
     gl.canvas.addEventListener('webglcontextlost', contextLost);
     syncVisibility();
 
@@ -253,7 +254,7 @@ export default function Aurora({
       cancelAnimationFrame(animateId);
       resizeObserver.disconnect();
       visibilityObserver.disconnect();
-      document.removeEventListener('visibilitychange', syncVisibility);
+      unsubscribeVisibility();
       gl.canvas.removeEventListener('webglcontextlost', contextLost);
       if (ctn && gl.canvas.parentNode === ctn) {
         ctn.removeChild(gl.canvas);

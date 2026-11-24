@@ -62,7 +62,11 @@ function readManifest(): Manifest {
 }
 
 function writeManifest(manifest: Manifest) {
-  localStorage.setItem(manifestKey(), JSON.stringify(manifest));
+  try {
+    localStorage.setItem(manifestKey(), JSON.stringify(manifest));
+  } catch {
+    // ignore storage errors
+  }
 }
 
 export function sanitizeStickerId(id: string) {
@@ -153,36 +157,44 @@ function parseDataUrl(dataUrl: string): { mime: string; blob: Blob } | null {
 
 async function putBlob(id: string, blob: Blob) {
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(blob, id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).put(blob, id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
 }
 
 async function getBlob(id: string): Promise<Blob | null> {
   const db = await openDb();
-  const blob = await new Promise<Blob | null>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readonly');
-    const req = tx.objectStore(STORE).get(id);
-    req.onsuccess = () => resolve((req.result as Blob) || null);
-    req.onerror = () => reject(req.error);
-  });
-  db.close();
-  return blob;
+  try {
+    return await new Promise<Blob | null>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readonly');
+      const req = tx.objectStore(STORE).get(id);
+      req.onsuccess = () => resolve((req.result as Blob) || null);
+      req.onerror = () => reject(req.error);
+    });
+  } finally {
+    db.close();
+  }
 }
 
 async function deleteBlob(id: string) {
   const db = await openDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      tx.objectStore(STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    db.close();
+  }
 }
 
 export function listUserStickersSync(): UserSticker[] {

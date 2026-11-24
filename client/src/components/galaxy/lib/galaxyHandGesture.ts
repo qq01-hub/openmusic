@@ -16,6 +16,7 @@ import {
   setGalaxyHandGestureStartup,
   type GestureStartupPhase,
 } from './galaxyHandGestureStartup';
+import { isHostPageHidden, subscribeHostVisibility } from '../../../hooks/useVisualRenderPolicy';
 
 const HAND_SMOOTH_ALPHA = 0.35;
 const PARTICLE_HAND_SPIN_X = 4.15;
@@ -300,7 +301,9 @@ async function ensureHandLandmarker(): Promise<HandLandmarker> {
 }
 
 function detectLoop(): void {
+  rafId = 0;
   if (!galaxyHandGestureLive.active || !gestureVideo || !handLandmarker) return;
+  if (isHostPageHidden()) return;
   const video = gestureVideo;
   if (video.readyState >= 2 && video.currentTime !== lastVideoTime) {
     lastVideoTime = video.currentTime;
@@ -317,6 +320,22 @@ function detectLoop(): void {
     }
   }
   rafId = requestAnimationFrame(detectLoop);
+}
+
+let unsubscribeHostVisibility: (() => void) | null = null;
+
+function syncDetectLoopVisibility(): void {
+  if (!galaxyHandGestureLive.active || !gestureVideo || !handLandmarker) return;
+  if (isHostPageHidden()) {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+    return;
+  }
+  if (!rafId) {
+    rafId = requestAnimationFrame(detectLoop);
+  }
 }
 
 /** 每帧衰减（GalaxyParticles useFrame 调用） */
@@ -346,6 +365,8 @@ function notifyModeChange(mode: 'off' | 'gesture', failed = false): void {
 }
 
 function stopHardware(): void {
+  unsubscribeHostVisibility?.();
+  unsubscribeHostVisibility = null;
   if (rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
@@ -376,9 +397,11 @@ function stopHardware(): void {
 }
 
 export function stopGalaxyHandGesture(): void {
+  const wasActive = galaxyHandGestureLive.active;
   stopHardware();
   startPromise = null;
   clearGalaxyHandGestureStartup();
+  if (wasActive) notifyModeChange('off', false);
 }
 
 async function startGalaxyHandGesture(): Promise<boolean> {
@@ -420,8 +443,11 @@ async function startGalaxyHandGesture(): Promise<boolean> {
     galaxyHandGestureLive.active = true;
     setGalaxyHandGestureStartup('ready', 1, '手势已就绪');
     showGestureHUD('待命', 0, '把手放进视野');
-    rafId = requestAnimationFrame(detectLoop);
+    unsubscribeHostVisibility?.();
+    unsubscribeHostVisibility = subscribeHostVisibility(syncDetectLoopVisibility);
+    syncDetectLoopVisibility();
     clearGalaxyHandGestureStartup();
+    notifyModeChange('gesture', false);
 
     window.dispatchEvent(
       new CustomEvent('openmusic:visual-toast', {

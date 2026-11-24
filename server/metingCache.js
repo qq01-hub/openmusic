@@ -5,10 +5,15 @@
 export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, shouldCache = () => true } = {}) {
   const values = new Map();
   const inflight = new Map();
+  let lastSweepAt = 0;
+  const sweepIntervalMs = Math.max(5_000, Math.min(30_000, Math.floor(ttlMs / 2) || 5_000));
 
-  function prune(now = Date.now()) {
-    for (const [key, entry] of values) {
-      if (entry.expiresAt <= now) values.delete(key);
+  function prune(now = Date.now(), forceSweep = false) {
+    if (forceSweep || (values.size >= maxEntries && now - lastSweepAt >= sweepIntervalMs)) {
+      lastSweepAt = now;
+      for (const [key, entry] of values) {
+        if (entry.expiresAt <= now) values.delete(key);
+      }
     }
     while (values.size > maxEntries) {
       const oldest = values.keys().next().value;
@@ -21,7 +26,11 @@ export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, s
     const cacheKey = String(key);
     const now = Date.now();
     const cached = values.get(cacheKey);
-    if (cached && cached.expiresAt > now) return cached.value;
+    if (cached && cached.expiresAt > now) {
+      values.delete(cacheKey);
+      values.set(cacheKey, cached);
+      return cached.value;
+    }
     if (cached) values.delete(cacheKey);
 
     const pending = inflight.get(cacheKey);
@@ -32,6 +41,7 @@ export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, s
       .then((value) => {
         const effectiveTtlMs = Math.max(0, Number(requestedTtlMs) || 0);
         if (effectiveTtlMs > 0 && shouldCache(value)) {
+          values.delete(cacheKey);
           values.set(cacheKey, { value, expiresAt: Date.now() + effectiveTtlMs });
           prune();
         }
@@ -49,9 +59,10 @@ export function createMetingResponseCache({ ttlMs = 30_000, maxEntries = 2048, s
     clear() {
       values.clear();
       inflight.clear();
+      lastSweepAt = 0;
     },
     size() {
-      prune();
+      prune(Date.now(), true);
       return values.size;
     },
   };

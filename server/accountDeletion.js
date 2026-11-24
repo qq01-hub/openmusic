@@ -103,7 +103,15 @@ export function createAccountDeletionService({
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const raw = await client.get(`${ACCOUNT_PREFIX}${id}`);
       if (!raw) throw new AccountAuthError('ACCOUNT_NOT_FOUND', '账户不存在', 404);
-      const account = JSON.parse(raw);
+      let account;
+      try {
+        account = JSON.parse(raw);
+      } catch {
+        throw new AccountAuthError('ACCOUNT_CORRUPTED', '账户数据异常，请联系管理员处理', 500);
+      }
+      if (!account || typeof account !== 'object') {
+        throw new AccountAuthError('ACCOUNT_CORRUPTED', '账户数据异常，请联系管理员处理', 500);
+      }
       if (account.deletedAt) {
         if (!account.deletionPending) return { ok: true, deletedAt: account.deletedAt, pending: false };
         return finish(id, account);
@@ -147,7 +155,17 @@ export function createAccountDeletionService({
       const client = store();
       const { members, cursor } = await client.sScan(PENDING_KEY, pendingCursor, { COUNT: 20 });
       pendingCursor = cursor;
-      for (const id of members) await remove(id);
+      for (const id of members) {
+        try {
+          await remove(id);
+        } catch (error) {
+          if (error?.code === 'ACCOUNT_NOT_FOUND') {
+            await client.sRem(PENDING_KEY, id).catch(() => {});
+            continue;
+          }
+          onResult('retry_failed');
+        }
+      }
     } catch {
       onResult('retry_failed');
     } finally {

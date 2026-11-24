@@ -223,17 +223,32 @@ export function createOAuthProvider(opts) {
     return true;
   }
 
+  async function deleteMatchedKeys(client, pattern) {
+    const pending = [];
+    for await (const entry of client.scanIterator({ MATCH: pattern, COUNT: 100 })) {
+      if (Array.isArray(entry)) {
+        for (const item of entry) {
+          if (typeof item === 'string' && item) pending.push(item);
+        }
+      } else if (typeof entry === 'string' && entry) {
+        pending.push(entry);
+      }
+      while (pending.length >= 200) {
+        await client.del(pending.splice(0, 200));
+      }
+    }
+    if (pending.length > 0) {
+      await client.del(pending);
+    }
+  }
+
   async function clearBindingsForRoom(roomId) {
     const client = configuredRedis || getRedisClient();
     if ((!configuredRedis && !isRedisEnabled()) || !client) return false;
     const rid = normalizeRoomId(roomId);
     if (!rid || typeof client.scanIterator !== 'function') return false;
-    const bindKeys = [];
-    for await (const key of client.scanIterator({ MATCH: `${bindPrefix}*:${rid}` })) bindKeys.push(key);
-    const profileKeys = [];
-    for await (const key of client.scanIterator({ MATCH: `${profilePrefix}*:${rid}` })) profileKeys.push(key);
-    if (bindKeys.length) await client.del(...bindKeys);
-    if (profileKeys.length) await client.del(...profileKeys);
+    await deleteMatchedKeys(client, `${bindPrefix}*:${rid}`);
+    await deleteMatchedKeys(client, `${profilePrefix}*:${rid}`);
     return true;
   }
 

@@ -96,6 +96,36 @@ class WebPlayerState {
         canChangeMode: canChangeMode ?? this.canChangeMode,
         favorited: favorited ?? this.favorited,
       );
+
+  bool needsNotificationSync(
+    WebPlayerState? previous,
+    DateTime? previousAt,
+    DateTime now,
+  ) {
+    if (previous == null || previousAt == null) return true;
+    if (title != previous.title ||
+        artist != previous.artist ||
+        cover != previous.cover ||
+        playing != previous.playing ||
+        (duration - previous.duration).abs() >= 0.5 ||
+        canPause != previous.canPause ||
+        canSkip != previous.canSkip ||
+        canSeek != previous.canSeek ||
+        lyric != previous.lyric ||
+        playMode != previous.playMode ||
+        playModeLabel != previous.playModeLabel ||
+        canChangeMode != previous.canChangeMode ||
+        favorited != previous.favorited) {
+      return true;
+    }
+    if (!playing) {
+      return (position - previous.position).abs() >= 1.0;
+    }
+    final elapsedSec =
+        now.difference(previousAt).inMilliseconds / 1000.0;
+    final expectedPosition = previous.position + (elapsedSec > 0 ? elapsedSec : 0);
+    return (position - expectedPosition).abs() >= 2.5;
+  }
 }
 
 /// Web-first app shell. The web app owns its data/session; Flutter owns the
@@ -113,6 +143,9 @@ class _WebShellPageState extends State<WebShellPage> {
   var _loading = true;
   String? _error;
   var _player = const WebPlayerState();
+  WebPlayerState? _lastSyncedNotification;
+  DateTime? _lastNotificationSyncedAt;
+  var _notificationPermissionRequested = false;
   DateTime? _oauthExpiresAt;
   Uri? _lastTrustedUrl;
   var _restoringTrustedPage = false;
@@ -238,7 +271,7 @@ class _WebShellPageState extends State<WebShellPage> {
                     canChangeMode: m['canChangeMode'] == true,
                     favorited: m['favorited'] == true,
                   );
-                  setState(() => _player = next);
+                  _player = next;
                   await _syncMediaNotification(next);
                   return {'ok': true};
                 },
@@ -342,10 +375,25 @@ class _WebShellPageState extends State<WebShellPage> {
   Future<void> _syncMediaNotification(WebPlayerState state) async {
     try {
       if (state.title.isEmpty) {
-        await _android.invokeMethod('clearPlaybackNotification');
+        if (_lastSyncedNotification != null) {
+          _lastSyncedNotification = null;
+          _lastNotificationSyncedAt = null;
+          await _android.invokeMethod('clearPlaybackNotification');
+        }
         return;
       }
-      await _android.invokeMethod('requestNotificationPermission');
+      final now = DateTime.now();
+      if (!state.needsNotificationSync(
+        _lastSyncedNotification,
+        _lastNotificationSyncedAt,
+        now,
+      )) {
+        return;
+      }
+      if (!_notificationPermissionRequested) {
+        await _android.invokeMethod('requestNotificationPermission');
+        _notificationPermissionRequested = true;
+      }
       await _android.invokeMethod('updatePlaybackNotification', {
         'title': state.title,
         'artist': state.artist,
@@ -362,6 +410,8 @@ class _WebShellPageState extends State<WebShellPage> {
         'canChangeMode': state.canChangeMode,
         'favorited': state.favorited,
       });
+      _lastSyncedNotification = state;
+      _lastNotificationSyncedAt = now;
     } on PlatformException {
       // The web player remains usable when the Android notification fails.
     }
@@ -416,9 +466,9 @@ class _WebShellPageState extends State<WebShellPage> {
   }
 
   Future<void> _clearNativePlaybackState() async {
-    if (mounted && (_player.title.isNotEmpty || _player.playing)) {
-      setState(() => _player = const WebPlayerState());
-    }
+    _player = const WebPlayerState();
+    _lastSyncedNotification = null;
+    _lastNotificationSyncedAt = null;
     try {
       await _android.invokeMethod('clearPlaybackNotification');
     } on PlatformException {
@@ -437,13 +487,17 @@ class _WebShellPageState extends State<WebShellPage> {
   Future<dynamic> _nativeCommand(dynamic raw) async {
     if (raw is! Map) return {'ok': false, 'error': 'invalid_payload'};
     final action = '${raw['action'] ?? ''}';
-    if (action == 'vibrate') return _android.invokeMethod('vibrate');
-    if (action == 'share') {
-      return _android.invokeMethod('share', {'text': '${raw['text'] ?? ''}'});
-    }
-    if (action == 'openExternal') {
-      return _android
-          .invokeMethod('openExternal', {'url': '${raw['url'] ?? ''}'});
+    try {
+      if (action == 'vibrate') return await _android.invokeMethod('vibrate');
+      if (action == 'share') {
+        return await _android.invokeMethod('share', {'text': '${raw['text'] ?? ''}'});
+      }
+      if (action == 'openExternal') {
+        return await _android
+            .invokeMethod('openExternal', {'url': '${raw['url'] ?? ''}'});
+      }
+    } on PlatformException catch (error) {
+      return {'ok': false, 'error': error.code};
     }
     return {'ok': false, 'error': 'unsupported_action'};
   }

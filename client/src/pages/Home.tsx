@@ -1,5 +1,5 @@
 import RoomCardBadges from '../components/RoomCardBadges';
-import { useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
+import { Suspense, lazy, useState, useEffect, useCallback, useMemo, memo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Users, ArrowRight, Lock, ListMusic,
@@ -9,6 +9,7 @@ import {
 import { createRoom, checkRoom, consumePrefetchedRooms, listRooms, randomMatchRoom } from '../api/meting';
 import { useRoomStore } from '../stores/roomStore';
 import { useSocket } from '../hooks/useSocket';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 import type { RoomSummary } from '../types';
 import { usePageSeo, useSiteSeoConfig } from '../lib/seo';
 import { partitionRoomsByRecent, sortRecentRooms } from '../lib/recentRooms';
@@ -23,11 +24,12 @@ import {
   type SiteAnnouncement,
 } from '../lib/siteAnnouncement';
 import Tooltip from '../components/Tooltip';
-import ClientDownloadModal from '../components/ClientDownloadModal';
-import MusicContributionModal from '../components/MusicContributionModal';
-import SiteAnnouncementPopup from '../components/SiteAnnouncementPopup';
-import UserGuideTour from '../components/UserGuideTour';
 import Toast from '../components/Toast';
+
+const ClientDownloadModal = lazy(() => import('../components/ClientDownloadModal'));
+const MusicContributionModal = lazy(() => import('../components/MusicContributionModal'));
+const SiteAnnouncementPopup = lazy(() => import('../components/SiteAnnouncementPopup'));
+const UserGuideTour = lazy(() => import('../components/UserGuideTour'));
 import BrandMark from '../components/BrandMark';
 import HomeAuroraBackdrop from '../components/react-bits/HomeAuroraBackdrop';
 import { isWeakPlaybackDevice } from '../lib/weakPlaybackDevice';
@@ -531,17 +533,17 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
     }
     const POLL_MS = 8000;
     const timer = setInterval(() => {
-      if (typeof document !== 'undefined' && document.hidden) return;
+      if (isHostPageHidden()) return;
       void fetchRooms(true);
     }, POLL_MS);
     const onVisible = () => {
-      if (!document.hidden) void fetchRooms(true);
+      if (!isHostPageHidden()) void fetchRooms(true);
     };
-    document.addEventListener('visibilitychange', onVisible);
+    const unsubscribeVisibility = subscribeHostVisibility(onVisible);
     return () => {
       roomsFetchSeq.current += 1;
       clearInterval(timer);
-      document.removeEventListener('visibilitychange', onVisible);
+      unsubscribeVisibility();
     };
   }, [fetchRooms, initialPrefetchedRooms]);
 
@@ -572,7 +574,13 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
 
   useEffect(() => {
     if (!donationOpen) return;
-    void fetchDonations().then(setDonations);
+    let cancelled = false;
+    void fetchDonations().then((nextDonations) => {
+      if (!cancelled) setDonations(nextDonations);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, [donationOpen]);
 
   useEffect(() => {
@@ -583,7 +591,7 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
       if (shouldAutoShowSiteAnnouncement(announcement)) {
         setSiteAnnouncementOpen(true);
       }
-    });
+    }).catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -1288,16 +1296,28 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
         </Modal>
       )}
 
-      <ClientDownloadModal open={downloadModalOpen} onClose={() => setDownloadModalOpen(false)} />
-      <MusicContributionModal open={contributionOpen} onClose={() => setContributionOpen(false)} defaultProvider={nickname} enabledPlatforms={contributionPlatforms} />
+      {downloadModalOpen && (
+        <Suspense fallback={null}>
+          <ClientDownloadModal open onClose={() => setDownloadModalOpen(false)} />
+        </Suspense>
+      )}
+      {contributionOpen && (
+        <Suspense fallback={null}>
+          <MusicContributionModal open onClose={() => setContributionOpen(false)} defaultProvider={nickname} enabledPlatforms={contributionPlatforms} />
+        </Suspense>
+      )}
       <DonationModal open={donationOpen} onClose={() => setDonationOpen(false)} donations={donations} />
 
-      <SiteAnnouncementPopup
-        open={entryReady && siteAnnouncementOpen}
-        title={siteAnnouncement?.title}
-        text={siteAnnouncement?.text || ''}
-        onClose={handleCloseSiteAnnouncement}
-      />
+      {entryReady && siteAnnouncementOpen && (
+        <Suspense fallback={null}>
+          <SiteAnnouncementPopup
+            open
+            title={siteAnnouncement?.title}
+            text={siteAnnouncement?.text || ''}
+            onClose={handleCloseSiteAnnouncement}
+          />
+        </Suspense>
+      )}
 
       {toast && (
         <Toast
@@ -1307,7 +1327,11 @@ export default function Home({ entryReady = true, entranceActive = false, onRead
         />
       )}
 
-      <UserGuideTour scope="home" paused={!entryReady || siteAnnouncementOpen || accountPanelOpen || showCreate || showJoin} delayMs={1000} />
+      {entryReady && (
+        <Suspense fallback={null}>
+          <UserGuideTour scope="home" paused={siteAnnouncementOpen || accountPanelOpen || showCreate || showJoin} delayMs={1000} />
+        </Suspense>
+      )}
     </div>
   );
 }

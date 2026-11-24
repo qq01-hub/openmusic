@@ -1,4 +1,5 @@
-import { memo, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 
 import {
   ChevronDown, Play, Pause, SkipForward, Loader2, Tv, Check, RotateCcw, RotateCw,
@@ -42,46 +43,61 @@ export default memo(function PlayerPage({ onClose }: Props) {
   const { roomId } = useParams();
   const [tvCopied, setTvCopied] = useState(false);
 
-  const room = useRoomStore((s) => s.room);
-
-  const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
-  const canSeek = canSeekInRoom(room, canControlPlayback);
-  const canPause = canPauseInRoom(room, canControlPlayback);
+  const {
+    roomStoreId,
+    hasRoom,
+    current,
+    isPlaying,
+    lyricOffset,
+    hasPendingSkip,
+    canSeek,
+    canPause,
+    canControlPlayback,
+    canAdjustLyrics,
+  } = useRoomStore(useShallow((s) => {
+    const currentRoom = s.room;
+    return {
+      roomStoreId: currentRoom?.id ?? '',
+      hasRoom: Boolean(currentRoom),
+      current: currentRoom?.current ?? null,
+      isPlaying: currentRoom?.isPlaying ?? false,
+      lyricOffset: currentRoom?.lyricOffsetSeconds ?? 0,
+      hasPendingSkip: currentRoom?.skipRequests?.some((req) => req.requestedBy === s.mySocketId) ?? false,
+      canSeek: canSeekInRoom(currentRoom, s.canControlPlayback),
+      canPause: canPauseInRoom(currentRoom, s.canControlPlayback),
+      canControlPlayback: s.canControlPlayback,
+      canAdjustLyrics: s.isOwner || s.isAdmin,
+    };
+  }));
   const trackLoading = useAudioStore((s) => s.trackLoading);
   const setTrackLoading = useAudioStore((s) => s.setTrackLoading);
   const seekPlayback = useAudioStore((s) => s.seekPlayback);
   const localPlayback = useAudioStore((s) => s.localPlayback);
-  const actualMediaByTrack = useAudioStore((s) => s.actualMediaByTrack);
+  const currentTrackKey = current ? getTrackKey(current) : '';
+  const actualMedia = useAudioStore((s) => (currentTrackKey ? s.actualMediaByTrack[currentTrackKey] : undefined));
   const { togglePlay, skipSong, requestSkip, adjustRoomLyrics } = useSocket();
-  const isOwner = useRoomStore(s => s.isOwner);
-  const isAdmin = useRoomStore(s => s.isAdmin);
-  const canAdjustLyrics = isOwner || isAdmin;
   const lyricAdjustmentPending = useRef(false);
+  const skipPendingRef = useRef(false);
+  const skipMsgTimerRef = useRef<number | null>(null);
+  const tvCopiedTimerRef = useRef<number | null>(null);
   const [adjustingLyrics, setAdjustingLyrics] = useState(false);
   const [lyricError, setLyricError] = useState('');
-  const lyricOffset = room?.lyricOffsetSeconds ?? 0;
 
   const [skipError, setSkipError] = useState('');
   const [skipMsg, setSkipMsg] = useState('');
-  const mySocketId = useRoomStore((s) => s.mySocketId);
 
+  useEffect(() => () => {
+    if (skipMsgTimerRef.current !== null) window.clearTimeout(skipMsgTimerRef.current);
+    if (tvCopiedTimerRef.current !== null) window.clearTimeout(tvCopiedTimerRef.current);
+  }, []);
 
-
-  const current = room?.current;
-  const actualMedia = current ? actualMediaByTrack[getTrackKey(current)] : undefined;
   const qualityLabel = actualMedia?.qualityLabel ?? null;
   const displaySource = actualMedia?.source ?? current?.source ?? 'netease';
   const lyrics = useTrackLyrics(current);
 
-  const isPlaying = room?.isPlaying ?? false;
-
-  const hasPendingSkip = room?.skipRequests?.some((r) => r.requestedBy === mySocketId) ?? false;
-
-
-
   const handlePlayPause = () => {
     const next = !isPlaying;
-    if (!next && room) {
+    if (!next && hasRoom) {
       localPlayback?.(false);
     }
     updateMediaSessionPlaybackState(next ? 'playing' : 'paused');
@@ -112,25 +128,41 @@ export default memo(function PlayerPage({ onClose }: Props) {
 
 
   const handleSkip = async () => {
+    if (skipPendingRef.current) return;
+    skipPendingRef.current = true;
     setSkipError('');
     setSkipMsg('');
     setTrackLoading(true);
-    const res = await skipSong();
-    if (!res.success) {
-      setTrackLoading(false);
-      setSkipError(res.error || '切歌失败');
+    try {
+      const res = await skipSong();
+      if (!res.success) {
+        setTrackLoading(false);
+        setSkipError(res.error || '切歌失败');
+      }
+    } finally {
+      skipPendingRef.current = false;
     }
   };
 
   const handleRequestSkip = async () => {
+    if (skipPendingRef.current) return;
+    skipPendingRef.current = true;
     setSkipError('');
     setSkipMsg('');
-    const res = await requestSkip();
-    if (res.success) {
-      setSkipMsg('已提交切歌申请，等待房主同意');
-      setTimeout(() => setSkipMsg(''), 3000);
-    } else {
-      setSkipError(res.error || '申请失败');
+    try {
+      const res = await requestSkip();
+      if (res.success) {
+        setSkipMsg('已提交切歌申请，等待房主同意');
+        if (skipMsgTimerRef.current !== null) window.clearTimeout(skipMsgTimerRef.current);
+        skipMsgTimerRef.current = window.setTimeout(() => {
+          skipMsgTimerRef.current = null;
+          setSkipMsg('');
+        }, 3000);
+      } else {
+        setSkipError(res.error || '申请失败');
+      }
+    } finally {
+      skipPendingRef.current = false;
     }
   };
 
@@ -139,12 +171,16 @@ export default memo(function PlayerPage({ onClose }: Props) {
   if (!current) return null;
 
   const handleCopyTvLink = async () => {
-    const id = roomId || room?.id;
+    const id = roomId || roomStoreId;
     if (!id) return;
     const ok = await copyToClipboard(`${window.location.origin}/tv/${id}`);
     if (ok) {
       setTvCopied(true);
-      setTimeout(() => setTvCopied(false), 2000);
+      if (tvCopiedTimerRef.current !== null) window.clearTimeout(tvCopiedTimerRef.current);
+      tvCopiedTimerRef.current = window.setTimeout(() => {
+        tvCopiedTimerRef.current = null;
+        setTvCopied(false);
+      }, 2000);
     }
   };
 
@@ -159,11 +195,10 @@ export default memo(function PlayerPage({ onClose }: Props) {
       <header className="relative z-10 flex items-center px-3 py-2 sm:px-4 sm:py-3 2xl:px-8 2xl:py-6 flex-shrink-0 safe-top">
 
         <button
-
+          type="button"
           onClick={onClose}
-
+          aria-label="收起播放器"
           className="w-9 h-9 sm:w-10 sm:h-10 2xl:w-16 2xl:h-16 flex items-center justify-center rounded-full hover:bg-white/10 transition-colors"
-
         >
 
           <ChevronDown className="w-5 h-5 sm:w-6 sm:h-6 2xl:w-10 2xl:h-10" />

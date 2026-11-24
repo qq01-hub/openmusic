@@ -7,11 +7,16 @@ import { getClientPlaybackState, getPlaybackTime } from '../lib/playbackState';
 import { getSharedAudio } from '../lib/audioElement';
 import { isAudioBoundToQueue } from '../lib/audioTrackBinding';
 import { isRoomAudioTakenOver } from '../lib/roomAudioPriority';
+import { isHostPageHidden, subscribeHostVisibility } from './useVisualRenderPolicy';
 import type { Song, QueueItem } from '../types';
 
 type TimeCapSong = Pick<Song, 'duration' | 'id' | 'source'> & Partial<Pick<QueueItem, 'queueId'>>;
 
+const HIDDEN_TICK_MS = 250;
+
 let rafId = 0;
+let hiddenTimerId: ReturnType<typeof setTimeout> | null = null;
+let unsubscribeVisibility: (() => void) | null = null;
 let loopSubscribers = 0;
 let lastTrackKey = '';
 let lastPublishedTime = 0;
@@ -79,12 +84,39 @@ function publishAudioTimeForSong(song: TimeCapSong | null | undefined, force = f
   }
 }
 
+function clearScheduledTick() {
+  if (rafId) {
+    cancelAnimationFrame(rafId);
+    rafId = 0;
+  }
+  if (hiddenTimerId !== null) {
+    clearTimeout(hiddenTimerId);
+    hiddenTimerId = null;
+  }
+}
+
 function stopLoop() {
-  if (rafId) cancelAnimationFrame(rafId);
-  rafId = 0;
+  clearScheduledTick();
+  unsubscribeVisibility?.();
+  unsubscribeVisibility = null;
+}
+
+function scheduleNextTick() {
+  clearScheduledTick();
+  if (loopSubscribers <= 0) {
+    stopLoop();
+    return;
+  }
+  if (isHostPageHidden()) {
+    hiddenTimerId = setTimeout(tick, HIDDEN_TICK_MS);
+    return;
+  }
+  rafId = requestAnimationFrame(tick);
 }
 
 function tick() {
+  rafId = 0;
+  hiddenTimerId = null;
   if (loopSubscribers <= 0) {
     stopLoop();
     return;
@@ -92,11 +124,24 @@ function tick() {
 
   const { room } = useRoomStore.getState();
   publishAudioTimeForSong(room?.current ?? null);
-  rafId = requestAnimationFrame(tick);
+  scheduleNextTick();
 }
 
 function startLoop() {
-  if (!rafId) rafId = requestAnimationFrame(tick);
+  if (!unsubscribeVisibility) {
+    unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (loopSubscribers <= 0) {
+        stopLoop();
+        return;
+      }
+      const { room } = useRoomStore.getState();
+      publishAudioTimeForSong(room?.current ?? null, true);
+      scheduleNextTick();
+    });
+  }
+  if (!rafId && hiddenTimerId === null) {
+    scheduleNextTick();
+  }
 }
 
 /** seek / 切歌时立即对齐进度 */
@@ -115,18 +160,11 @@ export function readLocalPlaybackTime(song: TimeCapSong | null | undefined): num
   return capSongTime(getPlaybackTime(getClientPlaybackState()), song);
 }
 
-/**
- * 歌词/进度条用的高频播放时间（全局单例 RAF）。
- * 有控制权：本机 HTMLAudioElement.currentTime。
- * 听众：房间服务端播放时钟，本机误拖进度不影响展示。
- */
-export function useSmoothPlaybackTime(): number {
-  const isPlaying = useRoomStore((s) => s.room?.isPlaying ?? false);
-  const current = useRoomStore((s) => s.room?.current);
-  const playbackVersion = useAudioStore((s) => s.playbackVersion);
-  // RAF 写入 smoothPlaybackTime 以驱动重绘；展示值始终读本机 audio
-  useAudioStore((s) => s.smoothPlaybackTime);
-
+function usePlaybackTimeLoop(
+  isPlaying: boolean,
+  current: TimeCapSong | null | undefined,
+  playbackVersion: number,
+) {
   useEffect(() => {
     const trackKey = current ? `${current.source}:${current.id}:${current.queueId}` : '';
     const trackChanged = trackKey !== lastTrackKey;
@@ -152,6 +190,31 @@ export function useSmoothPlaybackTime(): number {
       if (loopSubscribers <= 0) stopLoop();
     };
   }, [isPlaying, current?.queueId, current?.id, current?.source, playbackVersion]);
+}
+
+/**
+ * 歌词/进度条用的高频播放时间（全局单例 RAF）。
+ * 有控制权：本机 HTMLAudioElement.currentTime。
+ * 听众：房间服务端播放时钟，本机误拖进度不影响展示。
+ */
+export function useSmoothPlaybackTime(): number {
+  const isPlaying = useRoomStore((s) => s.room?.isPlaying ?? false);
+  const current = useRoomStore((s) => s.room?.current);
+  const playbackVersion = useAudioStore((s) => s.playbackVersion);
+  // RAF 写入 smoothPlaybackTime 以驱动重绘；展示值始终读本机 audio
+  useAudioStore((s) => s.smoothPlaybackTime);
+  usePlaybackTimeLoop(isPlaying, current, playbackVersion);
 
   return readLocalPlaybackTime(current ?? null);
+}
+
+/** 仅在整秒变化时重渲染，供纯 mm:ss 时间文本使用 */
+export function useSmoothPlaybackSecond(): number {
+  const isPlaying = useRoomStore((s) => s.room?.isPlaying ?? false);
+  const current = useRoomStore((s) => s.room?.current);
+  const playbackVersion = useAudioStore((s) => s.playbackVersion);
+  useAudioStore((s) => Math.floor(s.smoothPlaybackTime));
+  usePlaybackTimeLoop(isPlaying, current, playbackVersion);
+
+  return Math.floor(readLocalPlaybackTime(current ?? null));
 }

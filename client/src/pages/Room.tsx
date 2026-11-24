@@ -161,14 +161,10 @@ export function preloadRoomShell() {
   if (!roomShellPreload) {
     roomShellPreload = Promise.all([
       import('../components/ChatPanel'),
-      import('../components/HotSongPanel'),
       import('../components/MiniPlayer'),
       import('../components/OnlineUsers'),
-      import('../components/PureModeChatDock'),
       import('../components/QueuePanel'),
       import('../components/RoomAmbientBackground'),
-      import('../components/RoomAnnouncementPopup'),
-      import('../components/RoomQualityModal'),
     ]).then(() => {
       roomShellReadyLoaded = true;
     }).catch((error) => {
@@ -608,7 +604,7 @@ export default function Room() {
   const songHistoryLoading = useSongHistoryStore((s) => s.loading);
 
   useEffect(() => {
-    ensureRoomChromeInit();
+    return ensureRoomChromeInit();
   }, []);
 
   useEffect(() => {
@@ -1264,7 +1260,7 @@ export default function Room() {
     link.href = url;
     link.download = `openmusic-favorites-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }, [favorites]);
 
   const warmRecommendPlaylistsModal = useCallback(() => {
@@ -1400,7 +1396,13 @@ export default function Room() {
   }, [exitReason, navigate]);
 
   useEffect(() => {
-    getAvailableSources().then(setSources);
+    let cancelled = false;
+    void getAvailableSources().then((nextSources) => {
+      if (!cancelled) setSources(nextSources);
+    }).catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {

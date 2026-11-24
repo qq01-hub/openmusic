@@ -58,6 +58,8 @@ import GalaxyStageLyrics from './GalaxyStageLyrics';
 import GalaxyFloatingSongCard from './GalaxyFloatingSongCard';
 import GalaxyBackgroundStarRiver from './GalaxyBackgroundStarRiver';
 
+const HAND_TARGET_SCRATCH = new THREE.Vector2();
+
 const DEFAULT_COVER = '#1c1c28';
 // 基准(=high 1.0 档)粒子量;缓冲区按 ultra 最大尺寸分配,使极致档能真正增粒。
 const FLOAT_COUNT_BASE = 1300;
@@ -766,8 +768,9 @@ export default function GalaxyParticles({
 
     tickGalaxyHandGesture(delta);
     const hand = galaxyHandGestureLive;
+    HAND_TARGET_SCRATCH.set(hand.handX, hand.handY);
     (uniforms.uHandXY.value as THREE.Vector2).lerp(
-      new THREE.Vector2(hand.handX, hand.handY),
+      HAND_TARGET_SCRATCH,
       Math.min(1, delta * 9),
     );
     uniforms.uHandActive.value += (hand.handActive - (uniforms.uHandActive.value as number)) * Math.min(1, delta * 7.5);
@@ -779,7 +782,7 @@ export default function GalaxyParticles({
     );
     if (nextGrid !== gridRef.current) {
       gridRef.current = nextGrid;
-      setParticleGrid(nextGrid);
+      queueMicrotask(() => setParticleGrid(nextGrid));
       const cached = coverImageCacheRef.current;
       if (cached && uniforms.uHasCover.value > 0.5) {
         const prevCoverCv = cloneCoverCanvas(coverTex.current.image as CanvasImageSource);

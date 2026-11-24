@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Canvas } from '@react-three/fiber';
 
 import { getSharedAudio } from '../../lib/audioElement';
+import { normalizeDurationMs } from '../../lib/duration';
 import { roomVisualFxLive, subscribeRoomVisualFx } from '../../lib/roomVisualFxLive';
 import { stageLyricPaletteLive, subscribeStageLyricPalette } from '../../lib/stageLyricPaletteLive';
 import type { QueueItem } from '../../types';
@@ -154,9 +155,13 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
   const [ready, setReady] = useState(false);
   const [revision, setRevision] = useState(0);
   const renderPolicy = useVisualRenderPolicy(isPlaying);
+  const paused = !renderPolicy.mounted || renderPolicy.frameloop === 'never';
 
   useEffect(() => subscribeRoomVisualFx(() => setRevision((value) => value + 1)), []);
   useEffect(() => subscribeStageLyricPalette(() => setRevision((value) => value + 1)), []);
+  useEffect(() => {
+    if (!renderPolicy.mounted) setReady(false);
+  }, [renderPolicy.mounted]);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -178,9 +183,17 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
 
   useEffect(() => {
     if (!ready) return;
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'mineradio-sonic-workshop-visibility',
+      paused,
+    }, '*');
+  }, [ready, paused]);
+
+  useEffect(() => {
+    if (!ready || paused) return;
     const audio = getSharedAudio();
+    const fallbackDurationSec = (normalizeDurationMs(song?.duration) ?? 0) / 1000;
     const pushMedia = () => {
-      if (document.hidden) return;
       iframeRef.current?.contentWindow?.postMessage({
         type: 'mineradio-sonic-workshop-media',
         media: {
@@ -192,22 +205,22 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
           textColor: stageLyricPaletteLive.palette.highlight,
           isPlaying,
           position: audio.currentTime || 0,
-          duration: Number.isFinite(audio.duration) ? audio.duration : (song?.duration || 0),
+          duration: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDurationSec,
         },
       }, '*');
     };
     pushMedia();
     const timer = window.setInterval(pushMedia, 250);
     return () => window.clearInterval(timer);
-  }, [ready, song, isPlaying, revision]);
+  }, [ready, paused, song, isPlaying, revision]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || paused) return;
     let frame = 0;
     let lastPush = 0;
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
-      if (document.hidden || now - lastPush < 33) return;
+      if (now - lastPush < 33) return;
       lastPush = now;
       if (isPlaying) resumeGalaxyAudioContext();
       const bands = readGalaxyAudioBands(1 / 30);
@@ -222,7 +235,7 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [ready, isPlaying]);
+  }, [ready, paused, isPlaying]);
 
   const dpr = roomVisualFxLive.current.performanceQuality === 'eco' ? 0.75 : roomVisualFxLive.current.performanceQuality === 'ultra' ? 1.5 : 1;
   if (!renderPolicy.mounted) return null;

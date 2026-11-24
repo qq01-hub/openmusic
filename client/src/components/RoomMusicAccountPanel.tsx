@@ -366,8 +366,12 @@ export default function RoomMusicAccountPanel({
 
   useEffect(() => {
     void onRefresh();
-    return () => stopPoll();
-  }, [onRefresh, stopPoll]);
+  }, [onRefresh]);
+
+  useEffect(() => () => {
+    runIdRef.current += 1;
+    stopPoll();
+  }, [stopPoll]);
 
   useEffect(() => {
     const handleVerifyMessage = (event: MessageEvent) => {

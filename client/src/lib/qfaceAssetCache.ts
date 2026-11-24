@@ -29,10 +29,16 @@ export async function matchQFaceAsset(url: string): Promise<Response | null> {
 /** 写入持久化缓存（失败静默） */
 export async function putQFaceAsset(url: string, response: Response): Promise<void> {
   if (!response.ok) return;
+  let cloned: Response;
+  try {
+    cloned = response.clone();
+  } catch {
+    return;
+  }
   try {
     const cache = await openCache();
     if (!cache) return;
-    await cache.put(url, response.clone());
+    await cache.put(url, cloned);
   } catch {
     // quota / private mode
   }

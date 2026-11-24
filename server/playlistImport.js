@@ -97,7 +97,12 @@ export function parseQqPlaylistUrl(input) {
 
 function extractIdFromApiUrl(url) {
   const match = String(url || '').match(/[?&]id=([^&]+)/i);
-  return match ? decodeURIComponent(match[1]) : '';
+  if (!match) return '';
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 export function parseKugouPlaylistId(input) {
@@ -159,7 +164,10 @@ async function fetchNeteasePlaylistMeta(playlistId) {
       { headers: NETEASE_HEADERS },
       6000,
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      await response.body?.cancel?.().catch(() => {});
+      return null;
+    }
     const data = await response.json();
     if (data.code !== 200 || !data.result) return null;
     const result = data.result;
@@ -235,7 +243,10 @@ async function fetchQqPlaylistMeta(playlistId) {
       { headers: QQ_HEADERS },
       6000,
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      await response.body?.cancel?.().catch(() => {});
+      return null;
+    }
 
     const text = await response.text();
     let data;
@@ -285,7 +296,10 @@ async function fetchPlaylistSearchMeta(server, playlistId) {
       { headers: NETEASE_HEADERS },
       10000,
     );
-    if (!response.ok) return null;
+    if (!response.ok) {
+      await response.body?.cancel?.().catch(() => {});
+      return null;
+    }
     const data = await response.json();
     if (!Array.isArray(data)) return null;
 
@@ -308,7 +322,10 @@ async function fetchMetingPlaylist(server, playlistId, { retries = 1 } = {}) {
       { headers: NETEASE_HEADERS },
       60000,
     );
-    if (!response.ok) throw new Error('歌单请求失败');
+    if (!response.ok) {
+      await response.body?.cancel?.().catch(() => {});
+      throw new Error('歌单请求失败');
+    }
 
     const data = await response.json();
     if (!Array.isArray(data)) {

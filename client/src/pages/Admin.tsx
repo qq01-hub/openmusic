@@ -270,6 +270,7 @@ function AdminPage() {
   const loadingRef = useRef(false);
   const pendingForceRefreshRef = useRef(false);
   const refreshGenRef = useRef(0);
+  const auditGenRef = useRef(0);
   const savedEntryPathRef = useRef<string | null>(null);
 
   const initialLoadedRef = useRef(false);
@@ -351,6 +352,8 @@ function AdminPage() {
       // 即使请求失败也清本地 UI 状态
     }
     initialLoadedRef.current = false;
+    annLoadedRef.current = false;
+    auditGenRef.current += 1;
     setLoggedIn(false);
     setLastRefreshedAt(null);
     setRefreshError('');
@@ -389,6 +392,7 @@ function AdminPage() {
   }, [activeTab, loggedIn, refresh]);
 
   const loadAudit = useCallback(async (page: number, opts?: { q?: string; action?: string }) => {
+    const gen = ++auditGenRef.current;
     const q = opts?.q ?? auditKeywordApplied;
     const action = opts?.action ?? auditAction ?? '';
     setAuditLoading(true);
@@ -406,6 +410,7 @@ function AdminPage() {
         pageSize: number;
         totalPages: number;
       }>(`/api/admin/audit?${params.toString()}`);
+      if (gen !== auditGenRef.current) return;
       const maxPage = Math.max(1, res.totalPages || 1);
       if (page > maxPage) {
         setAuditPage(maxPage);
@@ -415,22 +420,28 @@ function AdminPage() {
       setAuditTotal(res.total);
       setAuditPage(res.page);
     } catch (err) {
+      if (gen !== auditGenRef.current) return;
       message.error(err instanceof Error ? err.message : '加载审计日志失败');
     } finally {
-      setAuditLoading(false);
+      if (gen === auditGenRef.current) setAuditLoading(false);
     }
   }, [auditKeywordApplied, auditAction]);
 
   useEffect(() => {
     if (!loggedIn || activeTab !== 'audit') return;
     void loadAudit(auditPage);
+    return () => {
+      auditGenRef.current += 1;
+    };
   }, [loggedIn, activeTab, auditPage, loadAudit]);
 
   useEffect(() => {
     if (!loggedIn || annLoadedRef.current) return;
+    let cancelled = false;
     (async () => {
       try {
         const res = await adminFetch<{ announcement: SiteAnnouncementConfig }>('/api/admin/announcement');
+        if (cancelled) return;
         annLoadedRef.current = true;
         setAnnEnabled(res.announcement.enabled);
         setAnnTitle(res.announcement.title || '站点公告');
@@ -439,6 +450,9 @@ function AdminPage() {
         // 拉取失败不阻塞面板，保存时仍可覆盖
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [loggedIn]);
 
   const loadDonations = useCallback(async () => {

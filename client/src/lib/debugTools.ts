@@ -821,14 +821,14 @@ export function enableOpenMusicDebug(): void {
     return;
   }
   state.enabled = true;
-  localStorage.setItem(DEBUG_FLAG_KEY, '1');
+  try { localStorage.setItem(DEBUG_FLAG_KEY, '1'); } catch { /* ignore */ }
   printSnapshot('enabled');
   state.timer = window.setInterval(() => printSnapshot('tick'), DEBUG_INTERVAL_MS);
 }
 
 export function disableOpenMusicDebug(): void {
   state.enabled = false;
-  localStorage.removeItem(DEBUG_FLAG_KEY);
+  try { localStorage.removeItem(DEBUG_FLAG_KEY); } catch { /* ignore */ }
   if (state.timer) window.clearInterval(state.timer);
   state.timer = 0;
   resetDriftHistogram();
@@ -906,7 +906,9 @@ export function installOpenMusicDebug(): void {
     debugLog('unhandled-rejection', String(event.reason));
   });
 
-  if (localStorage.getItem(DEBUG_FLAG_KEY) === '1' || consumeDebugUrlParam()) {
+  let savedFlag = false;
+  try { savedFlag = localStorage.getItem(DEBUG_FLAG_KEY) === '1'; } catch { savedFlag = false; }
+  if (savedFlag || consumeDebugUrlParam()) {
     enableOpenMusicDebug();
   }
 }

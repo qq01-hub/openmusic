@@ -1,6 +1,7 @@
-import { memo, useEffect, useMemo } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import type { Song } from '../types';
 import { filterDisplayLyrics, getCoverUrl, LYRIC_SYNC_LEAD_SEC, songKey } from '../api/music';
+import { normalizeDurationMs } from '../lib/duration';
 import { useAudioStore } from '../stores/audioStore';
 import { useRoomStore } from '../stores/roomStore';
 import { canPauseInRoom, canSeekInRoom } from '../lib/roomPermissions';
@@ -34,16 +35,15 @@ type NativePlayerExtras = {
   favorited: boolean;
 };
 
-function currentLyricText(song: Song | null, lyrics: ReturnType<typeof useTrackLyrics>) {
-  if (!song || lyrics.length === 0) return '';
+function currentLyricText(song: Song | null, displayLyrics: ReturnType<typeof filterDisplayLyrics>) {
+  if (!song || displayLyrics.length === 0) return '';
   const playbackState = getClientPlaybackState();
   const serverClockMatchesSong = playbackState?.trackId === (song as { queueId?: string }).queueId;
   const position = serverClockMatchesSong
     ? getPlaybackTime(playbackState)
     : useAudioStore.getState().smoothPlaybackTime;
-  const lines = filterDisplayLyrics(lyrics);
-  const activeIndex = findActiveLyricIndex(lines, position + LYRIC_SYNC_LEAD_SEC);
-  const active = activeIndex >= 0 ? lines[activeIndex] : null;
+  const activeIndex = findActiveLyricIndex(displayLyrics, position + LYRIC_SYNC_LEAD_SEC);
+  const active = activeIndex >= 0 ? displayLyrics[activeIndex] : null;
   if (!active) return '';
   return [active.text, active.translation].filter(Boolean).join(' / ').slice(0, 180);
 }
@@ -68,10 +68,9 @@ function sendPlayerState(
   const position = serverClockMatchesSong
     ? getPlaybackTime(playbackState)
     : audio.smoothPlaybackTime;
-  const rawDuration = audio.mediaDurationMs != null
+  const duration = audio.mediaDurationMs != null
     ? audio.mediaDurationMs / 1000
-    : Number(song.duration) || 0;
-  const duration = rawDuration > 10000 ? rawDuration / 1000 : rawDuration;
+    : (normalizeDurationMs(song.duration) ?? 0) / 1000;
   const cover = getCoverUrl(song, 'medium');
   void bridge.callHandler('omPlayerState', {
     title: song.name,
@@ -92,39 +91,42 @@ function sendPlayerState(
   });
 }
 
-/** Synchronizes the Web room player with the Android media notification. */
-export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, skipSong, showLyrics }: Props) {
+const ActiveNativeWebViewBridge = memo(function ActiveNativeWebViewBridge({ song, isPlaying, togglePlay, skipSong, showLyrics }: Props) {
   const songId = song ? songKey(song) : '';
-  const room = useRoomStore((state) => state.room);
+  const playMode = useRoomStore((state) => normalizePlayMode(state.room?.playMode));
   const canControlPlayback = useRoomStore((state) => state.canControlPlayback);
+  const canPause = useRoomStore((state) => canPauseInRoom(state.room, state.canControlPlayback));
+  const canSeek = useRoomStore((state) => canSeekInRoom(state.room, state.canControlPlayback));
   const lyrics = useTrackLyrics(song);
+  const displayLyrics = useMemo(() => filterDisplayLyrics(lyrics), [lyrics]);
   const { isFavorite, toggleFavorite } = useFavorites();
   const { setRoomPlayMode } = useSocket();
-  const playMode = normalizePlayMode(room?.playMode);
   const playModeLabel = PLAY_MODE_META[playMode].short;
   const favorited = isFavorite(song);
-  const permissions: NativePlayerPermissions = {
-    canPause: canPauseInRoom(room, canControlPlayback),
-    canSkip: canControlPlayback,
-    canSeek: canSeekInRoom(room, canControlPlayback),
+  const reportRef = useRef<() => void>(() => {});
+  reportRef.current = () => {
+    sendPlayerState(
+      song,
+      isPlaying,
+      { canPause, canSkip: canControlPlayback, canSeek },
+      {
+        lyric: currentLyricText(song, displayLyrics),
+        playMode,
+        playModeLabel,
+        canChangeMode: canControlPlayback,
+        favorited,
+      },
+    );
   };
-  const extras = useMemo<NativePlayerExtras>(() => ({
-    lyric: currentLyricText(song, lyrics),
-    playMode,
-    playModeLabel,
-    canChangeMode: canControlPlayback,
-    favorited,
-  }), [canControlPlayback, favorited, lyrics, playMode, playModeLabel, song]);
 
   useEffect(() => {
-    const report = () => sendPlayerState(song, isPlaying, permissions, {
-      ...extras,
-      lyric: currentLyricText(song, lyrics),
-    });
-    report();
-    const timer = window.setInterval(report, 750);
+    reportRef.current();
+  }, [songId, isPlaying, canPause, canControlPlayback, canSeek, playMode, favorited, displayLyrics]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => reportRef.current(), 750);
     return () => window.clearInterval(timer);
-  }, [song, songId, isPlaying, permissions.canPause, permissions.canSkip, permissions.canSeek, extras, lyrics]);
+  }, []);
 
   useEffect(() => () => {
     const bridgeToken = getNativeBridgeToken();
@@ -139,10 +141,10 @@ export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, 
   useEffect(() => {
     const onCommand = (event: Event) => {
       const detail = (event as CustomEvent<{ action?: string; time?: unknown }>).detail;
-      if (detail?.action === 'play' && permissions.canPause) void togglePlay(true);
-      if (detail?.action === 'pause' && permissions.canPause) void togglePlay(false);
-      if (detail?.action === 'next' && permissions.canSkip) void skipSong();
-      if (detail?.action === 'seek' && permissions.canSeek) {
+      if (detail?.action === 'play' && canPause) void togglePlay(true);
+      if (detail?.action === 'pause' && canPause) void togglePlay(false);
+      if (detail?.action === 'next' && canControlPlayback) void skipSong();
+      if (detail?.action === 'seek' && canSeek) {
         const time = Number(detail.time);
         if (Number.isFinite(time) && time >= 0) useAudioStore.getState().seekPlayback?.(time);
       }
@@ -167,9 +169,8 @@ export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, 
     return () => window.removeEventListener('omNativePlayerCommand', onCommand);
   }, [
     canControlPlayback,
-    permissions.canPause,
-    permissions.canSeek,
-    permissions.canSkip,
+    canPause,
+    canSeek,
     playMode,
     setRoomPlayMode,
     showLyrics,
@@ -180,4 +181,27 @@ export default memo(function NativeWebViewBridge({ song, isPlaying, togglePlay, 
   ]);
 
   return null;
+});
+
+/** 仅在 Flutter 移动端 WebView 内激活原生媒体通知同步，桌面端零开销早退 */
+export default memo(function NativeWebViewBridge(props: Props) {
+  const [bridgeAvailable, setBridgeAvailable] = useState(
+    () => typeof window !== 'undefined' && Boolean(window.flutter_inappwebview),
+  );
+
+  useEffect(() => {
+    if (bridgeAvailable || typeof window === 'undefined') return;
+    if (window.flutter_inappwebview) {
+      setBridgeAvailable(true);
+      return;
+    }
+    const onReady = () => {
+      if (window.flutter_inappwebview) setBridgeAvailable(true);
+    };
+    window.addEventListener('flutterInAppWebViewPlatformReady', onReady);
+    return () => window.removeEventListener('flutterInAppWebViewPlatformReady', onReady);
+  }, [bridgeAvailable]);
+
+  if (!bridgeAvailable) return null;
+  return <ActiveNativeWebViewBridge {...props} />;
 });

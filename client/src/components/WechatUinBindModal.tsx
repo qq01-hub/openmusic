@@ -13,6 +13,7 @@ import {
   fetchWechatLoginUuid,
   pollWechatLogin,
 } from '../lib/wechatFileHelperBridge';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 type Mode = 'bind' | 'recover';
 
@@ -63,52 +64,67 @@ export default function WechatUinBindModal({ open, mode, roomId, onClose, onComp
       setStatus('请用微信扫一扫登录');
     };
 
-    const pollTimer = window.setInterval(() => {
-      void (async () => {
-        if (busyRef.current || completedRef.current || cancelled || !uuidRef.current) return;
-        busyRef.current = true;
-        const uuid = uuidRef.current;
-        try {
-          const result = await pollWechatLogin(uuid, scannedRef.current ? 1 : 0);
-          if (cancelled || uuidRef.current !== uuid) return;
-          if (result === 'expired') {
-            await refreshQr();
-            if (!cancelled) setStatus('二维码已过期，已自动刷新');
-            return;
-          }
-          if (result === 'scanned') {
-            scannedRef.current = true;
-            setStatus('扫码成功，请在手机上确认登录');
-            return;
-          }
-          if (typeof result === 'object' && result.ok) {
-            uuidRef.current = null;
-            setQrUrl(null);
-            setStatus('登录中，正在读取微信身份…');
-            await bootstrapWechatFileHelperSession(null, result.redirectUri);
-            const bindResult = mode === 'bind'
-              ? await bindWechatUin(roomId || '')
-              : await recoverWechatUin(roomId || '');
-            if (!bindResult.success) throw new Error(bindResult.error || '微信绑定失败');
-            if (cancelled) return;
-            completedRef.current = true;
-            clearWechatFileHelperSession();
-            setDone(true);
-            setStatus(mode === 'bind' ? '绑定完毕' : '身份找回成功');
-            onCompletedRef.current();
-          }
-        } catch (err) {
-          if (cancelled) return;
-          uuidRef.current = null;
-          completedRef.current = true;
-          setQrUrl(null);
-          setError(err instanceof Error ? err.message : '微信绑定失败');
-          setStatus('操作失败，请重试');
-        } finally {
-          busyRef.current = false;
+    let pollTimer: number | null = null;
+    const stopPoll = () => {
+      if (pollTimer !== null) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    };
+
+    const runPoll = async () => {
+      if (busyRef.current || completedRef.current || cancelled || !uuidRef.current || isHostPageHidden()) return;
+      busyRef.current = true;
+      const uuid = uuidRef.current;
+      try {
+        const result = await pollWechatLogin(uuid, scannedRef.current ? 1 : 0);
+        if (cancelled || uuidRef.current !== uuid) return;
+        if (result === 'expired') {
+          await refreshQr();
+          if (!cancelled) setStatus('二维码已过期，已自动刷新');
+          return;
         }
-      })();
+        if (result === 'scanned') {
+          scannedRef.current = true;
+          setStatus('扫码成功，请在手机上确认登录');
+          return;
+        }
+        if (typeof result === 'object' && result.ok) {
+          uuidRef.current = null;
+          setQrUrl(null);
+          setStatus('登录中，正在读取微信身份…');
+          await bootstrapWechatFileHelperSession(null, result.redirectUri);
+          const bindResult = mode === 'bind'
+            ? await bindWechatUin(roomId || '')
+            : await recoverWechatUin(roomId || '');
+          if (!bindResult.success) throw new Error(bindResult.error || '微信绑定失败');
+          if (cancelled) return;
+          completedRef.current = true;
+          stopPoll();
+          clearWechatFileHelperSession();
+          setDone(true);
+          setStatus(mode === 'bind' ? '绑定完毕' : '身份找回成功');
+          onCompletedRef.current();
+        }
+      } catch (err) {
+        if (cancelled) return;
+        uuidRef.current = null;
+        completedRef.current = true;
+        stopPoll();
+        setQrUrl(null);
+        setError(err instanceof Error ? err.message : '微信绑定失败');
+        setStatus('操作失败，请重试');
+      } finally {
+        busyRef.current = false;
+      }
+    };
+
+    pollTimer = window.setInterval(() => {
+      void runPoll();
     }, 2000);
+    const unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (!isHostPageHidden()) void runPoll();
+    });
 
     void refreshQr().catch(() => {
       if (!cancelled) {
@@ -119,7 +135,8 @@ export default function WechatUinBindModal({ open, mode, roomId, onClose, onComp
 
     return () => {
       cancelled = true;
-      window.clearInterval(pollTimer);
+      stopPoll();
+      unsubscribeVisibility();
       clearWechatFileHelperSession();
     };
   }, [open, mode, roomId, retryKey]);

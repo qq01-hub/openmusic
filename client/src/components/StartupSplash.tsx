@@ -8,6 +8,7 @@ import {
   type AuroraSpectrumBar,
 } from '../lib/startupSplash';
 import { useSiteSeoConfig } from '../lib/seo';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 import './StartupSplash.css';
 
 const WORDMARK_CHARS = Array.from('OpenMusic');
@@ -26,6 +27,7 @@ export default function StartupSplash({ ready, onEnter }: { ready: boolean; onEn
   const wordRef = useRef<HTMLHeadingElement>(null);
   const enterRef = useRef<HTMLButtonElement>(null);
   const leavingRef = useRef(false);
+  const exitRafRef = useRef(0);
   const completeRef = useRef(onEnter);
   const stateRef = useRef({
     t: 0,
@@ -224,24 +226,31 @@ export default function StartupSplash({ ready, onEnter }: { ready: boolean; onEn
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
-      if (!reduced.matches) {
+      if (!reduced.matches && !isHostPageHidden()) {
         rafId = window.requestAnimationFrame(drawFrame);
+      } else {
+        rafId = 0;
       }
     };
 
-    rafId = window.requestAnimationFrame(drawFrame);
-    const onVisibility = () => {
-      if (!document.hidden && !reduced.matches) {
-        lastNow = performance.now();
+    if (!isHostPageHidden()) {
+      rafId = window.requestAnimationFrame(drawFrame);
+    }
+    const unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (isHostPageHidden()) {
         window.cancelAnimationFrame(rafId);
+        rafId = 0;
+        return;
+      }
+      if (!reduced.matches && !rafId) {
+        lastNow = performance.now();
         rafId = window.requestAnimationFrame(drawFrame);
       }
-    };
-    document.addEventListener('visibilitychange', onVisibility);
+    });
     return () => {
       window.cancelAnimationFrame(rafId);
       window.removeEventListener('resize', resize);
-      document.removeEventListener('visibilitychange', onVisibility);
+      unsubscribeVisibility();
     };
   }, []);
 
@@ -273,13 +282,21 @@ export default function StartupSplash({ ready, onEnter }: { ready: boolean; onEn
       const p = Math.min(1, (now - start) / durationMs);
       stateRef.current.exit = p;
       if (p < 1) {
-        window.requestAnimationFrame(tickExit);
+        exitRafRef.current = window.requestAnimationFrame(tickExit);
       } else {
+        exitRafRef.current = 0;
         completeRef.current();
       }
     };
-    window.requestAnimationFrame(tickExit);
+    exitRafRef.current = window.requestAnimationFrame(tickExit);
   }, [waiting]);
+
+  useEffect(() => () => {
+    if (exitRafRef.current) {
+      window.cancelAnimationFrame(exitRafRef.current);
+      exitRafRef.current = 0;
+    }
+  }, []);
 
   useEffect(() => {
     if (!enterRequested) return;

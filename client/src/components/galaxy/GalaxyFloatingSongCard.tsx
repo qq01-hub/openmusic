@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { useShallow } from 'zustand/react/shallow';
 import { getCoverUrl } from '../../api/music';
 import { readLocalPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
 import { useTrackDuration, clampPlaybackTime } from '../../hooks/useTrackDuration';
@@ -96,14 +97,25 @@ function syncVisibleShelfMatrices(meshes: THREE.Mesh[]): void {
 }
 
 export default function GalaxyFloatingSongCard() {
-  const room = useRoomStore((s) => s.room);
-  const nickname = useRoomStore((s) => s.nickname);
-  const mySocketId = useRoomStore((s) => s.mySocketId);
-  const canControlPlayback = useRoomStore((s) => s.canControlPlayback);
-  const memberJumpEnabled = Boolean(room?.memberJumpEnabled);
+  const {
+    current,
+    queue,
+    memberJumpEnabled,
+    dislikeThreshold,
+    nickname,
+    mySocketId,
+    canControlPlayback,
+  } = useRoomStore(useShallow((s) => ({
+    current: s.room?.current ?? null,
+    queue: s.room?.queue ?? null,
+    memberJumpEnabled: Boolean(s.room?.memberJumpEnabled),
+    dislikeThreshold: resolveDislikeSkipThreshold(s.room),
+    nickname: s.nickname,
+    mySocketId: s.mySocketId,
+    canControlPlayback: s.canControlPlayback,
+  })));
   const { toggleFavorite, isFavorite } = useFavorites();
   const { removeSong, requestJump, toggleQueueLike, toggleCurrentDislike, banRoomSong } = useSocket();
-  const current = room?.current ?? null;
   const duration = useTrackDuration(current);
   const { camera, gl, pointer } = useThree();
   const cardsRef = useRef<CardSlot[]>([]);
@@ -141,15 +153,13 @@ export default function GalaxyFloatingSongCard() {
   const [cardCount, setCardCount] = useState(0);
 
   const displaySongs = useMemo<DisplayQueueItem[]>(() => {
-    if (!room) return [];
+    if (!current && !queue?.length) return [];
     const items = [
-      ...(room.current ? [{ ...room.current, isCurrent: true }] : []),
-      ...room.queue.slice(0, MAX_SHELF_ITEMS - (room.current ? 1 : 0)).map((song) => ({ ...song, isCurrent: false })),
+      ...(current ? [{ ...current, isCurrent: true }] : []),
+      ...(queue ?? []).slice(0, MAX_SHELF_ITEMS - (current ? 1 : 0)).map((song) => ({ ...song, isCurrent: false })),
     ];
     return items.slice(0, MAX_SHELF_ITEMS);
-  }, [room?.current, room?.queue]);
-
-  const dislikeThreshold = useMemo(() => resolveDislikeSkipThreshold(room), [room]);
+  }, [current, queue]);
 
   const displayItems = useMemo(() => {
     const myUserId = mySocketId || getClientId();

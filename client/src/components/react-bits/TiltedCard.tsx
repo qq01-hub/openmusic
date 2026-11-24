@@ -11,6 +11,7 @@ import {
 export interface TiltedCardProps {
   children: ReactNode;
   className?: string;
+  style?: CSSProperties;
   /** 最大倾斜角度，默认 12 */
   rotateAmplitude?: number;
   /** hover 放大，默认 1.02 */
@@ -28,6 +29,7 @@ export interface TiltedCardProps {
 export default function TiltedCard({
   children,
   className = '',
+  style: externalStyle,
   rotateAmplitude = 12,
   scaleOnHover = 1.02,
   spotlightColor,
@@ -38,6 +40,8 @@ export default function TiltedCard({
   const ref = useRef<HTMLButtonElement>(null);
   const rafRef = useRef<number | null>(null);
   const reduceRef = useRef(false);
+  const rectRef = useRef<DOMRect | null>(null);
+  const invalidateCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     reduceRef.current =
@@ -45,7 +49,32 @@ export default function TiltedCard({
       || window.matchMedia('(pointer: coarse)').matches;
   }, []);
 
+  const clearRectCache = useCallback(() => {
+    rectRef.current = null;
+    invalidateCleanupRef.current?.();
+    invalidateCleanupRef.current = null;
+  }, []);
+
+  const onEnter: MouseEventHandler<HTMLButtonElement> = () => {
+    if (disabled || reduceRef.current) return;
+    const el = ref.current;
+    if (!el) return;
+    rectRef.current = el.getBoundingClientRect();
+    if (!invalidateCleanupRef.current) {
+      const invalidate = () => {
+        rectRef.current = null;
+      };
+      window.addEventListener('scroll', invalidate, { passive: true, capture: true });
+      window.addEventListener('resize', invalidate, { passive: true });
+      invalidateCleanupRef.current = () => {
+        window.removeEventListener('scroll', invalidate, true);
+        window.removeEventListener('resize', invalidate);
+      };
+    }
+  };
+
   const reset = useCallback(() => {
+    clearRectCache();
     const el = ref.current;
     if (!el) return;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -55,13 +84,15 @@ export default function TiltedCard({
     el.style.setProperty('--tc-mx', '50%');
     el.style.setProperty('--tc-my', '50%');
     el.style.willChange = '';
-  }, []);
+  }, [clearRectCache]);
 
   const onMove: MouseEventHandler<HTMLButtonElement> = (e) => {
     if (disabled || reduceRef.current) return;
     const el = ref.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
+    const rect = rectRef.current ?? el.getBoundingClientRect();
+    rectRef.current = rect;
+    if (rect.width <= 0 || rect.height <= 0) return;
     const px = (e.clientX - rect.left) / rect.width;
     const py = (e.clientY - rect.top) / rect.height;
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -77,11 +108,13 @@ export default function TiltedCard({
 
   useEffect(() => () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
-  }, []);
+    clearRectCache();
+  }, [clearRectCache]);
 
   const style: CSSProperties | undefined = disabled
-    ? undefined
+    ? externalStyle
     : {
+        ...externalStyle,
         transform:
           'perspective(900px) rotateX(var(--tc-rx, 0deg)) rotateY(var(--tc-ry, 0deg)) scale(var(--tc-scale, 1))',
         transition: 'transform 0.18s ease-out, border-color 0.3s ease, box-shadow 0.3s ease',
@@ -91,6 +124,7 @@ export default function TiltedCard({
   const buttonProps: ButtonHTMLAttributes<HTMLButtonElement> = {
     type: 'button',
     onClick,
+    onMouseEnter: onEnter,
     onMouseMove: onMove,
     onMouseLeave: reset,
     className: `rb-tilted-card relative ${className}`.trim(),

@@ -2,6 +2,22 @@ import { create } from 'zustand';
 import type { RoomState } from '../types';
 import { getSafeAvatarUrl } from '../lib/avatarImage';
 
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // 隐私模式或禁存储环境静默回退到内存态
+  }
+}
+
 interface RoomStore {
   room: RoomState | null;
   nickname: string;
@@ -54,7 +70,7 @@ function deriveRoles(room: RoomState, mySocketId: string) {
 
 export const useRoomStore = create<RoomStore>((set, get) => ({
   room: null,
-  nickname: localStorage.getItem('sjb_nickname') || '',
+  nickname: readStorage('sjb_nickname') || '',
   nicknameAccountId: null,
   nicknameDirty: false,
   nicknameMigration: false,
@@ -67,26 +83,26 @@ export const useRoomStore = create<RoomStore>((set, get) => ({
   showPlayer: false,
   exitReason: null,
   isReconnecting: false,
-  avatar_url: getSafeAvatarUrl(localStorage.getItem('avatar_url')),
+  avatar_url: getSafeAvatarUrl(readStorage('avatar_url')),
   setRoom: (room) => set({ room }),
   setNickname: (nickname) => {
-    localStorage.setItem('sjb_nickname', nickname);
+    writeStorage('sjb_nickname', nickname);
     set({ nickname, nicknameDirty: false, nicknameMigration: false });
   },
   setNicknameDraft: (nickname) => {
-    localStorage.setItem('sjb_nickname', nickname);
+    writeStorage('sjb_nickname', nickname);
     set({ nickname, nicknameDirty: true, nicknameMigration: false });
   },
   bindAccountNickname: (accountId, savedNickname) => {
     const current = get();
-    const cacheOwner = localStorage.getItem('sjb_nickname_account');
+    const cacheOwner = readStorage('sjb_nickname_account');
     if (!accountId && !cacheOwner && !current.nicknameAccountId) return;
     if (accountId && current.nicknameAccountId === accountId && current.nicknameDirty) return;
     const cached = accountId && (cacheOwner === null || cacheOwner === accountId)
-      ? localStorage.getItem('sjb_nickname') || '' : '';
+      ? readStorage('sjb_nickname') || '' : '';
     const nickname = savedNickname || cached;
-    localStorage.setItem('sjb_nickname_account', accountId || '');
-    localStorage.setItem('sjb_nickname', nickname);
+    writeStorage('sjb_nickname_account', accountId || '');
+    writeStorage('sjb_nickname', nickname);
     set({ nicknameAccountId: accountId, nickname, nicknameDirty: Boolean(accountId && !savedNickname && nickname), nicknameMigration: Boolean(accountId && !savedNickname && nickname) });
   },
   setConnectionInfo: (mySocketId, myConnectionId = null) => {

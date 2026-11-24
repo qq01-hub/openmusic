@@ -79,8 +79,6 @@ if (typeof window !== 'undefined') {
     tasks.push(import('./pages/Room').then((m) => m.preloadRoomShell()).catch(() => undefined));
   } else if (initialPath.startsWith('/tv/')) {
     tasks.push(import('./pages/TvDisplay').catch(() => undefined));
-  } else if (initialPath === '/admin' || /^\/[A-Za-z0-9_-]{8,64}$/.test(initialPath)) {
-    tasks.push(preloadAdminBundle());
   }
   initialRoutePreloadPromise = Promise.all(tasks).finally(() => {
     initialRouteBundleReady = true;
@@ -126,21 +124,20 @@ function AdminGate() {
     }
 
     setMatch(null);
-    void preloadAdminBundle();
     (async () => {
       try {
-        const [res] = await Promise.all([
-          fetch('/api/admin/gate', {
-            method: 'POST',
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ path }),
-          }),
-          preloadAdminBundle(),
-        ]);
+        const res = await fetch('/api/admin/gate', {
+          method: 'POST',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
         const data = await res.json().catch(() => ({}));
         const matched = Boolean(data.match);
+        if (matched && !cancelled) {
+          await preloadAdminBundle();
+        }
         if (!cancelled) {
           setMatch(matched);
           // 只在真正命中管理入口的这台设备本地记住路径，方便下次从首页快捷进入

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Play, Pause, SkipForward, Loader2, Flag } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
@@ -60,19 +60,25 @@ export default memo(function MiniPlayer({
   const setTrackLoading = useAudioStore((s) => s.setTrackLoading);
   const seekPlayback = useAudioStore((s) => s.seekPlayback);
   const localPlayback = useAudioStore((s) => s.localPlayback);
-  const actualMediaByTrack = useAudioStore((s) => s.actualMediaByTrack);
+  const currentTrackKey = current ? getTrackKey(current) : '';
+  const actualMedia = useAudioStore((s) => (currentTrackKey ? s.actualMediaByTrack[currentTrackKey] : undefined));
   const { togglePlay, skipSong, requestSkip } = useSocket();
 
   const [skipError, setSkipError] = useState('');
   const [skipMsg, setSkipMsg] = useState('');
   const [reportOpen, setReportOpen] = useState(false);
+  const skipPendingRef = useRef(false);
+  const skipMsgTimerRef = useRef<number | null>(null);
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const hasPendingSkip = skipRequests?.some((r) => r.requestedBy === mySocketId) ?? false;
   const isMobile = isMobileDevice();
   const showDesktopLyrics = !isMobile;
-  const actualMedia = current ? actualMediaByTrack[getTrackKey(current)] : undefined;
   const qualityLabel = actualMedia?.qualityLabel ?? null;
   const displaySource = actualMedia?.source ?? current?.source ?? 'netease';
+
+  useEffect(() => () => {
+    if (skipMsgTimerRef.current !== null) window.clearTimeout(skipMsgTimerRef.current);
+  }, []);
 
 
   const handlePlayPause = () => {
@@ -89,25 +95,41 @@ export default memo(function MiniPlayer({
   const handleSeek = (time: number) => seekPlayback?.(time);
 
   const handleSkip = async () => {
+    if (skipPendingRef.current) return;
+    skipPendingRef.current = true;
     setSkipError('');
     setSkipMsg('');
     setTrackLoading(true);
-    const res = await skipSong();
-    if (!res.success) {
-      setTrackLoading(false);
-      setSkipError(res.error || '切歌失败');
+    try {
+      const res = await skipSong();
+      if (!res.success) {
+        setTrackLoading(false);
+        setSkipError(res.error || '切歌失败');
+      }
+    } finally {
+      skipPendingRef.current = false;
     }
   };
 
   const handleRequestSkip = async () => {
+    if (skipPendingRef.current) return;
+    skipPendingRef.current = true;
     setSkipError('');
     setSkipMsg('');
-    const res = await requestSkip();
-    if (res.success) {
-      setSkipMsg('已提交切歌申请');
-      setTimeout(() => setSkipMsg(''), 3000);
-    } else {
-      setSkipError(res.error || '申请失败');
+    try {
+      const res = await requestSkip();
+      if (res.success) {
+        setSkipMsg('已提交切歌申请');
+        if (skipMsgTimerRef.current !== null) window.clearTimeout(skipMsgTimerRef.current);
+        skipMsgTimerRef.current = window.setTimeout(() => {
+          skipMsgTimerRef.current = null;
+          setSkipMsg('');
+        }, 3000);
+      } else {
+        setSkipError(res.error || '申请失败');
+      }
+    } finally {
+      skipPendingRef.current = false;
     }
   };
 

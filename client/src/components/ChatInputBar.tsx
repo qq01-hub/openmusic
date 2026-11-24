@@ -1,5 +1,7 @@
 import {
+  Suspense,
   forwardRef,
+  lazy,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -14,10 +16,12 @@ import type { ChatMention, ChatReplyRef, RoomAiConfig, RoomUser } from '../types
 import Tooltip from './Tooltip';
 import UserRoleMarks from './UserRoleMarks';
 import QFaceImage from './QFaceImage';
-import StickerSearchPanel, { STICKER_SEARCH_PICKER_HEIGHT } from './StickerSearchPanel';
 import { isInsideModalRoot } from './Modal';
-import UserStickerPanel from './UserStickerPanel';
 import { renderReplyRefContent } from './ChatMessageRow';
+
+const STICKER_SEARCH_PICKER_HEIGHT = 'calc(calc(3.125rem + 1.625rem + calc(3 * 3.5rem + 2 * 0.375rem) + 2.375rem) + 1rem)';
+const StickerSearchPanel = lazy(() => import('./StickerSearchPanel'));
+const UserStickerPanel = lazy(() => import('./UserStickerPanel'));
 import type { ChatRoomMeta } from './ChatMessageRow';
 import {
   MAX_CHAT_LENGTH,
@@ -676,11 +680,13 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
   const renderEmojiPickerContent = (gridClassName: string) => {
     if (emojiPickerTab === 'search') {
       return (
-        <StickerSearchPanel
-          disabled={chatMuted || sending}
-          onBack={() => setEmojiPickerTab('faces')}
-          onPick={handleSendSticker}
-        />
+        <Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-netease-muted">加载表情搜索中…</div>}>
+          <StickerSearchPanel
+            disabled={chatMuted || sending}
+            onBack={() => setEmojiPickerTab('faces')}
+            onPick={handleSendSticker}
+          />
+        </Suspense>
       );
     }
 
@@ -688,10 +694,12 @@ const ChatInputBar = forwardRef<ChatInputBarHandle, Props>(function ChatInputBar
       return (
         <>
           {renderEmojiTabBar()}
-          <UserStickerPanel
-            disabled={chatMuted || sending}
-            onSendSticker={handleSendWechatSticker}
-          />
+          <Suspense fallback={<div className="flex h-40 items-center justify-center text-xs text-netease-muted">加载表情面板中…</div>}>
+            <UserStickerPanel
+              disabled={chatMuted || sending}
+              onSendSticker={handleSendWechatSticker}
+            />
+          </Suspense>
         </>
       );
     }

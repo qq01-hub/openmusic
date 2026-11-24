@@ -7,6 +7,7 @@ import { useDeskPetStore } from '../stores/deskPetStore';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 import { useTrackLyrics } from '../hooks/useTrackLyrics';
 import { readLocalPlaybackTime } from '../hooks/useSmoothPlaybackTime';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 import { getActiveLyricLine } from '../lib/lyricLookup';
 import { sampleLyricReaction, type LyricReactionMemory } from '../lib/deskPetLyrics';
 import { getDeskPetReply, getDeskPetThinkingTask } from '../lib/deskPetChat';
@@ -879,7 +880,7 @@ export default function RoomAiDesktopPet({
   useEffect(() => {
     if (!lyricInteractionEnabled || !isPlaying || !currentSong || !lyrics.length) return;
     const timer = window.setInterval(() => {
-      if (document.hidden || isAiThinking || pomodoroEndAt || menuPos
+      if (isHostPageHidden() || isAiThinking || pomodoroEndAt || menuPos
         || bubbleTimerRef.current || Date.now() - lastInteractRef.current < 8000
         || !['idle', 'roam'].includes(stateRef.current)) return;
       const time = readLocalPlaybackTime(currentSong);
@@ -917,16 +918,17 @@ export default function RoomAiDesktopPet({
     if (!deskPetEnabled || !petEnabled) return;
     let tickCount = 0;
     const timer = window.setInterval(() => {
+      if (isHostPageHidden() && !pomodoroEndAt) return;
       tickCount += 1;
       if (isPlaying) {
         setSessionListenSeconds((s) => s + 1);
-        setRhythmEnergy((v) => Math.min(100, v + 0.15));
+        setRhythmEnergy((v) => (v >= 100 ? v : Math.min(100, v + 0.15)));
         if (tickCount % 6 === 0 && (stateRef.current === 'idle' || stateRef.current === 'work')) {
           const notes = ['♪', '🎵', '🎶'];
           spawnParticle('note', notes[tickCount % notes.length], (tickCount % 2 === 0 ? 1 : -1) * 14, -12);
         }
       } else {
-        setRhythmEnergy((v) => Math.max(25, v - 0.08));
+        setRhythmEnergy((v) => (v <= 25 ? v : Math.max(25, v - 0.08)));
       }
       if (pomodoroEndAt) {
         const diff = Math.max(0, pomodoroEndAt - Date.now());
@@ -954,12 +956,20 @@ export default function RoomAiDesktopPet({
   }, [deskPetEnabled, isPlaying, petEnabled, playOriginalAction, pomodoroEndAt, say, spawnParticle]);
 
   // 核心动画循环：走动漫游 (roam) + 物理引擎抛投/弹射/重力反弹 (physics)
+  const needsAnimationLoop = petState === 'physics'
+    || petState === 'roam'
+    || petState === 'surf_progress'
+    || (petState === 'drag' && physicsEnabled);
   useEffect(() => {
-    if (!deskPetEnabled || !petEnabled) return;
+    if (!deskPetEnabled || !petEnabled || !needsAnimationLoop) return;
     let rafId = 0;
     let lastTime = performance.now();
 
     const step = (now: number) => {
+      if (isHostPageHidden()) {
+        rafId = 0;
+        return;
+      }
       const dt = Math.min(0.05, Math.max(0.001, (now - lastTime) / 1000));
       lastTime = now;
       const curState = stateRef.current;
@@ -1021,16 +1031,35 @@ export default function RoomAiDesktopPet({
       rafId = window.requestAnimationFrame(step);
     };
 
-    rafId = window.requestAnimationFrame(step);
+    const syncVisibility = () => {
+      if (isHostPageHidden()) {
+        if (rafId) {
+          window.cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        return;
+      }
+      if (!rafId) {
+        lastTime = performance.now();
+        rafId = window.requestAnimationFrame(step);
+      }
+    };
+
+    if (!isHostPageHidden()) {
+      rafId = window.requestAnimationFrame(step);
+    }
+    const unsubscribeVisibility = subscribeHostVisibility(syncVisibility);
     return () => {
+      unsubscribeVisibility();
       if (rafId) window.cancelAnimationFrame(rafId);
     };
-  }, [clampViewportPos, deskPetEnabled, petEnabled, physicsEnabled, triggerSquash]);
+  }, [clampViewportPos, deskPetEnabled, needsAnimationLoop, petEnabled, physicsEnabled, triggerSquash]);
 
   // AI 自主行为调度器：根据用户个人开关自动在 待机 / 走动漫游 / 玩耍 / 组件互动 / 音乐碎碎念 之间切换
   useEffect(() => {
     if (!deskPetEnabled || !petEnabled) return;
     const timer = window.setInterval(() => {
+      if (isHostPageHidden()) return;
       const cur = stateRef.current;
       if (cur !== 'idle') return;
       if (isAiThinking && workEnabled) return;
@@ -1090,7 +1119,7 @@ export default function RoomAiDesktopPet({
         const fn = actions[Math.floor(Math.random() * actions.length)];
         fn();
       }
-    }, 250);
+    }, 2000);
 
     return () => window.clearInterval(timer);
   }, [

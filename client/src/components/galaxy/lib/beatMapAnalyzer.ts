@@ -9,15 +9,42 @@ import { resolveSignedApiUrl } from '../../../lib/signedApiUrl';
 
 const HOP_SEC = 0.01;
 const MAX_BEATMAP_AUDIO_BYTES = 24 * 1024 * 1024;
+const MAX_ANALYSIS_SAMPLE_RATE = 22_050;
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
 }
 
-function percentile(arr: number[], p: number): number {
+function quickselectFloat32(arr: Float32Array, targetIndex: number): number {
+  let left = 0;
+  let right = arr.length - 1;
+  while (left < right) {
+    const pivot = arr[(left + right) >>> 1];
+    let i = left;
+    let j = right;
+    while (i <= j) {
+      while (arr[i] < pivot) i++;
+      while (arr[j] > pivot) j--;
+      if (i <= j) {
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+        i++;
+        j--;
+      }
+    }
+    if (targetIndex <= j) right = j;
+    else if (targetIndex >= i) left = i;
+    else break;
+  }
+  return arr[targetIndex];
+}
+
+function percentile(arr: ArrayLike<number>, p: number): number {
   if (!arr.length) return 0.001;
-  const copy = [...arr].sort((a, b) => a - b);
-  return copy[Math.max(0, Math.min(copy.length - 1, Math.floor(copy.length * p)))] || 0.001;
+  const copy = Float32Array.from(arr);
+  const idx = Math.max(0, Math.min(copy.length - 1, Math.floor(copy.length * p)));
+  return quickselectFloat32(copy, idx) || 0.001;
 }
 
 function bandAt(arr: Float32Array, f: number, nFrames: number): number {
@@ -37,7 +64,7 @@ function yieldToPaint(): Promise<void> {
   });
 }
 
-async function renderBand(
+async function renderBandEnergy(
   buffer: AudioBuffer,
   hpFreq: number | null,
   lpFreq: number | null,
@@ -45,8 +72,9 @@ async function renderBand(
   const TmpCtx = window.OfflineAudioContext || (window as unknown as { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
   if (!TmpCtx) throw new Error('OfflineAudioContext unavailable');
 
-  const sr = buffer.sampleRate;
-  const off = new TmpCtx(1, buffer.length, sr);
+  const sr = Math.min(buffer.sampleRate, MAX_ANALYSIS_SAMPLE_RATE);
+  const targetLength = Math.max(1, Math.ceil(buffer.duration * sr));
+  const off = new TmpCtx(1, targetLength, sr);
   const src = off.createBufferSource();
   src.buffer = buffer;
   let node: AudioNode = src;
@@ -70,7 +98,8 @@ async function renderBand(
   node.connect(off.destination);
   src.start(0);
   const rendered = await off.startRendering();
-  return rendered.getChannelData(0);
+  const winSize = Math.max(1, Math.floor(sr * HOP_SEC));
+  return makeFrameEnergy(rendered.getChannelData(0), winSize);
 }
 
 function makeFrameEnergy(pcm: Float32Array, winSize: number): Float32Array {
@@ -137,7 +166,9 @@ export async function analyzeAudioBeatMap(
 
   if (signal?.aborted) return null;
   progress?.('下载音频…');
-  const signedUrl = (await resolveSignedApiUrl(audioUrl)) || audioUrl;
+  const signedUrl = audioUrl.startsWith('blob:')
+    ? audioUrl
+    : ((await resolveSignedApiUrl(audioUrl)) || audioUrl);
   const resp = await fetch(signedUrl, { signal, credentials: 'same-origin' });
   if (!resp.ok) return null;
   const declaredBytes = Number(resp.headers.get('content-length') || 0);
@@ -169,38 +200,32 @@ export async function analyzeAudioBeatMap(
   const musicTempoTask = analyzeMusicTempoInWorker(buffer, signal);
 
   progress?.('分离频段…');
-  const lowPcm = await renderBand(buffer, 38, 155);
+  const energy = await renderBandEnergy(buffer, 38, 155);
   if (signal?.aborted) return null;
   await yieldToPaint();
-  const bodyPcm = await renderBand(buffer, 130, 420);
+  const bodyEnergy = await renderBandEnergy(buffer, 130, 420);
   if (signal?.aborted) return null;
   await yieldToPaint();
-  const vocalPcm = await renderBand(buffer, 420, 2600);
+  const vocalEnergy = await renderBandEnergy(buffer, 420, 2600);
   if (signal?.aborted) return null;
   await yieldToPaint();
-  const snapPcm = await renderBand(buffer, 1800, 9000);
+  const snapEnergy = await renderBandEnergy(buffer, 1800, 9000);
   if (signal?.aborted) return null;
 
-  const sr = buffer.sampleRate;
-  const winSize = Math.floor(sr * HOP_SEC);
   progress?.('提取鼓点能量…');
-  const energy = makeFrameEnergy(lowPcm, winSize);
-  const bodyEnergy = makeFrameEnergy(bodyPcm, winSize);
-  const vocalEnergy = makeFrameEnergy(vocalPcm, winSize);
-  const snapEnergy = makeFrameEnergy(snapPcm, winSize);
   const nFrames = Math.min(energy.length, bodyEnergy.length, vocalEnergy.length, snapEnergy.length);
 
-  const lowRef = Math.max(0.0008, percentile([...energy], 0.86));
-  const bodyRef = Math.max(0.0008, percentile([...bodyEnergy], 0.86));
-  const vocalRef = Math.max(0.0008, percentile([...vocalEnergy], 0.86));
-  const snapRef = Math.max(0.0008, percentile([...snapEnergy], 0.86));
+  const lowRef = Math.max(0.0008, percentile(energy, 0.86));
+  const bodyRef = Math.max(0.0008, percentile(bodyEnergy, 0.86));
+  const vocalRef = Math.max(0.0008, percentile(vocalEnergy, 0.86));
+  const snapRef = Math.max(0.0008, percentile(snapEnergy, 0.86));
 
   const onset = makeOnset(energy);
   const bodyOnset = makeOnset(bodyEnergy);
   const vocalOnset = makeOnset(vocalEnergy);
-  const lowOnsetRef = Math.max(0.00025, percentile([...onset], 0.88));
-  const bodyOnsetRef = Math.max(0.00025, percentile([...bodyOnset], 0.88));
-  const vocalOnsetRef = Math.max(0.00025, percentile([...vocalOnset], 0.88));
+  const lowOnsetRef = Math.max(0.00025, percentile(onset, 0.88));
+  const bodyOnsetRef = Math.max(0.00025, percentile(bodyOnset, 0.88));
+  const vocalOnsetRef = Math.max(0.00025, percentile(vocalOnset, 0.88));
 
   progress?.('检测鼓点…');
   const winN = 50;

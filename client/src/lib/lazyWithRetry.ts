@@ -2,6 +2,29 @@ import { lazy, type ComponentType } from 'react';
 
 const RELOAD_FLAG_PREFIX = 'om-chunk-reload:';
 
+function readReloadFlag(flagKey: string): boolean {
+  try {
+    return Boolean(sessionStorage.getItem(flagKey));
+  } catch {
+    return false;
+  }
+}
+
+function writeReloadFlag(flagKey: string): boolean {
+  try {
+    sessionStorage.setItem(flagKey, '1');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearReloadFlag(flagKey: string): void {
+  try {
+    sessionStorage.removeItem(flagKey);
+  } catch {}
+}
+
 /**
  * 包一层 React.lazy：chunk 加载失败（常见于刚发版、旧页面还引用着已被替换掉的
  * 带 hash 文件名）时，Suspense 本身接不住 rejected promise，会一直卡在 fallback
@@ -18,11 +41,10 @@ export function lazyWithRetry<T extends ComponentType<any>>(
       const mod = await factory();
       // 加载成功后清掉标记：不然同一个 tab 里这个 chunk 之后再出现一次
       // 真正的临时性加载失败（网络抖动、下一次发版），就不会再自动刷新了。
-      sessionStorage.removeItem(flagKey);
+      clearReloadFlag(flagKey);
       return mod;
     } catch (err) {
-      if (!sessionStorage.getItem(flagKey)) {
-        sessionStorage.setItem(flagKey, '1');
+      if (!readReloadFlag(flagKey) && writeReloadFlag(flagKey)) {
         window.location.reload();
         // 刷新是异步的，这里返回一个永远不 resolve 的 promise 撑住 Suspense，
         // 避免刷新完成前还渲染出错误边界或过期界面。

@@ -1,7 +1,7 @@
 
-let chromeInitDone = false;
+let activeRoomChromeCleanup: (() => void) | null = null;
 
-function initMineradioControlGlassSurface() {
+function initMineradioControlGlassSurface(): () => void {
   const normalizeOffset = (value: number) => String(-Math.round(value));
 
   const supportsControlGlassSvgFilter = () => {
@@ -160,42 +160,62 @@ function initMineradioControlGlassSurface() {
   const searchTabs = document.getElementById('search-mode-tabs');
   const searchResults = document.getElementById('search-results');
 
+  let resizeObserver: ResizeObserver | null = null;
   if (window.ResizeObserver && (bottomBar || searchBox || searchTabs || searchResults)) {
-    const observer = new ResizeObserver(() => {
+    resizeObserver = new ResizeObserver(() => {
       refreshAfterResizeSettles();
     });
-    if (bottomBar) observer.observe(bottomBar);
-    if (searchBox) observer.observe(searchBox);
-    if (searchTabs) observer.observe(searchTabs);
-    if (searchResults) observer.observe(searchResults);
+    if (bottomBar) resizeObserver.observe(bottomBar);
+    if (searchBox) resizeObserver.observe(searchBox);
+    if (searchTabs) resizeObserver.observe(searchTabs);
+    if (searchResults) resizeObserver.observe(searchResults);
   }
 
+  let mutationObserver: MutationObserver | null = null;
   if (window.MutationObserver && (searchTabs || searchResults)) {
-    const observer = new MutationObserver(() => {
+    mutationObserver = new MutationObserver(() => {
       scheduleSearchPillRefresh();
     });
-    if (searchTabs) observer.observe(searchTabs, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-    if (searchResults) observer.observe(searchResults, { childList: true, subtree: true });
+    if (searchTabs) mutationObserver.observe(searchTabs, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+    if (searchResults) mutationObserver.observe(searchResults, { childList: true, subtree: true });
   }
 
-  window.addEventListener('resize', () => {
+  const handleResize = () => {
     refreshAfterResizeSettles();
-  });
+  };
+  window.addEventListener('resize', handleResize);
 
-  [0, 80, 240, 800, 1600].forEach((delay) => {
-    window.setTimeout(refreshAll, delay);
-  });
+  const initialTimers = [0, 80, 240, 800, 1600].map((delay) => window.setTimeout(refreshAll, delay));
+
+  return () => {
+    resizeObserver?.disconnect();
+    mutationObserver?.disconnect();
+    window.removeEventListener('resize', handleResize);
+    if (resizeRefreshTimer !== undefined) {
+      window.clearTimeout(resizeRefreshTimer);
+      resizeRefreshTimer = undefined;
+    }
+    if (searchPillRefreshFrame) {
+      cancelAnimationFrame(searchPillRefreshFrame);
+      searchPillRefreshFrame = 0;
+    }
+    initialTimers.forEach((timerId) => window.clearTimeout(timerId));
+  };
 }
 
-/** 房间页专用：底栏玻璃位移图（仅初始化一次） */
-export function ensureRoomChromeInit() {
-  if (chromeInitDone) return;
-  chromeInitDone = true;
-  initMineradioControlGlassSurface();
+/** 房间页专用：挂载底栏玻璃位移图并返回卸载清理函数 */
+export function ensureRoomChromeInit(): () => void {
+  activeRoomChromeCleanup?.();
+  const cleanup = initMineradioControlGlassSurface();
+  activeRoomChromeCleanup = cleanup;
+  return () => {
+    if (activeRoomChromeCleanup === cleanup) {
+      activeRoomChromeCleanup = null;
+    }
+    cleanup();
+  };
 }
 
 /** TV 模式保留独立初始化入口 */
 export function ensureTvChromeInit() {
-  if (chromeInitDone) return;
-  chromeInitDone = true;
 }

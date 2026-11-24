@@ -7,6 +7,7 @@ const MEDIA_SIGN_WINDOW_SEC = Math.max(
   Number(process.env.API_MEDIA_SIGN_WINDOW_SEC) || 20 * 60,
 );
 const NONCE_TTL_MS = Math.max(SIGN_WINDOW_SEC, MEDIA_SIGN_WINDOW_SEC) * 1000;
+const MAX_USED_NONCES = 200_000;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 const API_SIGN_REQUIRED = process.env.API_SIGN_REQUIRED !== undefined
   ? process.env.API_SIGN_REQUIRED !== '0' && process.env.API_SIGN_REQUIRED !== 'false'
@@ -139,11 +140,25 @@ function shouldConsumeNonce(req) {
   return !MEDIA_PATHS.has(req.path || '');
 }
 
-function consumeNonce(userId, nonce) {
+function consumeNonce(userId, nonce, ttlMs = NONCE_TTL_MS) {
   scheduleNonceCleanup();
   const key = `${userId}:${nonce}`;
-  if (usedNonces.has(key)) return false;
-  usedNonces.set(key, Date.now() + NONCE_TTL_MS);
+  const now = Date.now();
+  const existing = usedNonces.get(key);
+  if (existing !== undefined && existing > now) return false;
+  if (existing !== undefined) usedNonces.delete(key);
+  if (usedNonces.size >= MAX_USED_NONCES) {
+    for (const [oldKey, expiresAt] of usedNonces) {
+      if (expiresAt <= now) usedNonces.delete(oldKey);
+      if (usedNonces.size < MAX_USED_NONCES) break;
+    }
+    while (usedNonces.size >= MAX_USED_NONCES) {
+      const oldestKey = usedNonces.keys().next().value;
+      if (oldestKey === undefined) break;
+      usedNonces.delete(oldestKey);
+    }
+  }
+  usedNonces.set(key, now + Math.max(1000, ttlMs));
   return true;
 }
 
@@ -203,7 +218,8 @@ export function verifyApiSign(req, signKey, userId) {
     return { ok: false, error: API_ACCESS_DENIED };
   }
 
-  if (shouldConsumeNonce(req) && !consumeNonce(userId, nonce)) {
+  const nonceTtlMs = (getSignWindowSec(req) + 60) * 1000;
+  if (shouldConsumeNonce(req) && !consumeNonce(userId, nonce, nonceTtlMs)) {
     return { ok: false, error: API_ACCESS_DENIED };
   }
 

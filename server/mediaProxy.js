@@ -50,6 +50,85 @@ let sharedAudioCacheSeq = 0;
 const MAX_BUFFERED_MEDIA_BYTES = 8 * 1024 * 1024;
 /** 部分网易云封面 CDN 即使请求 size=96 仍会返回原图，允许图片使用更高但有限的上限。 */
 const MAX_BUFFERED_IMAGE_BYTES = 32 * 1024 * 1024;
+const MAX_CACHED_IMAGE_ENTRY_BYTES = 2 * 1024 * 1024;
+const MAX_IMAGE_CACHE_TOTAL_BYTES = 24 * 1024 * 1024;
+const MAX_IMAGE_CACHE_ENTRIES = 192;
+const MAX_IMAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const proxiedImageCache = new Map();
+const proxiedImageInflight = new Map();
+let proxiedImageTotalBytes = 0;
+
+function buildProxiedImageCacheKey(fetchUrl, options, referer = '') {
+  const extraHosts = Array.isArray(options.extraAllowedHosts) && options.extraAllowedHosts.length
+    ? [...options.extraAllowedHosts].sort().join(',')
+    : '';
+  const trustedInitialUrl = options.trustedInitialUrl ? String(options.trustedInitialUrl) : '';
+  return `${fetchUrl}\0${options.requireAllowlist === false ? '0' : '1'}\0${extraHosts}\0${trustedInitialUrl}\0${options.imageOnly ? '1' : '0'}\0${referer}`;
+}
+
+function readProxiedImageCache(key) {
+  const cached = proxiedImageCache.get(key);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    proxiedImageCache.delete(key);
+    proxiedImageTotalBytes = Math.max(0, proxiedImageTotalBytes - cached.buffer.length);
+    return null;
+  }
+  proxiedImageCache.delete(key);
+  proxiedImageCache.set(key, cached);
+  return cached;
+}
+
+function writeProxiedImageCache(key, entry) {
+  if (!entry?.buffer || entry.buffer.length === 0 || entry.buffer.length > MAX_CACHED_IMAGE_ENTRY_BYTES) return;
+  const existing = proxiedImageCache.get(key);
+  if (existing) {
+    proxiedImageCache.delete(key);
+    proxiedImageTotalBytes = Math.max(0, proxiedImageTotalBytes - existing.buffer.length);
+  }
+  const now = Date.now();
+  for (const [entryKey, item] of proxiedImageCache) {
+    if (item.expiresAt <= now) {
+      proxiedImageCache.delete(entryKey);
+      proxiedImageTotalBytes = Math.max(0, proxiedImageTotalBytes - item.buffer.length);
+    }
+  }
+  while (
+    proxiedImageCache.size >= MAX_IMAGE_CACHE_ENTRIES
+    || (proxiedImageTotalBytes + entry.buffer.length > MAX_IMAGE_CACHE_TOTAL_BYTES && proxiedImageCache.size > 0)
+  ) {
+    const oldestKey = proxiedImageCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    const oldest = proxiedImageCache.get(oldestKey);
+    proxiedImageCache.delete(oldestKey);
+    if (oldest) proxiedImageTotalBytes = Math.max(0, proxiedImageTotalBytes - oldest.buffer.length);
+  }
+  proxiedImageCache.set(key, entry);
+  proxiedImageTotalBytes += entry.buffer.length;
+}
+
+function sendCachedProxiedImage(res, cached) {
+  if (res.writableEnded || res.destroyed) return false;
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Content-Security-Policy', 'sandbox');
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Surrogate-Control', 'no-store');
+  res.set('X-OpenMusic-Proxy', '1');
+  if (cached.contentType) res.set('Content-Type', cached.contentType);
+  res.set('Cache-Control', `private, max-age=${cached.maxAge}, stale-while-revalidate=86400, no-transform`);
+  res.removeHeader?.('Pragma');
+  res.status(200).send(cached.buffer);
+  return true;
+}
+
+function openFileAsync(filePath, flags) {
+  return new Promise((resolve, reject) => {
+    fs.open(filePath, flags, (err, fd) => {
+      if (err) reject(err);
+      else resolve(fd);
+    });
+  });
+}
 
 function hostnameOf(rawUrl) {
   try {
@@ -592,7 +671,7 @@ function closeSharedAudioFd(entry) {
   if (entry.fd === null || entry.fd === undefined) return;
   const fd = entry.fd;
   entry.fd = null;
-  try { fs.closeSync(fd); } catch { /* ignore */ }
+  try { fs.close(fd, () => {}); } catch { /* ignore */ }
 }
 
 function unlinkSharedAudioFile(filePath) {
@@ -714,7 +793,8 @@ function pumpSharedAudioStream(entry, response) {
         }
         notifySharedAudioWaiters(entry);
       }
-      if (!entry.evicted && !entry.failed && entry.downloadedBytes > 0) {
+      const truncated = entry.totalLength > 0 && entry.downloadedBytes < entry.totalLength;
+      if (!entry.evicted && !entry.failed && entry.downloadedBytes > 0 && !truncated) {
         entry.totalLength = entry.downloadedBytes;
         entry.complete = true;
         // 整曲落盘完成后立即清空内存滑动窗口，实现常驻 0 内存占用
@@ -725,6 +805,9 @@ function pumpSharedAudioStream(entry, response) {
         }
       } else {
         entry.failed = true;
+        if (truncated && !entry.error) {
+          entry.error = new Error('共享音频上游流被截断');
+        }
         removeSharedAudioEntry(entry.key);
       }
     } catch (err) {
@@ -818,11 +901,15 @@ async function getOrCreateSharedAudioEntry(rawUrl, fetchWithTimeout, options = {
       const digest = createHash('sha1').update(key).digest('hex');
       filePath = path.join(SHARED_AUDIO_CACHE_DIR, `${digest}-${++sharedAudioCacheSeq}.bin`);
       try {
-        fd = fs.openSync(filePath, 'w+');
+        fd = await openFileAsync(filePath, 'w+');
       } catch {
         filePath = '';
         fd = null;
       }
+    }
+    if (fd === null) {
+      resolveInflight(null);
+      return { entry: null, fallbackResponse: response };
     }
 
     const entry = {
@@ -1087,6 +1174,37 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
   if (range) headers.Range = range;
   if (range && options.ifRange) headers['If-Range'] = String(options.ifRange);
 
+  const canCacheImage = method === 'GET' && !range && !options.headers && isLikelyImageMediaUrl(fetchUrl, options);
+  const imageCacheKey = canCacheImage ? buildProxiedImageCacheKey(fetchUrl, options, headers.Referer || '') : '';
+  if (canCacheImage) {
+    const cachedImage = readProxiedImageCache(imageCacheKey);
+    if (cachedImage) return sendCachedProxiedImage(res, cachedImage);
+    const pendingImage = proxiedImageInflight.get(imageCacheKey);
+    if (pendingImage) {
+      const resolved = await pendingImage;
+      if (options.signal.aborted) return false;
+      if (resolved) return sendCachedProxiedImage(res, resolved);
+    }
+  }
+
+  let resolveImageInflight = null;
+  let ownsImageInflight = false;
+  if (canCacheImage && !proxiedImageInflight.has(imageCacheKey)) {
+    ownsImageInflight = true;
+    const inflightPromise = new Promise((resolve) => {
+      resolveImageInflight = resolve;
+    });
+    proxiedImageInflight.set(imageCacheKey, inflightPromise);
+  }
+  const settleImageInflight = (entry = null) => {
+    if (!ownsImageInflight) return;
+    ownsImageInflight = false;
+    proxiedImageInflight.delete(imageCacheKey);
+    resolveImageInflight?.(entry);
+    resolveImageInflight = null;
+  };
+
+  try {
   let prefetchedFallbackResponse = null;
   if (!isLikelyImageMediaUrl(fetchUrl, options)) {
     try {
@@ -1209,6 +1327,7 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
 
   if (method === 'HEAD') {
     applyStreamingMediaHeaders(response, res, contentType);
+    await cancelMediaBody(response);
     res.end();
     return true;
   }
@@ -1233,6 +1352,16 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
         // 仅复用浏览器内的封面，避免翻页/切歌重复拉图占用 2GB 服务器带宽
         res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
         res.removeHeader('Pragma');
+        if (canCacheImage) {
+          const cachedEntry = {
+            buffer,
+            contentType,
+            maxAge,
+            expiresAt: Date.now() + Math.min(MAX_IMAGE_CACHE_TTL_MS, maxAge * 1000),
+          };
+          writeProxiedImageCache(imageCacheKey, cachedEntry);
+          settleImageInflight(cachedEntry);
+        }
       }
       res.status(200).send(buffer);
       return true;
@@ -1277,6 +1406,9 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
     return false;
   } finally {
     res.off('close', onClose);
+  }
+  } finally {
+    settleImageInflight(null);
   }
 }
 

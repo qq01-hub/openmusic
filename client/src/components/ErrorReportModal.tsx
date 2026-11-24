@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import Modal from './Modal';
 import { fetchWithTimeout } from '../api/http';
@@ -30,11 +30,33 @@ export default function ErrorReportModal({ open, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [okHint, setOkHint] = useState('');
+  const closeTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
+
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      clearCloseTimer();
+    };
+  }, [clearCloseTimer]);
+
+  useEffect(() => {
+    if (!open) clearCloseTimer();
+  }, [clearCloseTimer, open]);
 
   const typeConfig = REPORT_TYPES.find((item) => item.value === reportType) ?? REPORT_TYPES[0];
 
   const close = () => {
     if (busy) return;
+    clearCloseTimer();
     setError('');
     setOkHint('');
     setReportType('error');
@@ -44,6 +66,7 @@ export default function ErrorReportModal({ open, onClose }: Props) {
   const submit = async () => {
     const text = description.trim();
     if (!text || busy) return;
+    clearCloseTimer();
     setBusy(true);
     setError('');
     setOkHint('');
@@ -58,6 +81,7 @@ export default function ErrorReportModal({ open, onClose }: Props) {
       if (!res.ok) {
         throw new Error((data as { error?: string }).error || `提交失败（${res.status}）`);
       }
+      if (!mountedRef.current) return;
       setOkHint('已提交，感谢反馈');
       setDescription('');
       window.dispatchEvent(
@@ -68,15 +92,18 @@ export default function ErrorReportModal({ open, onClose }: Props) {
           },
         }),
       );
-      window.setTimeout(() => {
+      closeTimerRef.current = window.setTimeout(() => {
+        closeTimerRef.current = null;
+        if (!mountedRef.current) return;
         setOkHint('');
         setReportType('error');
         onClose();
       }, 800);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : '提交失败');
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   };
 

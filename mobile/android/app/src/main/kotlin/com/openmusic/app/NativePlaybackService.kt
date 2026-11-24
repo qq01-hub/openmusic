@@ -21,6 +21,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.LruCache
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -33,6 +34,7 @@ import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.URL
 import java.util.concurrent.Executors
+import kotlin.math.abs
 import kotlin.math.max
 
 object NativePlaybackBridge {
@@ -47,6 +49,39 @@ object NativePlaybackBridge {
 }
 
 class NativePlaybackService : Service() {
+    private data class MetadataSnapshot(
+        val title: String,
+        val artist: String,
+        val lyric: String,
+        val durationMs: Long,
+        val cover: Bitmap?,
+    )
+
+    private data class NotificationSnapshot(
+        val title: String,
+        val artist: String,
+        val lyric: String,
+        val playing: Boolean,
+        val canPause: Boolean,
+        val canSkip: Boolean,
+        val canChangeMode: Boolean,
+        val playMode: String,
+        val playModeLabel: String,
+        val favorited: Boolean,
+        val cover: Bitmap?,
+    )
+
+    private data class PlaybackStateSnapshot(
+        val playing: Boolean,
+        val actions: Long,
+        val canChangeMode: Boolean,
+        val playMode: String,
+        val playModeLabel: String,
+        val favorited: Boolean,
+        val positionMs: Long,
+        val publishedAtMs: Long,
+    )
+
     private lateinit var mediaSession: MediaSession
     private var title = "OpenMusic"
     private var artist = ""
@@ -67,6 +102,11 @@ class NativePlaybackService : Service() {
     private var artworkRequestId = 0L
     private var artworkLoadingUrl = ""
     private var lastArtworkAttemptAtMs = 0L
+    private val artworkCache = LruCache<String, Bitmap>(MAX_ARTWORK_CACHE_ENTRIES)
+    private var foregroundStarted = false
+    private var lastMetadata: MetadataSnapshot? = null
+    private var lastNotification: NotificationSnapshot? = null
+    private var lastPlaybackState: PlaybackStateSnapshot? = null
     private var pendingPlaying: Boolean? = null
     private var pendingPlayingUntilMs = 0L
     private var pendingPositionMs: Long? = null
@@ -89,12 +129,8 @@ class NativePlaybackService : Service() {
         lyricsOverlayControlsView?.visibility = View.GONE
     }
     private val artworkExecutor = Executors.newSingleThreadExecutor()
-    private val progressTicker = object : Runnable {
-        override fun run() {
-            if (!playing) return
-            publish()
-        }
-    }
+    @Volatile
+    private var isDestroyed = false
 
     override fun onCreate() {
         super.onCreate()
@@ -114,7 +150,7 @@ class NativePlaybackService : Service() {
                 override fun onSeekTo(pos: Long) {
                     if (!canSeek) return
                     setPendingPosition(pos.coerceAtLeast(0L))
-                    publish()
+                    publish(forcePosition = true)
                     NativePlaybackBridge.dispatch("seek", pos.coerceAtLeast(0L))
                 }
             })
@@ -126,6 +162,10 @@ class NativePlaybackService : Service() {
         when (intent?.action) {
             ACTION_UPDATE -> update(intent.extras?.keySet()?.associateWith { intent.extras?.get(it) } ?: emptyMap())
             ACTION_CLEAR -> {
+                foregroundStarted = false
+                lastMetadata = null
+                lastNotification = null
+                lastPlaybackState = null
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) stopForeground(STOP_FOREGROUND_REMOVE)
                 else {
                     @Suppress("DEPRECATION")
@@ -147,9 +187,11 @@ class NativePlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
-        mainHandler.removeCallbacks(progressTicker)
+        isDestroyed = true
+        mainHandler.removeCallbacksAndMessages(null)
         removeLyricsOverlay()
         artworkExecutor.shutdownNow()
+        artworkCache.evictAll()
         mediaSession.release()
         super.onDestroy()
     }
@@ -194,40 +236,98 @@ class NativePlaybackService : Service() {
         publish()
     }
 
-    private fun publish() {
+    private fun publish(forcePosition: Boolean = false) {
+        val now = SystemClock.elapsedRealtime()
+        val currentPos = currentPositionMs()
         val actions = (if (canPause) PlaybackState.ACTION_PLAY or PlaybackState.ACTION_PAUSE else 0L) or
             (if (canSkip) PlaybackState.ACTION_SKIP_TO_NEXT else 0L) or
             (if (canSeek) PlaybackState.ACTION_SEEK_TO else 0L)
-        val playbackState = PlaybackState.Builder()
-            .setActions(actions)
-            .setState(
-                if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
-                currentPositionMs(),
-                if (playing) 1f else 0f,
+        val prevPlayback = lastPlaybackState
+        val playbackDrift = if (prevPlayback == null) {
+            Long.MAX_VALUE
+        } else {
+            val expected = if (prevPlayback.playing) {
+                prevPlayback.positionMs + (now - prevPlayback.publishedAtMs).coerceAtLeast(0L)
+            } else {
+                prevPlayback.positionMs
+            }
+            abs(currentPos - expected)
+        }
+        val playbackChanged = forcePosition || prevPlayback == null ||
+            prevPlayback.playing != playing ||
+            prevPlayback.actions != actions ||
+            prevPlayback.canChangeMode != canChangeMode ||
+            prevPlayback.playMode != playMode ||
+            prevPlayback.playModeLabel != playModeLabel ||
+            prevPlayback.favorited != favorited ||
+            playbackDrift >= PLAYBACK_STATE_DRIFT_MS
+        if (playbackChanged) {
+            val playbackState = PlaybackState.Builder()
+                .setActions(actions)
+                .setState(
+                    if (playing) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED,
+                    currentPos,
+                    if (playing) 1f else 0f,
+                )
+            playbackState.addCustomAction(ACTION_LYRICS, "歌词", R.drawable.ic_notify_lyrics)
+            if (canChangeMode) {
+                playbackState.addCustomAction(ACTION_TOGGLE_MODE, playModeLabel, playModeIconRes())
+            }
+            playbackState.addCustomAction(
+                ACTION_TOGGLE_FAVORITE,
+                if (favorited) "取消收藏" else "收藏",
+                favoriteIconRes(),
             )
-        playbackState.addCustomAction(ACTION_LYRICS, "歌词", R.drawable.ic_notify_lyrics)
-        if (canChangeMode) {
-            playbackState.addCustomAction(ACTION_TOGGLE_MODE, playModeLabel, playModeIconRes())
+            mediaSession.setPlaybackState(playbackState.build())
+            lastPlaybackState = PlaybackStateSnapshot(
+                playing = playing,
+                actions = actions,
+                canChangeMode = canChangeMode,
+                playMode = playMode,
+                playModeLabel = playModeLabel,
+                favorited = favorited,
+                positionMs = currentPos,
+                publishedAtMs = now,
+            )
         }
-        playbackState.addCustomAction(
-            ACTION_TOGGLE_FAVORITE,
-            if (favorited) "取消收藏" else "收藏",
-            favoriteIconRes(),
+        val nextMetadata = MetadataSnapshot(
+            title = title,
+            artist = artist,
+            lyric = lyric,
+            durationMs = durationMs,
+            cover = cover,
         )
-        mediaSession.setPlaybackState(playbackState.build())
-        val metadata = MediaMetadata.Builder()
-            .putString(MediaMetadata.METADATA_KEY_TITLE, title)
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
-            .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, lyric.ifBlank { artist })
-            .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
-        cover?.let {
-            metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
-            metadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it)
+        if (nextMetadata != lastMetadata) {
+            val metadata = MediaMetadata.Builder()
+                .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                .putString(MediaMetadata.METADATA_KEY_ARTIST, artist)
+                .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, lyric.ifBlank { artist })
+                .putLong(MediaMetadata.METADATA_KEY_DURATION, durationMs)
+            cover?.let {
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
+                metadata.putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it)
+            }
+            mediaSession.setMetadata(metadata.build())
+            lastMetadata = nextMetadata
         }
-        mediaSession.setMetadata(metadata.build())
-        startForeground(NOTIFICATION_ID, buildNotification())
-        mainHandler.removeCallbacks(progressTicker)
-        if (playing) mainHandler.postDelayed(progressTicker, PROGRESS_UPDATE_MS)
+        val nextNotification = NotificationSnapshot(
+            title = title,
+            artist = artist,
+            lyric = lyric,
+            playing = playing,
+            canPause = canPause,
+            canSkip = canSkip,
+            canChangeMode = canChangeMode,
+            playMode = playMode,
+            playModeLabel = playModeLabel,
+            favorited = favorited,
+            cover = cover,
+        )
+        if (!foregroundStarted || nextNotification != lastNotification) {
+            startForeground(NOTIFICATION_ID, buildNotification())
+            foregroundStarted = true
+            lastNotification = nextNotification
+        }
     }
 
     private fun loadArtwork(rawUrl: String) {
@@ -236,11 +336,20 @@ class NativePlaybackService : Service() {
             artworkLoadingUrl = ""
             return
         }
+        val cached = artworkCache.get(rawUrl)
+        if (cached != null && !cached.isRecycled) {
+            artworkLoadingUrl = ""
+            cover = cached
+            return
+        }
         artworkLoadingUrl = rawUrl
         lastArtworkAttemptAtMs = SystemClock.elapsedRealtime()
         artworkExecutor.execute {
-            val bitmap = downloadArtwork(rawUrl)
+            if (isDestroyed) return@execute
+            val bitmap = runCatching { downloadArtwork(rawUrl) }.getOrNull()
             mainHandler.post {
+                if (isDestroyed) return@post
+                if (bitmap != null) artworkCache.put(rawUrl, bitmap)
                 if (requestId != artworkRequestId) return@post
                 if (artworkLoadingUrl == rawUrl) artworkLoadingUrl = ""
                 if (bitmap == null) return@post
@@ -272,14 +381,16 @@ class NativePlaybackService : Service() {
                         val contentLength = connection.contentLengthLong
                         if (contentLength > MAX_ARTWORK_BYTES) return null
                         val data = readArtworkBytes(connection.inputStream) ?: return null
-                        return BitmapFactory.decodeByteArray(data, 0, data.size)?.let(::scaleArtwork)
+                        return decodeSampledArtwork(data)
                     }
                     in 300..399 -> {
                         val location = connection.getHeaderField("Location") ?: return null
-                        url = URL(url, location)
+                        url = runCatching { URL(url, location) }.getOrNull() ?: return null
                     }
                     else -> return null
                 }
+            } catch (_: Exception) {
+                return null
             } finally {
                 connection.disconnect()
             }
@@ -312,16 +423,30 @@ class NativePlaybackService : Service() {
         }
     }
 
+    private fun decodeSampledArtwork(data: ByteArray): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (max(bounds.outWidth / sampleSize, bounds.outHeight / sampleSize) > MAX_ARTWORK_EDGE * 2) {
+            sampleSize *= 2
+        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        return BitmapFactory.decodeByteArray(data, 0, data.size, options)?.let(::scaleArtwork)
+    }
+
     private fun scaleArtwork(bitmap: Bitmap): Bitmap {
         val longest = max(bitmap.width, bitmap.height)
         if (longest <= MAX_ARTWORK_EDGE) return bitmap
         val scale = MAX_ARTWORK_EDGE.toFloat() / longest
-        return Bitmap.createScaledBitmap(
+        val scaled = Bitmap.createScaledBitmap(
             bitmap,
             max(1, (bitmap.width * scale).toInt()),
             max(1, (bitmap.height * scale).toInt()),
             true,
         )
+        if (scaled !== bitmap) bitmap.recycle()
+        return scaled
     }
 
     private fun buildNotification(): Notification {
@@ -390,7 +515,7 @@ class NativePlaybackService : Service() {
                 playing = true
                 pendingPlaying = true
                 pendingPlayingUntilMs = now + LOCAL_ACTION_CONFIRM_TIMEOUT_MS
-                publish()
+                publish(forcePosition = true)
                 NativePlaybackBridge.dispatch("play")
             }
             "pause" -> {
@@ -400,7 +525,7 @@ class NativePlaybackService : Service() {
                 playing = false
                 pendingPlaying = false
                 pendingPlayingUntilMs = now + LOCAL_ACTION_CONFIRM_TIMEOUT_MS
-                publish()
+                publish(forcePosition = true)
                 NativePlaybackBridge.dispatch("pause")
             }
             "next" -> dispatchIfAllowed("next", canSkip)
@@ -546,7 +671,11 @@ class NativePlaybackService : Service() {
     }
 
     private fun updateLyricsOverlayText() {
-        lyricsOverlayTextView?.text = lyricsOverlayText()
+        val view = lyricsOverlayTextView ?: return
+        val nextText = lyricsOverlayText()
+        if (view.text?.toString() != nextText) {
+            view.text = nextText
+        }
     }
 
     private fun updateLyricsOverlayLockState() {
@@ -627,6 +756,7 @@ class NativePlaybackService : Service() {
 
     private fun secondsToMillis(value: Any?): Long {
         val seconds = (value as? Number)?.toDouble() ?: value?.toString()?.toDoubleOrNull() ?: 0.0
+        if (!seconds.isFinite() || seconds <= 0.0) return 0L
         return max(0L, (seconds * 1000).toLong())
     }
 
@@ -679,10 +809,11 @@ class NativePlaybackService : Service() {
         private const val ACTION_TOGGLE_FAVORITE = "com.openmusic.app.TOGGLE_FAVORITE"
         private const val MAX_ARTWORK_BYTES = 5L * 1024 * 1024
         private const val MAX_ARTWORK_EDGE = 512
+        private const val MAX_ARTWORK_CACHE_ENTRIES = 12
         private const val ARTWORK_CONNECT_TIMEOUT_MS = 5_000
         private const val ARTWORK_READ_TIMEOUT_MS = 8_000
         private const val ARTWORK_RETRY_INTERVAL_MS = 5_000L
-        private const val PROGRESS_UPDATE_MS = 1_000L
+        private const val PLAYBACK_STATE_DRIFT_MS = 2_000L
         private const val LOCAL_ACTION_CONFIRM_TIMEOUT_MS = 2_500L
         private const val POSITION_ACK_TOLERANCE_MS = 1_500L
         private const val CONTROL_DEBOUNCE_MS = 500L
@@ -698,16 +829,22 @@ class NativePlaybackService : Service() {
                     is Long -> intent.putExtra(key, value)
                 }
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
-            else context.startService(intent)
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+                else context.startService(intent)
+            }
         }
 
         fun clear(context: Context) {
-            context.startService(Intent(context, NativePlaybackService::class.java).setAction(ACTION_CLEAR))
+            runCatching {
+                context.startService(Intent(context, NativePlaybackService::class.java).setAction(ACTION_CLEAR))
+            }
         }
 
         fun showLyricsOverlay(context: Context) {
-            context.startService(Intent(context, NativePlaybackService::class.java).setAction(ACTION_SHOW_LYRICS_OVERLAY))
+            runCatching {
+                context.startService(Intent(context, NativePlaybackService::class.java).setAction(ACTION_SHOW_LYRICS_OVERLAY))
+            }
         }
     }
 }

@@ -4,4 +4,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   closeLyrics: () => ipcRenderer.invoke('lyrics-close'),
   updateLyrics: (payload) => ipcRenderer.send('lyrics-update', payload),
   onLyricsClosed: (listener) => { const handler = () => listener(); ipcRenderer.on('lyrics-closed', handler); return () => ipcRenderer.removeListener('lyrics-closed', handler); },
+  onWindowVisibilityChange: (listener) => {
+    const handler = (_event, visible) => listener(Boolean(visible));
+    ipcRenderer.on('window-visibility-change', handler);
+    return () => ipcRenderer.removeListener('window-visibility-change', handler);
+  },
 });

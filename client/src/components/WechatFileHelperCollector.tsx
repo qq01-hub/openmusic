@@ -138,8 +138,10 @@ export default function WechatFileHelperCollector({ open, onClose }: Props) {
           if (result === 'expired') {
             try {
               await refreshQr();
+              if (cancelled) return;
               setStatus('二维码已过期，已自动刷新');
             } catch {
+              if (cancelled) return;
               setStatus('二维码已过期，请关闭后重试');
             }
             return;
@@ -165,6 +167,7 @@ export default function WechatFileHelperCollector({ open, onClose }: Props) {
               pushDebug(`bootstrap ok ${describeWechatFileHelperSession()}`);
               markLoggedIn();
             } catch (err) {
+              if (cancelled) return;
               bootstrappingRef.current = false;
               uuidRef.current = null;
               scannedRef.current = true;

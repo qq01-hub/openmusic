@@ -104,18 +104,28 @@ export function configureInlineAudio(audio: HTMLAudioElement): void {
 
 type WeixinBridge = { invoke: (method: string, args: object, cb: () => void) => void };
 
-/** 微信 iOS：Bridge 就绪后回调（常用于解锁媒体播放） */
-export function onWeChatBridgeReady(callback: () => void): void {
-  if (!isWeChatBrowser()) return;
+/** 微信 iOS：Bridge 就绪后回调（常用于解锁媒体播放），返回取消订阅函数 */
+export function onWeChatBridgeReady(callback: () => void): () => void {
+  if (!isWeChatBrowser()) return () => {};
 
+  let disposed = false;
   const w = window as Window & { WeixinJSBridge?: WeixinBridge };
-  const run = () => w.WeixinJSBridge?.invoke('getNetworkType', {}, callback);
+  const run = () => {
+    if (disposed) return;
+    w.WeixinJSBridge?.invoke('getNetworkType', {}, () => {
+      if (!disposed) callback();
+    });
+  };
 
   if (typeof w.WeixinJSBridge !== 'undefined') {
     run();
-  } else {
-    document.addEventListener('WeixinJSBridgeReady', run, { once: true });
+    return () => { disposed = true; };
   }
+  document.addEventListener('WeixinJSBridgeReady', run, { once: true });
+  return () => {
+    disposed = true;
+    document.removeEventListener('WeixinJSBridgeReady', run);
+  };
 }
 
 export type PlayResult = 'played' | 'blocked' | 'error';

@@ -19,6 +19,7 @@ import {
 } from '../lib/musicAccountQr';
 import Tooltip from './Tooltip';
 import MusicLoading from './MusicLoading';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 interface Props {
   open: boolean;
@@ -58,6 +59,7 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
   const [revokeOpen, setRevokeOpen] = useState(false);
   const providerRef = useRef(providerName);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const visibilityUnsubRef = useRef<(() => void) | null>(null);
   const runIdRef = useRef(0);
   const secondVerifySubmittedRef = useRef(false);
   const secondVerifyFrameRef = useRef<HTMLIFrameElement | null>(null);
@@ -93,6 +95,10 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
+    }
+    if (visibilityUnsubRef.current) {
+      visibilityUnsubRef.current();
+      visibilityUnsubRef.current = null;
     }
   }, []);
 
@@ -240,10 +246,15 @@ export default function MusicContributionModal({ open, onClose, defaultProvider 
       checking = true;
       void check().finally(() => { checking = false; });
       pollRef.current = setInterval(() => {
-        if (checking || phase === 'done') return;
+        if (checking || phase === 'done' || isHostPageHidden()) return;
         checking = true;
         void check().finally(() => { checking = false; });
       }, nextPlatform === 'qishui' ? 5000 : 2000);
+      visibilityUnsubRef.current = subscribeHostVisibility(() => {
+        if (checking || phase === 'done' || isHostPageHidden() || runId !== runIdRef.current) return;
+        checking = true;
+        void check().finally(() => { checking = false; });
+      });
     } catch (cause) {
       if (runId === runIdRef.current) {
         setError(cause instanceof Error ? cause.message : '二维码生成失败，请稍后再试');

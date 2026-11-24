@@ -1291,15 +1291,24 @@ async function executeTool(name, args, ctx) {
     }
 
     case 'set_play_mode': {
-      const mode = String(args.mode || '').trim();
+      const rawMode = String(args.mode || '').trim().toLowerCase();
+      const modeAliasMap = {
+        loop: 'loop-one',
+        random: 'shuffle-loop',
+      };
+      const mode = modeAliasMap[rawMode] || rawMode;
       const result = setRoomPlayModeOnBehalfOfUser(roomId, userId, mode);
       if (result.error) return { success: false, error: result.error };
       if (result.room && broadcastRoom) broadcastRoom();
       const modeNames = {
         order: '顺序播放',
-        random: '列表随机',
-        loop: '单曲循环',
+        shuffle: '随机播放',
         'user-round-robin': '用户轮播',
+        'favorite-shuffle': '收藏随机',
+        'artist-shuffle': '歌手随机',
+        'loop-one': '单曲循环',
+        'loop-all': '列表循环',
+        'shuffle-loop': '列表内随机',
       };
       return {
         success: true,

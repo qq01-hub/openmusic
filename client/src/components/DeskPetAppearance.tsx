@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 import { getDeskPetCharacter, resolveDeskPetAction, type DeskPetCharacterId } from '../lib/deskPetCharacters';
 import { UPSTREAM_SPRITE } from '../lib/deskPetUpstream';
 import './RoomAiDesktopPet.css';
@@ -28,6 +29,22 @@ export default function DeskPetAppearance({ character, animation = 'idle', facin
   const videoRef = useRef<HTMLVideoElement>(null);
   const completed = useRef(onComplete);
   completed.current = onComplete;
+
+  // 循环视频在页面或桌面端托盘隐藏时暂停解码，恢复可见后继续播放
+  useEffect(() => {
+    if (config.kind !== 'video' || !animate || !loop) return;
+    const syncVideoPlayback = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (isHostPageHidden()) {
+        if (!video.paused) video.pause();
+      } else if (video.paused) {
+        void video.play().catch(() => {});
+      }
+    };
+    syncVideoPlayback();
+    return subscribeHostVisibility(syncVideoPlayback);
+  }, [action.src, animate, config.kind, loop]);
 
   // 对齐 playOnce：视频等待真实 ended，元数据到达后重设兜底，立绘与图集使用源码时长
   useEffect(() => {
@@ -150,30 +167,41 @@ function SpriteCharacter({ mode, animate, loop, playKey, onError }: {
   const [cell, setCell] = useState({ row: 0, column: 0 });
   const boxRef = useRef<HTMLDivElement>(null);
   const lastPointer = useRef<{ x: number; y: number; at: number } | null>(null);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
   useEffect(() => {
     const sheet = new Image();
     sheet.src = '/desk-pet/gpt/spritesheet.webp';
-    sheet.onerror = onError;
+    sheet.onerror = () => onErrorRef.current();
     return () => { sheet.onerror = null; };
-  }, [onError]);
+  }, []);
   useEffect(() => {
     const sequence = SPRITE_SEQUENCES[mode] ?? SPRITE_SEQUENCES.waiting;
     const start = sequence.frame ?? 0;
     let frame = start;
     let timer: number | undefined;
+    let pausedByHidden = false;
     const onPointerMove = (event: PointerEvent) => {
       lastPointer.current = { x: event.clientX, y: event.clientY, at: performance.now() };
     };
     const tick = () => {
-      const pointer = lastPointer.current;
-      const box = boxRef.current?.getBoundingClientRect();
-      if (animate && mode === 'idle' && pointer && box && performance.now() - pointer.at < 1800) {
-        const dx = pointer.x - (box.left + box.width / 2);
-        const dy = pointer.y - (box.top + box.height / 2);
-        const look = Math.round(((Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360) / 22.5) % 16;
-        setCell({ row: 9 + Math.floor(look / 8), column: look % 8 });
-        timer = window.setTimeout(tick, 90);
+      timer = undefined;
+      if (animate && isHostPageHidden()) {
+        pausedByHidden = true;
         return;
+      }
+      pausedByHidden = false;
+      const pointer = lastPointer.current;
+      if (animate && mode === 'idle' && pointer && performance.now() - pointer.at < 1800) {
+        const box = boxRef.current?.getBoundingClientRect();
+        if (box) {
+          const dx = pointer.x - (box.left + box.width / 2);
+          const dy = pointer.y - (box.top + box.height / 2);
+          const look = Math.round(((Math.atan2(dx, -dy) * 180 / Math.PI + 360) % 360) / 22.5) % 16;
+          setCell({ row: 9 + Math.floor(look / 8), column: look % 8 });
+          timer = window.setTimeout(tick, 90);
+          return;
+        }
       }
       setCell({ row: sequence.row, column: frame });
       if (!animate) return;
@@ -185,9 +213,21 @@ function SpriteCharacter({ mode, animate, loop, playKey, onError }: {
       }
       timer = window.setTimeout(tick, duration);
     };
+    const unsubscribeVisibility = animate
+      ? subscribeHostVisibility(() => {
+          if (isHostPageHidden()) {
+            window.clearTimeout(timer);
+            timer = undefined;
+            pausedByHidden = true;
+          } else if (pausedByHidden && timer === undefined) {
+            tick();
+          }
+        })
+      : null;
     tick();
     if (animate && mode === 'idle') window.addEventListener('pointermove', onPointerMove, { passive: true });
     return () => {
+      unsubscribeVisibility?.();
       window.clearTimeout(timer);
       window.removeEventListener('pointermove', onPointerMove);
     };

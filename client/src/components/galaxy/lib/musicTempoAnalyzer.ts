@@ -138,36 +138,37 @@ export async function analyzeMusicTempoInWorker(
   try {
     return await new Promise<MusicTempoResult | null>((resolve) => {
       let done = false;
-      const timer = setTimeout(() => {
-        if (done) return;
-        done = true;
-        worker.terminate();
-        resolve(null);
-      }, 16000);
-      worker.onmessage = (ev: MessageEvent<{ ok?: boolean; tempo?: number; beats?: number[] }>) => {
+      const finish = (result: MusicTempoResult | null) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
         worker.terminate();
+        resolve(result);
+      };
+      const onAbort = () => finish(null);
+      const timer = setTimeout(() => finish(null), 16000);
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      worker.onmessage = (ev: MessageEvent<{ ok?: boolean; tempo?: number; beats?: number[] }>) => {
         const data = ev.data;
         if (!data?.ok) {
-          resolve(null);
+          finish(null);
           return;
         }
-        resolve({ tempo: data.tempo ?? 0, beats: data.beats ?? [] });
+        finish({ tempo: data.tempo ?? 0, beats: data.beats ?? [] });
       };
       worker.onerror = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        worker.terminate();
-        resolve(null);
+        finish(null);
       };
       worker.postMessage({
-        mono,
+        mono: mono.buffer,
         sampleRate: buffer.sampleRate,
         scriptUrl: `${window.location.origin}/vendor/music-tempo.min.js`,
-      });
+      }, [mono.buffer]);
     });
   } catch {
     worker.terminate();

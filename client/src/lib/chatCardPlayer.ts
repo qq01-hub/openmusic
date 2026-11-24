@@ -25,6 +25,7 @@ import { getAudioController } from './audioController';
 import type { LyricLine } from '../types';
 import { getUserPlaybackQuality } from '../api/music/quality';
 import { cacheSongAudio, getCachedSongAudio, playSongAudio, releaseSongAudioSource, setSongAudioSource, songAudioCacheKey } from './songAudioCache';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 type ChatCardPlaybackStatus = 'idle' | 'loading' | 'playing' | 'error';
 
@@ -73,6 +74,7 @@ let loadToken = 0;
 let abortController: AbortController | null = null;
 let lyricToken = 0;
 let rafId = 0;
+let unsubscribeVisibility: (() => void) | null = null;
 
 const listeners = new Set<() => void>();
 
@@ -99,29 +101,57 @@ function rememberProgress(cardKey: string, positionSec: number) {
 function stopProgressLoop() {
   if (rafId) cancelAnimationFrame(rafId);
   rafId = 0;
+  unsubscribeVisibility?.();
+  unsubscribeVisibility = null;
+}
+
+function syncProgressSnapshot() {
+  if (activeState.status !== 'playing' || !cardAudio) return;
+  const mediaDuration = Number(cardAudio.duration);
+  const nextDuration = Number.isFinite(mediaDuration) && mediaDuration > 0
+    ? mediaDuration
+    : activeState.durationSec;
+  const nextPosition = Number.isFinite(cardAudio.currentTime) ? cardAudio.currentTime : 0;
+  if (
+    Math.abs(nextPosition - activeState.positionSec) >= 0.05
+    || Math.abs(nextDuration - activeState.durationSec) >= 0.01
+  ) {
+    publish({
+      positionSec: nextPosition,
+      durationSec: nextDuration,
+    });
+  }
 }
 
 function startProgressLoop() {
-  if (rafId) return;
+  if (!unsubscribeVisibility) {
+    unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (activeState.status !== 'playing' || !cardAudio) {
+        stopProgressLoop();
+        return;
+      }
+      if (isHostPageHidden()) {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = 0;
+        }
+        return;
+      }
+      syncProgressSnapshot();
+      if (!rafId) startProgressLoop();
+    });
+  }
+  if (rafId || isHostPageHidden()) return;
   const tick = () => {
     if (activeState.status !== 'playing' || !cardAudio) {
+      stopProgressLoop();
+      return;
+    }
+    if (isHostPageHidden()) {
       rafId = 0;
       return;
     }
-    const mediaDuration = Number(cardAudio.duration);
-    const nextDuration = Number.isFinite(mediaDuration) && mediaDuration > 0
-      ? mediaDuration
-      : activeState.durationSec;
-    const nextPosition = Number.isFinite(cardAudio.currentTime) ? cardAudio.currentTime : 0;
-    if (
-      Math.abs(nextPosition - activeState.positionSec) >= 0.05
-      || Math.abs(nextDuration - activeState.durationSec) >= 0.01
-    ) {
-      publish({
-        positionSec: nextPosition,
-        durationSec: nextDuration,
-      });
-    }
+    syncProgressSnapshot();
     rafId = requestAnimationFrame(tick);
   };
   rafId = requestAnimationFrame(tick);

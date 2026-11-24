@@ -11,6 +11,7 @@ import { fetchAccountSession, logoutAccount } from '../lib/accountAuth';
 import { isAccountSessionRevisionEvent } from '../lib/accountSessionSignal';
 import { stopSharedAudio } from '../lib/audioElement';
 import { hasAnonymousAccess, hasVerifiedAccountSession } from '../lib/accountAccessSession';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 export default function AccountGate({ children, onReady, allowPreview = false }: { children: ReactNode; onReady?: () => void; allowPreview?: boolean }) {
   const [authenticated, setAuthenticated] = useState<boolean | null>(() => (
@@ -79,10 +80,18 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
     window.addEventListener('storage', onStorage);
     window.addEventListener('focus', onChange);
     window.addEventListener('online', onChange);
-    const timer = window.setInterval(onChange, 60_000);
+    const onScheduledRefresh = () => {
+      if (isHostPageHidden()) return;
+      onChange();
+    };
+    const unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (!isHostPageHidden()) onChange();
+    });
+    const timer = window.setInterval(onScheduledRefresh, 60_000);
     return () => {
       active = false; clearRetry();
       window.clearInterval(timer);
+      unsubscribeVisibility();
       window.removeEventListener('openmusic:account-session-changed', onIdentityChange);
       window.removeEventListener('openmusic:account-auth-required', onChange);
       window.removeEventListener('openmusic:server-restarting', onRestart);

@@ -142,3 +142,135 @@ for (const mode of ['order', 'shuffle', 'user-round-robin', 'favorite-shuffle', 
     });
   }
 }
+
+test('单曲循环下 FM 曲目自然播完重播当前曲且不获取新 FM', async () => {
+  let fetched = false;
+  let restarted = false;
+  const context = vm.createContext({
+    Set,
+    normalizePlayMode: (value) => value,
+    selectNextUserRoundRobinSong,
+    getRuntimeConfig: () => ({}),
+    filterSongPayloadByArtist: (songs) => songs,
+    isSongArtistBlocked: () => false,
+    isSongBanned: () => false,
+    recordSongPlay() {},
+    clearNextRandom(room) {
+      room.nextRandom = null;
+      room.nextRandomPromise = null;
+      room.randomBatch = [];
+    },
+    ensureNextRandom() { fetched = true; },
+    restartCurrentSong(room) {
+      restarted = true;
+      room.currentTime = 0;
+      return true;
+    },
+    serializeQueueItemForRoom: (song) => ({ ...song }),
+    buildPendingRandomItem: (song) => ({ ...song }),
+    setCurrentSong: (room, song) => { room.current = song; },
+    fetchRandomForRoom: async () => {
+      fetched = true;
+      return { queueId: 'fm-next', id: '2', source: 'netease', requestedBy: '私人漫游', requestedById: '' };
+    },
+  });
+  vm.runInContext(roomSource.slice(
+    roomSource.indexOf('function takeNextFromQueue('),
+    roomSource.indexOf('async function playNext(room,'),
+  ), context);
+
+  const fmSong = { queueId: 'random-1', id: '1', source: 'netease', requestedBy: '私人漫游', requestedById: '' };
+  const room = {
+    playMode: 'loop-one',
+    queue: [],
+    users: new Map(),
+    current: fmSong,
+    nextRandom: null,
+  };
+
+  await context.playNextUnlocked(room, { allowFetchRandom: false, finishedSong: fmSong });
+
+  assert.equal(restarted, true);
+  assert.equal(fetched, false);
+  assert.equal(room.current.queueId, 'random-1');
+});
+
+test('单曲循环已有在播歌曲时 ensureNextRandom 不再预取新 FM', async () => {
+  let fetched = false;
+  const context = vm.createContext({
+    DEFAULT_FM_MODE: 'DEFAULT',
+    FM_MODE_OFF: 'OFF',
+    MAX_RANDOM_PREFETCH_ATTEMPTS: 3,
+    normalizePlayMode: (value) => value,
+    clearNextRandom(room) {
+      room.nextRandom = null;
+      room.nextRandomPromise = null;
+      room.randomBatch = [];
+    },
+    fetchRandomForRoom: async () => {
+      fetched = true;
+      return { id: '2', source: 'netease' };
+    },
+  });
+  vm.runInContext(roomSource.slice(
+    roomSource.indexOf('async function ensureNextRandom('),
+    roomSource.indexOf('async function withPlaybackLock('),
+  ), context);
+
+  const room = {
+    playMode: 'loop-one',
+    queue: [],
+    current: { queueId: 'random-1', id: '1', source: 'netease', requestedBy: '私人漫游', requestedById: '' },
+    nextRandom: { queueId: 'random-2', id: '2', source: 'netease' },
+    nextRandomPromise: null,
+    randomBatch: [{ id: '3', source: 'netease' }],
+    neteaseFmMode: 'DEFAULT',
+  };
+
+  await context.ensureNextRandom(room);
+
+  assert.equal(fetched, false);
+  assert.equal(room.nextRandom, null);
+  assert.deepEqual(room.randomBatch, []);
+});
+
+for (const mode of ['loop-all', 'shuffle-loop']) {
+  test(`${mode} 不回收 FM 曲目到点歌队列`, async () => {
+    const context = vm.createContext({
+      Set,
+      normalizePlayMode: (value) => value,
+      selectNextUserRoundRobinSong,
+      getRuntimeConfig: () => ({}),
+      filterSongPayloadByArtist: (songs) => songs,
+      isSongArtistBlocked: () => false,
+      isSongBanned: () => false,
+      recordSongPlay() {},
+      clearNextRandom() {},
+      ensureNextRandom() {},
+      bumpPlaybackState() {},
+      restartCurrentSong: () => true,
+      serializeQueueItemForRoom: (song) => ({ ...song }),
+      buildPendingRandomItem: (song) => ({ ...song }),
+      setCurrentSong: (room, song) => { room.current = song; },
+      fetchRandomForRoom: async () => ({ queueId: 'random-2', id: '2', source: 'netease', requestedBy: '私人漫游', requestedById: '' }),
+    });
+    vm.runInContext(roomSource.slice(
+      roomSource.indexOf('function takeNextFromQueue('),
+      roomSource.indexOf('async function playNext(room,'),
+    ), context);
+
+    const fmSong = { queueId: 'random-1', id: '1', source: 'netease', requestedBy: '私人漫游', requestedById: '' };
+    const room = {
+      playMode: mode,
+      queue: [],
+      users: new Map(),
+      current: fmSong,
+      nextRandom: null,
+    };
+
+    await context.playNextUnlocked(room, { allowFetchRandom: false, finishedSong: fmSong });
+
+    assert.equal(room.queue.length, 0);
+    assert.equal(room.current.queueId, 'random-2');
+  });
+}

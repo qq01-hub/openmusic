@@ -14,8 +14,12 @@ import TruncateTip from "./TruncateTip";
 import UserRoleMarks from "./UserRoleMarks";
 import type { RoomUser } from "../types";
 import { useScrollToTopOnPageChange } from "../hooks/useScrollToTopOnPageChange";
+import { isHostPageHidden, subscribeHostVisibility } from "../hooks/useVisualRenderPolicy";
 
 const USERS_PAGE_SIZE = 50;
+const EMPTY_MEMBER_TIERS: Record<string, { badgeLabel: string; badgeColor: string }> = {};
+const EMPTY_STRING_ARRAY: string[] = [];
+const EMPTY_STRING_RECORD: Record<string, string> = {};
 
 interface Props {
   users: RoomUser[];
@@ -28,16 +32,16 @@ type DisplayUser = RoomUser & { offline?: boolean };
 
 type PendingAction = { type: "kick"; user: DisplayUser } | { type: "admin"; user: DisplayUser; admin: boolean };
 
-export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, onNotice }: Props) {
+export default memo(function OnlineUsers({ users, creatorId, memberTiers = EMPTY_MEMBER_TIERS, onNotice }: Props) {
   const mySocketId = useRoomStore((s) => s.mySocketId);
   const isOwner = useRoomStore((s) => s.isOwner);
   const isAdmin = useRoomStore((s) => s.isAdmin);
   const canModerate = isOwner || isAdmin;
   const hideIpLocation = useRoomStore((s) => Boolean(s.room?.hideIpLocation));
-  const adminIds = useRoomStore((s) => s.room?.adminIds) || [];
-  const autoPromotedAdminIds = useRoomStore((s) => s.room?.autoPromotedAdminIds) || [];
+  const adminIds = useRoomStore((s) => s.room?.adminIds) || EMPTY_STRING_ARRAY;
+  const autoPromotedAdminIds = useRoomStore((s) => s.room?.autoPromotedAdminIds) || EMPTY_STRING_ARRAY;
   const ownerId = useRoomStore((s) => s.room?.ownerId) || null;
-  const userNicknames = useRoomStore((s) => s.room?.userNicknames) || {};
+  const userNicknames = useRoomStore((s) => s.room?.userNicknames) || EMPTY_STRING_RECORD;
   const nickname = useRoomStore((s) => s.nickname);
   const { renameUser, kickUser, setRoomAdmin, setUserAvatar } = useSocket();
   const [open, setOpen] = useState(false);
@@ -56,7 +60,7 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, o
   const [avatarSaving, setAvatarSaving] = useState(false);
   const [previewAvatarUrl, setPreviewAvatarUrl] = useState<string | null>(null);
   const [avatarPickOnOpen, setAvatarPickOnOpen] = useState(false);
-  const userAvatarUrls = useRoomStore((s) => s.room?.userAvatarUrls) || {};
+  const userAvatarUrls = useRoomStore((s) => s.room?.userAvatarUrls) || EMPTY_STRING_RECORD;
   const avatar_url = useRoomStore((s) => s.avatar_url);
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const avatarFileInputRef = useRef<HTMLInputElement>(null);
@@ -71,8 +75,16 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, o
   useEffect(() => {
     if (!open) return;
     setNow(Date.now());
-    const timer = window.setInterval(() => setNow(Date.now()), 30000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => {
+      if (!isHostPageHidden()) setNow(Date.now());
+    }, 30000);
+    const unsubscribeVisibility = subscribeHostVisibility(() => {
+      if (!isHostPageHidden()) setNow(Date.now());
+    });
+    return () => {
+      window.clearInterval(timer);
+      unsubscribeVisibility();
+    };
   }, [open]);
 
   const visibleUsers = useMemo(() => users.filter((user) => !user.readOnly), [users]);
@@ -286,7 +298,11 @@ export default memo(function OnlineUsers({ users, creatorId, memberTiers = {}, o
       setAvatarError(res.error || "头像保存失败");
       return;
     }
-    localStorage.setItem("avatar_url", url);
+    try {
+      localStorage.setItem("avatar_url", url);
+    } catch {
+      // ignore storage errors
+    }
     useRoomStore.setState({ avatar_url: url });
     setShowAvatarModal(false);
   };

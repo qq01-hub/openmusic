@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { RoomVisualFxSettings } from '../lib/roomVisualPreset';
 import { DEFAULT_ROOM_VISUAL_FX } from '../lib/roomVisualPreset';
+import Tooltip from './Tooltip';
 
 export type VisualFxSliderKey =
   | 'cameraDistance'
@@ -220,23 +221,24 @@ export function FxMineradioSlider({
         aria-label={def.label}
       />
       <output>{display}</output>
-      <button
-        type="button"
-        className="fx-reset-one"
-        title="恢复当前滑条默认值"
-        aria-label="恢复当前滑条默认值"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => {
-          e.stopPropagation();
-          onReset();
-          onLiveChange(defaultValue);
-        }}
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-          <path d="M3 12a9 9 0 1 0 3-6.7" />
-          <path d="M3 4v5h5" />
-        </svg>
-      </button>
+      <Tooltip content="恢复当前滑条默认值" side="top">
+        <button
+          type="button"
+          className="fx-reset-one"
+          aria-label="恢复当前滑条默认值"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onReset();
+            onLiveChange(defaultValue);
+          }}
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 12a9 9 0 1 0 3-6.7" />
+            <path d="M3 4v5h5" />
+          </svg>
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -254,13 +256,13 @@ export function FxMineradioToggle({
   disabled?: boolean;
   title?: string;
 }) {
-  return (
+  const button = (
     <button
       type="button"
       className={`fx-toggle ${checked ? 'on' : ''} ${disabled ? 'opacity-45 cursor-not-allowed' : ''}`}
       aria-pressed={checked}
-      disabled={disabled}
-      title={title}
+      aria-disabled={disabled}
+      tabIndex={disabled ? -1 : undefined}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => {
         e.stopPropagation();
@@ -272,6 +274,7 @@ export function FxMineradioToggle({
       <span className="dot" aria-hidden />
     </button>
   );
+  return title ? <Tooltip content={title} side="top">{button}</Tooltip> : button;
 }
 
 function preserveSlot(hidden: boolean, children: ReactNode) {

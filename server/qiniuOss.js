@@ -142,9 +142,9 @@ export function validateChatImageForRoom(roomId, imageUrl, imageKey) {
 
 function promisify(fn, ...args) {
   return new Promise((resolve, reject) => {
-    fn(...args, (err, ...results) => {
+    fn(...args, (err, body, info) => {
       if (err) reject(err);
-      else resolve(results.length <= 1 ? results[0] : results);
+      else resolve({ body, info });
     });
   });
 }
@@ -159,12 +159,15 @@ async function listAllKeys(prefix) {
 
   do {
     const options = { prefix, limit: 1000, marker };
-    const result = await promisify(bucketManager.listPrefix.bind(bucketManager), qiniuBucket, options);
-    const items = result?.items || [];
+    const { body, info } = await promisify(bucketManager.listPrefix.bind(bucketManager), qiniuBucket, options);
+    if (info?.statusCode >= 400) {
+      throw new Error(`七牛云列举文件失败 (${info.statusCode})`);
+    }
+    const items = body?.items || [];
     for (const item of items) {
       if (item.key) keys.push(item.key);
     }
-    marker = result?.marker || null;
+    marker = body?.marker || null;
   } while (marker);
 
   return keys;
@@ -179,10 +182,13 @@ async function batchDelete(keys) {
   const bucketManager = new qiniu.rs.BucketManager(mac, config);
   const BATCH_SIZE = 1000;
 
-  for (let i = 0; i < keys.length; i += BATCH_SIZE) {
-    const chunk = keys.slice(i, i + BATCH_SIZE);
+  for (let offset = 0; offset < keys.length; offset += BATCH_SIZE) {
+    const chunk = keys.slice(offset, offset + BATCH_SIZE);
     const ops = chunk.map((key) => qiniu.rs.deleteOp(qiniuBucket, key));
-    await promisify(bucketManager.batch.bind(bucketManager), ops);
+    const { info } = await promisify(bucketManager.batch.bind(bucketManager), ops);
+    if (info?.statusCode >= 400) {
+      throw new Error(`七牛云批量删除失败 (${info.statusCode})`);
+    }
   }
 }
 

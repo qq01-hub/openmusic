@@ -19,12 +19,14 @@ export default function RoleBadge({ role, variant = 'full', className = '' }: Pr
   if (variant === 'icon') {
     if (plain) {
       return (
-        <span
-          className={`inline-flex flex-shrink-0 text-[10px] leading-4 text-netease-muted/65 ${className}`}
-          title={label}
-        >
-          {isOwner ? '主' : '管'}
-        </span>
+        <Tooltip content={label} side="bottom">
+          <span
+            className={`inline-flex flex-shrink-0 text-[10px] leading-4 text-netease-muted/65 ${className}`}
+            aria-label={label}
+          >
+            {isOwner ? '主' : '管'}
+          </span>
+        </Tooltip>
       );
     }
 

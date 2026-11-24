@@ -19,6 +19,7 @@ const INSTALLING_LOCK_STALE_MS = 30 * 60_000;
 const RUNTIME_CONFIG_PATH = path.join(__dirname, 'runtimeConfig.json');
 const ADMIN_CREDENTIALS_KEY = 'openmusic:admin:credentials';
 const attempts = new Map();
+const MAX_SETUP_ATTEMPT_ENTRIES = 2000;
 
 function acquireSetupLease() {
   const openLease = () => {
@@ -124,6 +125,17 @@ function isRateLimited(req, max = 10) {
   const now = Date.now();
   const entry = attempts.get(key);
   if (!entry || now - entry.startedAt > 60_000) {
+    if (!entry && attempts.size >= MAX_SETUP_ATTEMPT_ENTRIES) {
+      for (const [oldKey, oldEntry] of attempts.entries()) {
+        if (now - oldEntry.startedAt > 60_000) attempts.delete(oldKey);
+        if (attempts.size < MAX_SETUP_ATTEMPT_ENTRIES) break;
+      }
+      while (attempts.size >= MAX_SETUP_ATTEMPT_ENTRIES) {
+        const oldestKey = attempts.keys().next().value;
+        if (oldestKey === undefined) break;
+        attempts.delete(oldestKey);
+      }
+    }
     attempts.set(key, { startedAt: now, count: 1 });
     return false;
   }

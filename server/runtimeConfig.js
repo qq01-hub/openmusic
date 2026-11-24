@@ -32,8 +32,54 @@ const FAVORITE_SHARE_TTL_MIN_MS = 60 * 60 * 1000;
 const FAVORITE_SHARE_TTL_MAX_MS = 90 * 24 * 60 * 60 * 1000;
 /** 管理后台回显：保留首尾，中间用 ...... 隐藏 */
 const MASK_GAP = '......';
+const STAT_CHECK_INTERVAL_MS = 1000;
 
-let cached = { mtimeMs: -1, persisted: {} };
+let cached = { mtimeMs: -1, checkedAt: 0, version: 0, secretKey: '', persisted: {} };
+let cachedRuntime = { version: -1, envSignature: '', value: null };
+
+function buildEnvSignature() {
+  return [
+    process.env.ROOM_EMPTY_TTL_MS ?? '',
+    process.env.ROOM_RESTART_GRACE_MS ?? '',
+    process.env.LINUXDO_CLIENT_ID ?? '',
+    process.env.LINUXDO_CLIENT_SECRET ?? '',
+    process.env.LINUXDO_REDIRECT_URI ?? '',
+    process.env.LINUXDO_AUTHORIZE_URL ?? '',
+    process.env.LINUXDO_TOKEN_URL ?? '',
+    process.env.LINUXDO_USERINFO_URL ?? '',
+    process.env.LINUXDO_SCOPE ?? '',
+    process.env.GITHUB_CLIENT_ID ?? '',
+    process.env.GITHUB_CLIENT_SECRET ?? '',
+    process.env.GITHUB_REDIRECT_URI ?? '',
+    process.env.GITHUB_SCOPE ?? '',
+    process.env.ROOM_CREDENTIAL_ENCRYPTION_KEY ?? '',
+    process.env.SVIP_QUALITY_ENABLED ?? '',
+    process.env.METING_API_URL ?? '',
+    process.env.METING_API_AUTH ?? '',
+    process.env.QINIU_ACCESS_KEY ?? '',
+    process.env.QINIU_SECRET_KEY ?? '',
+    process.env.QINIU_BUCKET ?? '',
+    process.env.QINIU_DOMAIN ?? '',
+    process.env.QINIU_ZONE ?? '',
+    process.env.APIHZ_BASE_URL ?? '',
+    process.env.APIHZ_ID ?? '',
+    process.env.APIHZ_IMG_ID ?? '',
+    process.env.APIHZ_MGC_ID ?? '',
+    process.env.APIHZ_KEY ?? '',
+    process.env.APIHZ_IMG_KEY ?? '',
+    process.env.APIHZ_MGC_KEY ?? '',
+    process.env.SITE_CANONICAL_URL ?? '',
+    process.env.AI_API_KEY ?? '',
+    process.env.AI_API_BASE_URL ?? '',
+    process.env.AI_API_URL ?? '',
+    process.env.AI_API_PROTOCOL ?? '',
+    process.env.AI_TEXT_MODEL ?? '',
+    process.env.AI_VISION_MODEL ?? '',
+    process.env.AI_MAX_RPM ?? '',
+    process.env.AI_MAX_TPM ?? '',
+    process.env.CLIENT_ID_SECRET ?? '',
+  ].join('\0');
+}
 
 export function maskSecret(value) {
   const text = String(value || '');
@@ -297,16 +343,40 @@ function readPersisted() {
   }
 }
 
-function getPersisted() {
+function getPersisted(forceStat = false) {
+  const now = Date.now();
+  const currentSecret = String(process.env.CLIENT_ID_SECRET || '').trim();
+  const secretChanged = cached.secretKey !== currentSecret;
+  if (!forceStat && !secretChanged && cached.checkedAt > 0 && now - cached.checkedAt < STAT_CHECK_INTERVAL_MS) {
+    return cached.persisted;
+  }
   let mtimeMs = 0;
   try {
     mtimeMs = fs.statSync(CONFIG_PATH).mtimeMs;
   } catch {
-    if (cached.mtimeMs !== 0) cached = { mtimeMs: 0, persisted: {} };
+    if (cached.mtimeMs !== 0 || secretChanged) {
+      cached = {
+        mtimeMs: 0,
+        checkedAt: now,
+        version: cached.version + 1,
+        secretKey: currentSecret,
+        persisted: {},
+      };
+    } else {
+      cached.checkedAt = now;
+    }
     return cached.persisted;
   }
-  if (cached.mtimeMs !== mtimeMs) {
-    cached = { mtimeMs, persisted: readPersisted() };
+  if (cached.mtimeMs !== mtimeMs || secretChanged) {
+    cached = {
+      mtimeMs,
+      checkedAt: now,
+      version: cached.version + 1,
+      secretKey: currentSecret,
+      persisted: readPersisted(),
+    };
+  } else {
+    cached.checkedAt = now;
   }
   return cached.persisted;
 }
@@ -680,6 +750,14 @@ function normalizeAiApiProtocol(value) {
 
 export function getRuntimeConfig() {
   const persisted = getPersisted();
+  const envSignature = buildEnvSignature();
+  if (
+    cachedRuntime.value
+    && cachedRuntime.version === cached.version
+    && cachedRuntime.envSignature === envSignature
+  ) {
+    return cachedRuntime.value;
+  }
   const env = envDefaults();
   const merged = { ...env, ...persisted };
   // 房间凭证主密钥一旦通过环境变量提供，始终以环境变量为准，
@@ -690,7 +768,13 @@ export function getRuntimeConfig() {
   if (env.aiApiKey) {
     merged.aiApiKey = env.aiApiKey;
   }
-  return normalize(merged);
+  const normalized = normalize(merged);
+  cachedRuntime = {
+    version: cached.version,
+    envSignature,
+    value: normalized,
+  };
+  return normalized;
 }
 
 function persistedSecretState(field) {
@@ -953,7 +1037,14 @@ export function setRuntimeConfig(raw = {}) {
       fs.unlinkSync(tempPath);
     }
     // 内存缓存保留明文，供运行时使用；磁盘为加密形态
-    cached = { mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs, persisted: normalized };
+    cached = {
+      mtimeMs: fs.statSync(CONFIG_PATH).mtimeMs,
+      checkedAt: Date.now(),
+      version: cached.version + 1,
+      secretKey: String(process.env.CLIENT_ID_SECRET || '').trim(),
+      persisted: normalized,
+    };
+    cachedRuntime = { version: -1, envSignature: '', value: null };
     return { success: true, config: getRuntimeConfigForAdmin() };
   } catch (err) {
     console.error('runtime-config write error:', err?.message || err);

@@ -19,6 +19,7 @@ import MemberTierBadge from './MemberTierBadge';
 import MemberQueueFrame from './MemberQueueFrame';
 import RoleBadge from './RoleBadge';
 import UserRoleMarks from './UserRoleMarks';
+import Tooltip from './Tooltip';
 import { getDisplayInitial } from '../lib/displayInitial';
 
 interface Props {
@@ -88,18 +89,18 @@ function ColorSwatches({
       {colors.map((preset) => {
         const active = normalizeBadgeColor(value) === preset.color;
         return (
-          <button
-            key={preset.id}
-            type="button"
-            title={preset.name}
-            aria-label={`${ariaPrefix}${preset.name}`}
-            disabled={disabled}
-            onClick={() => onChange(preset.color)}
-            className={`h-7 w-7 rounded-full transition-transform disabled:cursor-not-allowed disabled:opacity-45 ${
-              active ? 'scale-110 ring-2 ring-amber-300/70 ring-offset-1 ring-offset-netease-dark' : 'hover:scale-105'
-            }`}
-            style={{ backgroundColor: preset.color }}
-          />
+          <Tooltip key={preset.id} content={preset.name} side="top">
+            <button
+              type="button"
+              aria-label={`${ariaPrefix}${preset.name}`}
+              disabled={disabled}
+              onClick={() => onChange(preset.color)}
+              className={`h-7 w-7 rounded-full transition-transform disabled:cursor-not-allowed disabled:opacity-45 ${
+                active ? 'scale-110 ring-2 ring-amber-300/70 ring-offset-1 ring-offset-netease-dark' : 'hover:scale-105'
+              }`}
+              style={{ backgroundColor: preset.color }}
+            />
+          </Tooltip>
         );
       })}
     </div>

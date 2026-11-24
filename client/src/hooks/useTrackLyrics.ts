@@ -33,9 +33,11 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
           const ms = getLrcFallbackDurationMs(lrc);
           if (ms) setLrcDuration(trackKey, ms);
         }
-        void getTranslatedLyricLines(song, lines).then(translated => {
-          if (!cancelled) setLyrics(translated);
-        });
+        void getTranslatedLyricLines(song, lines)
+          .then(translated => {
+            if (!cancelled) setLyrics(translated);
+          })
+          .catch(() => {});
       })
       .catch(() => {
         if (!cancelled) setLyrics([]);
@@ -43,7 +45,7 @@ export function useTrackLyrics(song: (Pick<Song, 'id' | 'source' | 'name' | 'lrc
     return () => {
       cancelled = true;
     };
-  }, [song?.id, song?.source, song?.queueId, song?.name, song?.lrc, song?.duration, setLrcDuration]);
+  }, [song?.id, song?.source, song?.queueId, song?.name, song?.artist, song?.lrc, song?.duration, setLrcDuration]);
 
   return useMemo(() => offset === 0 ? lyrics : lyrics.map(line => ({ ...line, time: line.time + offset })), [lyrics, offset]);
 }

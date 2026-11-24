@@ -3,6 +3,7 @@ import type { RoomVisualFxSettings } from '../../lib/roomVisualPreset';
 import { DEFAULT_ROOM_VISUAL_FX } from '../../lib/roomVisualPreset';
 import { FxSectionLabel } from '../RoomVisualFxSettingsBody';
 import CoverColorPickerPopover from './CoverColorPickerPopover';
+import Tooltip from '../Tooltip';
 import {
   clearLocalBackgroundMedia,
   LOCAL_BACKGROUND_MEDIA_REF,
@@ -38,13 +39,15 @@ function ColorRow({
 }) {
   return (
     <div className={`lyric-color-row ${disabled ? 'pointer-events-none opacity-40' : ''}`}>
-      <input
-        type="color"
-        className="lyric-color-picker"
-        value={color}
-        title={label}
-        onChange={(e) => onChange(e.target.value.toLowerCase())}
-      />
+      <Tooltip content={label} side="top">
+        <input
+          type="color"
+          className="lyric-color-picker"
+          value={color}
+          aria-label={label}
+          onChange={(e) => onChange(e.target.value.toLowerCase())}
+        />
+      </Tooltip>
       <div className="fx-color-row-label">
         {label}
         <small>{small}</small>

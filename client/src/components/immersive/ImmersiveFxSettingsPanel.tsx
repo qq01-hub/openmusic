@@ -6,6 +6,7 @@ import { defaultLyricTypographyPatch } from '../../lib/lyricStyle';
 import RoomVisualPresetGrid from '../RoomVisualPresetGrid';
 import ImmersiveLyricFxControls from './ImmersiveLyricFxControls';
 import ImmersiveAppearanceControls from './ImmersiveAppearanceControls';
+import Tooltip from '../Tooltip';
 import {
   FxMineradioSlider,
   FxMineradioToggle,
@@ -551,17 +552,19 @@ export default function ImmersiveFxSettingsPanel({
                   const color = value[item.colorKey];
                   return (
                     <div key={item.colorKey} className={`lyric-color-row ${dragging ? 'pointer-events-none invisible' : ''}`}>
-                      <input
-                        type="color"
-                        className="lyric-color-picker"
-                        value={color}
-                        title={item.label}
-                        disabled={mode !== 'custom'}
-                        onChange={(event) => onPatch({
-                          [item.modeKey]: 'custom',
-                          [item.colorKey]: event.target.value.toLowerCase(),
-                        } as Partial<RoomVisualFxSettings>)}
-                      />
+                      <Tooltip content={item.label} side="top">
+                        <input
+                          type="color"
+                          className="lyric-color-picker"
+                          value={color}
+                          aria-label={item.label}
+                          disabled={mode !== 'custom'}
+                          onChange={(event) => onPatch({
+                            [item.modeKey]: 'custom',
+                            [item.colorKey]: event.target.value.toLowerCase(),
+                          } as Partial<RoomVisualFxSettings>)}
+                        />
+                      </Tooltip>
                       <div className="fx-color-row-label">
                         {item.label}
                         <small>{mode === 'custom' ? color.toUpperCase() : '封面取色'}</small>
@@ -717,13 +720,15 @@ export default function ImmersiveFxSettingsPanel({
 
               <FxSectionLabel>歌单架外观</FxSectionLabel>
               <div className={`lyric-color-row ${dragging ? 'pointer-events-none invisible' : ''}`}>
-                <input
-                  type="color"
-                  className="lyric-color-picker"
-                  value={value.shelfAccentColor}
-                  title="歌单架颜色"
-                  onChange={(e) => onPatch({ shelfAccentColor: e.target.value.toLowerCase() })}
-                />
+                <Tooltip content="歌单架颜色" side="top">
+                  <input
+                    type="color"
+                    className="lyric-color-picker"
+                    value={value.shelfAccentColor}
+                    aria-label="歌单架颜色"
+                    onChange={(e) => onPatch({ shelfAccentColor: e.target.value.toLowerCase() })}
+                  />
+                </Tooltip>
                 <div className="fx-color-row-label">
                   歌单架颜色
                   <small>{value.shelfAccentColor}</small>

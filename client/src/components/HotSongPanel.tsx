@@ -3,6 +3,7 @@ import { Flame, Plus, Loader2 } from 'lucide-react';
 import type { SearchResult } from '../types';
 import { songKey } from '../api/music';
 import { useVirtualListWindow } from '../hooks/useVirtualListWindow';
+import { isHostPageHidden } from '../hooks/useVisualRenderPolicy';
 import {
   type HotRankSource,
   getNeteaseHotToplist,
@@ -315,7 +316,7 @@ export default memo(function HotSongPanel({
     let timer: number | undefined;
     if (source === 'platform') {
       timer = window.setInterval(() => {
-        if (document.hidden) return;
+        if (isHostPageHidden()) return;
         void load(true);
       }, 30_000);
     }

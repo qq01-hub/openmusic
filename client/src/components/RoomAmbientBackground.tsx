@@ -8,6 +8,7 @@ import { syncGalaxyHandGestureMode } from './galaxy/lib/galaxyHandGesture';
 import AmbientCoverLayers from './AmbientCoverLayers';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
 import { LOCAL_BACKGROUND_MEDIA_REF, readLocalBackgroundMedia } from '../lib/localBackgroundMedia';
+import { isHostPageHidden, subscribeHostVisibility } from '../hooks/useVisualRenderPolicy';
 
 const GalaxyBackground = lazyWithRetry(() => import('./galaxy/GalaxyBackground3D'), 'GalaxyBackground3D');
 const FoliaBackground = lazyWithRetry(() => import('./immersive/FoliaBackground'), 'FoliaBackground');
@@ -113,12 +114,15 @@ export default memo(function RoomAmbientBackground({
     const syncVideoVisibility = () => {
       const video = localVideoRef.current;
       if (!video) return;
-      void video.play().catch(() => undefined);
+      if (isHostPageHidden()) {
+        video.pause();
+      } else {
+        void video.play().catch(() => undefined);
+      }
     };
     syncVideoVisibility();
-    document.addEventListener('visibilitychange', syncVideoVisibility);
-    return () => document.removeEventListener('visibilitychange', syncVideoVisibility);
-  }, [localMedia?.type]);
+    return subscribeHostVisibility(syncVideoVisibility);
+  }, [localMedia?.type, localMedia?.url]);
 
   const showGalaxyShader = shaderPreset !== undefined;
   const hasCustomMedia = Boolean(bgStyle.media && (localMedia?.url || bgStyle.media !== LOCAL_BACKGROUND_MEDIA_REF));

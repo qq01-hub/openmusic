@@ -17,6 +17,7 @@ const localSources = new WeakMap<HTMLAudioElement, LocalAudioSource>();
 const sourceRecoveries = new WeakMap<HTMLAudioElement, Promise<void>>();
 const recoveryListeners = new WeakSet<HTMLAudioElement>();
 let downloadChain: Promise<void> = Promise.resolve();
+let databasePromise: Promise<IDBDatabase | null> | null = null;
 
 /** 不含用户、房间、queueId 或临时签名，同一设备按平台、歌曲和实际音质复用 */
 export function songAudioCacheKey(song: Pick<Song, 'id' | 'source'>, quality?: string): string {
@@ -25,12 +26,14 @@ export function songAudioCacheKey(song: Pick<Song, 'id' | 'source'>, quality?: s
 
 function openDatabase(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
-  return new Promise((resolve) => {
+  if (databasePromise) return databasePromise;
+  const pending = new Promise<IDBDatabase | null>((resolve) => {
     let settled = false;
     const finish = (db: IDBDatabase | null) => {
       if (settled) { db?.close(); return; }
       settled = true;
       clearTimeout(timer);
+      if (!db && databasePromise === pending) databasePromise = null;
       resolve(db);
     };
     // 隐私模式、升级阻塞或磁盘故障不能阻塞正常在线播放
@@ -43,8 +46,15 @@ function openDatabase(): Promise<IDBDatabase | null> {
         db.createObjectStore(META_STORE, { keyPath: 'key' });
       };
       request.onsuccess = () => {
-        request.result.onversionchange = () => request.result.close();
-        finish(request.result);
+        const db = request.result;
+        db.onversionchange = () => {
+          if (databasePromise === pending) databasePromise = null;
+          db.close();
+        };
+        db.onclose = () => {
+          if (databasePromise === pending) databasePromise = null;
+        };
+        finish(db);
       };
       request.onerror = () => finish(null);
       request.onblocked = () => finish(null);
@@ -52,6 +62,8 @@ function openDatabase(): Promise<IDBDatabase | null> {
       finish(null);
     }
   });
+  databasePromise = pending;
+  return pending;
 }
 
 export async function getCachedSongAudio(key: string): Promise<Blob | null> {
@@ -90,9 +102,36 @@ export async function getCachedSongAudio(key: string): Promise<Blob | null> {
       tx.onabort = tx.onerror = () => { clearTimeout(timer); resolve(null); };
     });
   } catch {
+    databasePromise = null;
     return null;
-  } finally {
-    db.close();
+  }
+}
+
+async function hasValidCachedSongAudio(db: IDBDatabase, key: string): Promise<boolean> {
+  try {
+    return await new Promise<boolean>((resolve) => {
+      const tx = db.transaction([AUDIO_STORE, META_STORE], 'readonly');
+      let exists = false;
+      const timer = setTimeout(() => { tx.abort(); resolve(false); }, 500);
+      const metadata = tx.objectStore(META_STORE);
+      const audio = tx.objectStore(AUDIO_STORE);
+      const request = metadata.get(key);
+      request.onsuccess = () => {
+        const meta = request.result as CacheMetadata | undefined;
+        if (!meta || !Number.isFinite(meta.createdAt) || Date.now() - meta.createdAt > CACHE_TTL_MS || meta.size <= 0 || meta.size > MAX_SONG_BYTES) {
+          return;
+        }
+        const audioCheck = typeof audio.getKey === 'function' ? audio.getKey(key) : audio.get(key);
+        audioCheck.onsuccess = () => {
+          exists = audioCheck.result !== undefined && audioCheck.result !== null;
+        };
+      };
+      tx.oncomplete = () => { clearTimeout(timer); resolve(!rejectedKeys.has(key) && exists); };
+      tx.onabort = tx.onerror = () => { clearTimeout(timer); resolve(false); };
+    });
+  } catch {
+    databasePromise = null;
+    return false;
   }
 }
 
@@ -156,7 +195,12 @@ async function downloadAudio(url: string, signal: AbortSignal): Promise<Blob | n
         await reader.cancel();
         return null;
       }
-      chunks.push(value.slice().buffer);
+      const chunk = value.buffer instanceof ArrayBuffer
+        && value.byteOffset === 0
+        && value.byteLength === value.buffer.byteLength
+        ? value.buffer
+        : value.slice().buffer;
+      chunks.push(chunk);
     }
   } finally {
     reader.releaseLock();
@@ -180,7 +224,7 @@ export function cacheSongAudio(key: string, url: string, signal?: AbortSignal): 
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, 60_000);
     try {
-      if (controller.signal.aborted || await getCachedSongAudio(key)) return;
+      if (controller.signal.aborted || await hasValidCachedSongAudio(db, key)) return;
       const blob = await downloadAudio(url, controller.signal);
       if (blob) await storeAudio(db, key, blob, controller.signal);
     } catch {
@@ -188,12 +232,11 @@ export function cacheSongAudio(key: string, url: string, signal?: AbortSignal): 
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
-      db.close();
     }
   }).finally(() => pendingDownloads.delete(key));
   pendingDownloads.set(key, task);
   // 同时最多下载一首，限制整曲缓冲占用和带宽竞争
-  downloadChain = task;
+  downloadChain = task.catch(() => undefined);
   return task;
 }
 
@@ -205,8 +248,8 @@ async function discardAudio(key: string): Promise<void> {
     tx.objectStore(AUDIO_STORE).delete(key);
     tx.objectStore(META_STORE).delete(key);
     await new Promise<void>((resolve) => { tx.oncomplete = tx.onabort = tx.onerror = () => resolve(); });
-  } finally {
-    db.close();
+  } catch {
+    databasePromise = null;
   }
 }
 

@@ -75,8 +75,21 @@ export function useVirtualListWindow(
       syncWindow();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
+    let resizeRafId = 0;
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          if (resizeRafId) return;
+          resizeRafId = window.requestAnimationFrame(() => {
+            resizeRafId = 0;
+            syncWindow();
+          });
+        })
+      : null;
+    resizeObserver?.observe(el);
     return () => {
       el.removeEventListener('scroll', onScroll);
+      resizeObserver?.disconnect();
+      if (resizeRafId) window.cancelAnimationFrame(resizeRafId);
     };
   }, [count, minVirtualCount, scrollRef, syncWindow]);
 

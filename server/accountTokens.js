@@ -190,14 +190,24 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
     return { deviceKeyId: deviceKey ? hash(JSON.stringify(deviceKey)) : null, deviceMigrationRequired: !deviceKey, sessionId: sid, accessToken, refreshToken, expiresAt: expiresAt * 1000, refreshExpiresAt: refreshExpiresAt * 1000 };
   }
 
+  function parseSessionRecord(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    try {
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   async function inspect(token) {
     const claims = await verifiedClaims(token);
     if (!claims) return null;
     return run(async (client) => {
       const raw = await client.get(familyKey(claims.sid));
       if (!raw) return null;
-      const record = JSON.parse(raw);
-      if (record.version !== 2 || record.userId !== claims.sub || record.expiresAt <= timestamp() || claims.exp > record.expiresAt) return null;
+      const record = parseSessionRecord(raw);
+      if (!record || record.version !== 2 || record.userId !== claims.sub || record.expiresAt <= timestamp() || claims.exp > record.expiresAt) return null;
       const account = await getAccount(record.userId);
       if (!account) return null;
       return { account, createdAt: record.createdAt * 1000, expiresAt: claims.exp * 1000, refreshExpiresAt: record.expiresAt * 1000, sessionId: claims.sid, deviceMigrationRequired: !record.deviceKey, deviceKeyId: record.deviceKey ? hash(JSON.stringify(normalizeDeviceKey(record.deviceKey))) : null, deviceKey: record.deviceKey };
@@ -212,7 +222,10 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
     const sid = claims?.sid || renewal.sid;
     const raw = await run(client => client.get(familyKey(sid)));
     if (!raw) throw invalid();
-    const account = await getAccount(claims?.sub || JSON.parse(raw).userId);
+    const record = parseSessionRecord(raw);
+    const accountId = claims?.sub || record?.userId;
+    if (!accountId) throw invalid();
+    const account = await getAccount(accountId);
     if (!account) throw invalid();
     const result = await run(client => evalRedisScript(client, `
       local raw = redis.call('GET', KEYS[1])
@@ -297,8 +310,8 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
       if (!parsed) throw invalid();
       const raw = await run(client => client.get(familyKey(parsed.sid)));
       if (!raw) throw invalid();
-      const record = JSON.parse(raw);
-      if (record.expiresAt <= timestamp()) throw invalid();
+      const record = parseSessionRecord(raw);
+      if (!record || record.expiresAt <= timestamp()) throw invalid();
       if (record.refreshHash !== parsed.hash && !await run(client => client.hExists(spentKey(parsed.sid), parsed.hash))) throw invalid();
       current = { sessionId: parsed.sid, deviceKey: record.deviceKey };
     } else if (!current) current = await inspect(token);
@@ -334,9 +347,9 @@ export function createAccountTokenService({ getStore, getAccount, now = () => Da
       const values = await batch.exec();
       return ids.flatMap((id, index) => {
         if (!values[index * 2]) return [];
-        const record = JSON.parse(values[index * 2]);
-        if (record.userId !== userId || record.expiresAt <= timestamp()) return [];
-        const activity = values[index * 2 + 1];
+        const record = parseSessionRecord(values[index * 2]);
+        if (!record || record.userId !== userId || record.expiresAt <= timestamp()) return [];
+        const activity = values[index * 2 + 1] || {};
         return [{ id, createdAt: record.createdAt * 1000, expiresAt: record.expiresAt * 1000,
           deviceBound: Boolean(record.deviceKey), lastIp: activity.lastIp || '', lastSeenAt: Number(activity.lastSeenAt || 0),
           ipCount: Number(activity.ipCount || 0), ipChanges: Number(activity.ipChanges || 0), sharedAt: Number(activity.sharedAt || 0) }];

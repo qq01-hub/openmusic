@@ -37,7 +37,10 @@ export async function searchNeteasePlaylists({
     ),
   );
 
-  if (!response.ok) return { ok: false, status: response.status };
+  if (!response.ok) {
+    await response.body?.cancel?.().catch(() => {});
+    return { ok: false, status: response.status };
+  }
   const playlists = normalizeNeteasePlaylistSearchItems(await response.json());
   const start = (page - 1) * limit;
   return {

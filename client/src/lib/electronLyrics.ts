@@ -13,6 +13,7 @@ export interface ElectronLyricsAPI {
   closeLyrics: () => Promise<void>;
   updateLyrics: (payload: ElectronLyricsPayload) => void;
   onLyricsClosed?: (listener: () => void) => () => void;
+  onWindowVisibilityChange?: (listener: (visible: boolean) => void) => () => void;
 }
 
 export function isElectronRenderer(value: unknown = typeof window !== 'undefined' ? window : undefined): boolean {

@@ -34,6 +34,7 @@ function ProgressBar({
     const bar = barRef.current;
     if (!bar) return 0;
     const rect = bar.getBoundingClientRect();
+    if (!(rect.width > 0)) return 0;
     return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
   }, []);
 
@@ -52,7 +53,12 @@ function ProgressBar({
   };
 
   useEffect(() => {
-    if (disabled) return;
+    if (disabled) {
+      dragging.current = false;
+      clearReleaseTimer();
+      setDragProgress(null);
+      return;
+    }
     const onMove = (e: PointerEvent) => {
       if (!dragging.current) return;
       setDragProgress(calcRatio(e.clientX) * 100);
@@ -70,11 +76,19 @@ function ProgressBar({
       }, 1200);
       if (duration > 0) onSeek(ratio * duration);
     };
+    const onCancel = () => {
+      if (!dragging.current) return;
+      dragging.current = false;
+      clearReleaseTimer();
+      setDragProgress(null);
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onCancel);
     return () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onCancel);
     };
   }, [calcRatio, clearReleaseTimer, disabled, duration, onSeek]);
 
@@ -92,6 +106,8 @@ function ProgressBar({
   const scale = displayProgress / 100;
 
   if (variant === 'mineradio') {
+    const safeDuration = Math.max(0, Math.round(duration));
+    const currentSeconds = Math.round((displayProgress / 100) * safeDuration);
     return (
       <div
         ref={barRef}
@@ -99,8 +115,8 @@ function ProgressBar({
         onPointerDown={handlePointerDown}
         role="slider"
         aria-valuemin={0}
-        aria-valuemax={duration}
-        aria-valuenow={displayProgress}
+        aria-valuemax={safeDuration}
+        aria-valuenow={currentSeconds}
       >
         <div className="mineradio-progress-fill" style={{ width: `${displayProgress}%` }} />
         <div className="mineradio-progress-thumb" style={{ left: `${displayProgress}%` }} aria-hidden />

@@ -42,6 +42,17 @@ export default function TvDisplay() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const bgProbeRef = useRef<HTMLImageElement>(null);
+  const roomPasswordRef = useRef<{ roomId: string; password?: string }>({ roomId: '', password: undefined });
+
+  const urlPassword = parseRoomPasswordFromSearch(location.search);
+  if (roomId && urlPassword) {
+    roomPasswordRef.current = { roomId, password: urlPassword };
+  } else if (roomId && roomPasswordRef.current.roomId !== roomId) {
+    roomPasswordRef.current = { roomId, password: getStoredRoomPassword(roomId) };
+  }
+  const effectivePassword = roomId
+    ? (urlPassword || (roomPasswordRef.current.roomId === roomId ? roomPasswordRef.current.password : undefined) || getStoredRoomPassword(roomId))
+    : undefined;
 
   useEffect(() => {
     ensureTvChromeInit();
@@ -96,41 +107,45 @@ export default function TvDisplay() {
     let cancelled = false;
     let redirectTimer: number | undefined;
 
-    const password =
-      parseRoomPasswordFromSearch(location.search)
-      || getStoredRoomPassword(roomId);
-
-    joinRoom(roomId, '电视机', password, { readOnly: true }).then((res) => {
+    joinRoom(roomId, '电视机', effectivePassword, { readOnly: true }).then((res) => {
       if (cancelled) return;
       if (!res.success) {
         setJoinError(res.error || '无法连接房间');
         redirectTimer = window.setTimeout(() => navigate('/'), 3000);
         return;
       }
-      rememberRoomPassword(roomId, password);
+      rememberRoomPassword(roomId, effectivePassword);
     });
     return () => {
       cancelled = true;
       if (redirectTimer) window.clearTimeout(redirectTimer);
     };
-  }, [roomId, location.search, joinRoom, navigate]);
+  }, [roomId, effectivePassword, joinRoom, navigate]);
 
   useEffect(() => {
     setBgLoaded(false);
-  }, [current?.id, current?.source]);
+  }, [current?.id, current?.source, signedCoverUrl]);
 
   useEffect(() => {
-    if (!current) return;
+    if (!current || !signedCoverUrl) {
+      setBgLoaded(false);
+      return;
+    }
     const img = bgProbeRef.current;
     if (!img) return;
     if (img.complete) {
-      setBgLoaded(true);
+      setBgLoaded(img.naturalWidth > 0);
       return;
     }
     const onLoad = () => setBgLoaded(true);
+    const onError = () => setBgLoaded(false);
     img.addEventListener('load', onLoad);
-    return () => img.removeEventListener('load', onLoad);
-  }, [current?.id, current?.source]);
+    img.addEventListener('error', onError);
+    return () => {
+      img.removeEventListener('load', onLoad);
+      img.removeEventListener('error', onError);
+    };
+  }, [current?.id, current?.source, signedCoverUrl]);
 
   let content: React.ReactNode;
 
@@ -163,14 +178,16 @@ export default function TvDisplay() {
     content = (
       <div className="fixed inset-0 z-50 flex flex-col animate-fade-in select-none">
         <TvCoverBackground coverUrl={coverUrl} loaded={bgLoaded} />
-        <img
-          ref={bgProbeRef}
-          src={signedCoverUrl || ''}
-          alt=""
-          className="hidden"
-          loading="eager"
-          decoding="async"
-        />
+        {signedCoverUrl && (
+          <img
+            ref={bgProbeRef}
+            src={signedCoverUrl}
+            alt=""
+            className="hidden"
+            loading="eager"
+            decoding="async"
+          />
+        )}
 
         <div className="relative z-10 flex-1 flex flex-col lg:flex-row overflow-hidden min-h-0 px-4 lg:px-12 gap-4 lg:gap-10">
           <div className="flex-shrink-0 lg:flex-1 flex items-center justify-center py-2 lg:py-8">

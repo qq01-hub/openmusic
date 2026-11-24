@@ -107,7 +107,7 @@ function qfaceDevCachePlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const pathname = req.url?.split('?')[0] || '';
-        if (pathname.startsWith('/qface/')) {
+        if (pathname.startsWith('/qface/') || pathname.startsWith('/desk-pet/')) {
           // 开发态也给长缓存，避免刷新表情弹框反复拉 APNG
           res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         }
@@ -159,8 +159,6 @@ export default defineConfig({
           if (!id.includes('node_modules')) {
             if (
               id.includes('/components/Chat')
-              || id.includes('/components/Sticker')
-              || id.includes('/components/UserSticker')
               || id.includes('/lib/chat')
               || id.includes('/lib/qface')
               || id.includes('/stores/chat')

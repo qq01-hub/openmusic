@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Volume2 } from 'lucide-react';
 import { useAudioStore } from '../stores/audioStore';
@@ -12,10 +12,15 @@ interface Props {
 export default function AudioUnlockOverlay({ tvMode = false }: Props) {
   const needsAudioUnlock = useAudioStore((s) => s.needsAudioUnlock);
   const retryPlayback = useAudioStore((s) => s.retryPlayback);
-  const room = useRoomStore((s) => s.room);
+  const hasCurrentTrack = useRoomStore((s) => Boolean(s.room?.current));
   const handlingRef = useRef(false);
+  const unlockTimerRef = useRef<number | null>(null);
 
-  if (!needsAudioUnlock || !room?.current || !shouldShowUnlockOverlay()) return null;
+  useEffect(() => () => {
+    if (unlockTimerRef.current !== null) window.clearTimeout(unlockTimerRef.current);
+  }, []);
+
+  if (!needsAudioUnlock || !hasCurrentTrack || !shouldShowUnlockOverlay()) return null;
 
   const handleUnlock = () => {
     if (handlingRef.current) return;
@@ -23,7 +28,9 @@ export default function AudioUnlockOverlay({ tvMode = false }: Props) {
     markAudioSessionUnlocked();
     useAudioStore.getState().setNeedsAudioUnlock(false);
     retryPlayback?.(true);
-    window.setTimeout(() => {
+    if (unlockTimerRef.current !== null) window.clearTimeout(unlockTimerRef.current);
+    unlockTimerRef.current = window.setTimeout(() => {
+      unlockTimerRef.current = null;
       handlingRef.current = false;
     }, 400);
   };

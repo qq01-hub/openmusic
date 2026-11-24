@@ -1989,7 +1989,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
     resetRoomAudioPriority();
   }, []);
   useEffect(() => {
-    onWeChatBridgeReady(() => {
+    return onWeChatBridgeReady(() => {
       const liveRoom = useRoomStore.getState().room;
       if (isRoomAudioTakenOver()) return;
       if (!controller.audio.src || !liveRoom?.current || !liveRoom.isPlaying) return;
@@ -2066,7 +2066,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         window.clearTimeout(readyRecoveryTimer.current);
         readyRecoveryTimer.current = null;
       }
+      if (stallRetryTimer.current) {
+        window.clearTimeout(stallRetryTimer.current);
+        stallRetryTimer.current = null;
+      }
       if (activeAudioRuntime?.audioRef === audioRef) {
+        if (localRecoveryTimer) {
+          window.clearTimeout(localRecoveryTimer);
+          localRecoveryTimer = null;
+          localRecoveryQueueId = null;
+        }
         activeAudioRuntime = null;
       }
     };

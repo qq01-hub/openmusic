@@ -221,7 +221,9 @@ export function scheduleBeatMapAnalysis(
       const controller = new AbortController();
       analysisAbort = controller;
       try {
-        const map = await analyzeAudioBeatMap(audioUrl, { signal: controller.signal });
+        const activeSrc = audio.currentSrc || audio.src || '';
+        const effectiveUrl = activeSrc.startsWith('blob:') ? activeSrc : audioUrl;
+        const map = await analyzeAudioBeatMap(effectiveUrl, { signal: controller.signal });
         if (token !== beatMapToken || controller.signal.aborted || !map) return;
         applyBeatMap(key, map);
       } catch (err) {

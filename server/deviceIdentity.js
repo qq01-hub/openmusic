@@ -17,6 +17,13 @@ export function sanitizeDeviceId(value) {
   return /^[a-zA-Z0-9_-]{8,64}$/.test(id) ? id : '';
 }
 
+function findFirstOtherKey(iterable, skipKey) {
+  for (const candidate of iterable) {
+    if (candidate !== skipKey) return candidate;
+  }
+  return null;
+}
+
 function rememberDeviceBinding(deviceId, userId) {
   const did = sanitizeDeviceId(deviceId);
   const uid = sanitizeDeviceId(userId);
@@ -25,25 +32,39 @@ function rememberDeviceBinding(deviceId, userId) {
   const previousUser = deviceToUser.get(did);
   if (previousUser && previousUser !== uid) {
     const prevSet = userToDevices.get(previousUser);
-    prevSet?.delete(did);
+    if (prevSet) {
+      prevSet.delete(did);
+      if (prevSet.size === 0) userToDevices.delete(previousUser);
+    }
   }
 
+  deviceToUser.delete(did);
   deviceToUser.set(did, uid);
-  if (!userToDevices.has(uid)) userToDevices.set(uid, new Set());
-  const devices = userToDevices.get(uid);
+  let devices = userToDevices.get(uid);
+  if (!devices) {
+    devices = new Set();
+    userToDevices.set(uid, devices);
+  }
+  devices.delete(did);
   devices.add(did);
   while (devices.size > MAX_DEVICES_PER_USER) {
-    const oldest = Array.from(devices).find((item) => item !== did);
+    const oldest = findFirstOtherKey(devices, did);
     if (!oldest) break;
     devices.delete(oldest);
     deviceToUser.delete(oldest);
   }
   while (deviceToUser.size > MAX_MEMORY_DEVICE_BINDINGS) {
-    const oldest = Array.from(deviceToUser.keys()).find((item) => item !== did);
+    const oldest = findFirstOtherKey(deviceToUser.keys(), did);
     if (!oldest) break;
     const oldestUser = deviceToUser.get(oldest);
     deviceToUser.delete(oldest);
-    userToDevices.get(oldestUser)?.delete(oldest);
+    if (oldestUser) {
+      const oldestSet = userToDevices.get(oldestUser);
+      if (oldestSet) {
+        oldestSet.delete(oldest);
+        if (oldestSet.size === 0) userToDevices.delete(oldestUser);
+      }
+    }
   }
 }
 

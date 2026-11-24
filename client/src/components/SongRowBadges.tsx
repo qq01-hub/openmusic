@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import type { SearchResult } from '../types';
+import { songKey } from '../api/music';
+import { getSongKeyIndex } from '../lib/songKeyIndex';
 import { useRoomStore } from '../stores/roomStore';
 import { useSongHistoryStore } from '../stores/songHistoryStore';
-import { getRoomSongStatus } from '../lib/roomSongStatus';
 import SourceBadge from './SourceBadge';
 
 const BADGE_CLASS =
@@ -45,15 +46,28 @@ function SongRowBadgesContent({
 }
 
 function SongRowBadgesConnected({ song }: Pick<Props, 'song'>) {
-  const room = useRoomStore((s) => s.room);
-  const historySongs = useSongHistoryStore((s) => s.songs);
-  const historyRoomId = useSongHistoryStore((s) => s.roomId);
-  const historyLoaded = useSongHistoryStore((s) => s.loaded);
-
-  const { inQueue, played } = useMemo(
-    () => getRoomSongStatus(room, song),
-    [room, song.id, song.source, historySongs, historyRoomId, historyLoaded],
-  );
+  const key = songKey(song);
+  const { roomId, inQueue, inRoomHistory } = useRoomStore(useShallow((s) => {
+    const currentRoom = s.room;
+    if (!currentRoom) return { roomId: '', inQueue: false, inRoomHistory: false };
+    const inQueueNow = Boolean(
+      (currentRoom.current && songKey(currentRoom.current) === key)
+      || getSongKeyIndex(currentRoom.queue).has(key),
+    );
+    return {
+      roomId: currentRoom.id,
+      inQueue: inQueueNow,
+      inRoomHistory: !inQueueNow && Boolean(currentRoom.songHistory?.length && getSongKeyIndex(currentRoom.songHistory).has(key)),
+    };
+  }));
+  const { hasClientHistory, inClientHistory } = useSongHistoryStore(useShallow((s) => {
+    const matched = Boolean(roomId && s.roomId === roomId && s.songs.length > 0);
+    return {
+      hasClientHistory: matched,
+      inClientHistory: matched && getSongKeyIndex(s.songs).has(key),
+    };
+  }));
+  const played = !inQueue && (hasClientHistory ? inClientHistory : inRoomHistory);
 
   return <SongRowBadgesContent song={song} inQueue={inQueue} played={played} />;
 }

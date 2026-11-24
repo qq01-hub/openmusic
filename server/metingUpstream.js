@@ -152,6 +152,7 @@ function syncUpstreams() {
       disabled: Boolean(old?.disabled),
       lastProbeAt: reuseHealth ? old.lastProbeAt : 0,
       lastProbeOk: reuseHealth ? old.lastProbeOk : null,
+      probing: Boolean(old?.probing),
     };
   });
   upstreamSignature = signature;
@@ -682,6 +683,8 @@ let probeTick = 0;
 let probeTimer = null;
 
 async function probeUpstream(upstream) {
+  if (upstream.probing) return;
+  upstream.probing = true;
   upstream.lastProbeAt = Date.now();
   try {
     const built = buildUpstreamRequest(upstream, PROBE_QUERY);
@@ -701,6 +704,8 @@ async function probeUpstream(upstream) {
   } catch (err) {
     markFailure(upstream, err, PROBE_QUERY);
     upstream.lastProbeOk = false;
+  } finally {
+    upstream.probing = false;
   }
 }
 

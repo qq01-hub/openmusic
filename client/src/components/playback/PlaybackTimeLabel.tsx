@@ -1,7 +1,7 @@
 import { memo } from 'react';
 import { formatDuration } from '../../api/music';
 import type { QueueItem, Song } from '../../types';
-import { useSmoothPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
+import { useSmoothPlaybackSecond } from '../../hooks/useSmoothPlaybackTime';
 import { useTrackDuration, clampPlaybackTime } from '../../hooks/useTrackDuration';
 
 type TrackLike = Pick<QueueItem, 'duration' | 'id' | 'source' | 'queueId'> | Pick<Song, 'duration' | 'id' | 'source'> | null;
@@ -25,7 +25,7 @@ function PlaybackElapsedTime({
   showDuration = true,
   mode,
 }: Props) {
-  const currentTime = useSmoothPlaybackTime();
+  const currentTime = useSmoothPlaybackSecond();
   const duration = useTrackDuration(song);
   const displayTime = clampPlaybackTime(currentTime, duration);
   const resolvedMode = mode ?? (showDuration ? 'both' : 'elapsed');

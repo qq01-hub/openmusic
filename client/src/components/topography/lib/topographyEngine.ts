@@ -109,20 +109,19 @@ export class TopographyAudioEngine {
   private frameCacheId = 0;
   private currentFrameId = 0;
   private cachedFrameData: TopographyAudioData | null = null;
+  private invalidationScheduled = false;
+  private cachedAtMs = 0;
 
   private beatDetectorState = createBeatDetectorState();
   private lastKickAnalysisTime = 0;
 
-  constructor() {
-    this.scheduleFrameCacheInvalidation();
-  }
-
-  private scheduleFrameCacheInvalidation() {
-    if (typeof requestAnimationFrame !== 'function') return;
+  private scheduleNextFrameInvalidation() {
+    if (this.invalidationScheduled || typeof requestAnimationFrame !== 'function') return;
+    this.invalidationScheduled = true;
     requestAnimationFrame(() => {
-      this.currentFrameId++;
+      this.invalidationScheduled = false;
+      this.currentFrameId += 1;
       this.cachedFrameData = null;
-      this.scheduleFrameCacheInvalidation();
     });
   }
 
@@ -283,7 +282,13 @@ export class TopographyAudioEngine {
 
 
   public getAudioData(): TopographyAudioData {
-    if (this.cachedFrameData && this.frameCacheId === this.currentFrameId) {
+    const canUseRaf = typeof requestAnimationFrame === 'function';
+    const nowForCache = canUseRaf ? 0 : performance.now();
+    if (
+      this.cachedFrameData
+      && this.frameCacheId === this.currentFrameId
+      && (canUseRaf || nowForCache - this.cachedAtMs < 12)
+    ) {
       return { ...this.cachedFrameData };
     }
 
@@ -292,6 +297,8 @@ export class TopographyAudioEngine {
       const fallback = { ...this.smoothedData };
       this.cachedFrameData = fallback;
       this.frameCacheId = this.currentFrameId;
+      this.cachedAtMs = performance.now();
+      this.scheduleNextFrameInvalidation();
       return { ...fallback };
     }
 
@@ -464,6 +471,8 @@ export class TopographyAudioEngine {
     const snapshot = { ...this.smoothedData };
     this.cachedFrameData = snapshot;
     this.frameCacheId = this.currentFrameId;
+    this.cachedAtMs = now;
+    this.scheduleNextFrameInvalidation();
     return { ...snapshot };
   }
 }

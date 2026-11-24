@@ -162,7 +162,10 @@ async function writeRedisCache(bucket, data) {
 
 async function fetchFreshToplist() {
   const res = await fetchWithTimeout(TOPLIST_URL, { headers: NETEASE_HEADERS });
-  if (!res.ok) throw new Error(`热榜请求失败 (${res.status})`);
+  if (!res.ok) {
+    await res.body?.cancel?.().catch(() => {});
+    throw new Error(`热榜请求失败 (${res.status})`);
+  }
 
   const html = await res.text();
   const songs = parseToplistHtml(html);

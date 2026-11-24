@@ -1423,24 +1423,38 @@ app.get('/api/site-seo', (_req, res) => {
 });
 
 /** 前端更新检测：走 /api 绕过 EdgeOne 静态缓存；no-store 防中间层缓存 */
-app.get('/api/app-version', (_req, res) => {
+const APP_VERSION_STAT_TTL_MS = 2_000;
+let appVersionCache = { checkedAt: 0, mtimeMs: -1, payload: null };
+
+app.get('/api/app-version', async (_req, res) => {
   res.set('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
   res.set('Pragma', 'no-cache');
   const versionPath = path.join(clientDist, 'version.json');
+  const now = Date.now();
+  if (appVersionCache.payload && now - appVersionCache.checkedAt < APP_VERSION_STAT_TTL_MS) {
+    return res.json(appVersionCache.payload);
+  }
   try {
-    if (fs.existsSync(versionPath)) {
-      const raw = fs.readFileSync(versionPath, 'utf8');
-      const data = JSON.parse(raw);
-      return res.json({
-        buildId: String(data.buildId || data.version || ''),
-        version: String(data.version || data.buildId || ''),
-        notes: Array.isArray(data.notes) ? data.notes : [],
-        builtAt: data.builtAt || null,
-        forcePrompt: data.forcePrompt === true,
-      });
+    const stat = await fs.promises.stat(versionPath);
+    if (appVersionCache.payload && appVersionCache.mtimeMs === stat.mtimeMs) {
+      appVersionCache.checkedAt = now;
+      return res.json(appVersionCache.payload);
     }
+    const raw = await fs.promises.readFile(versionPath, 'utf8');
+    const data = JSON.parse(raw);
+    const payload = {
+      buildId: String(data.buildId || data.version || ''),
+      version: String(data.version || data.buildId || ''),
+      notes: Array.isArray(data.notes) ? data.notes : [],
+      builtAt: data.builtAt || null,
+      forcePrompt: data.forcePrompt === true,
+    };
+    appVersionCache = { checkedAt: now, mtimeMs: stat.mtimeMs, payload };
+    return res.json(payload);
   } catch (err) {
-    console.error('app-version read error:', err?.message || err);
+    if (err?.code !== 'ENOENT') {
+      console.error('app-version read error:', err?.message || err);
+    }
   }
   return res.json({ buildId: 'dev', version: 'dev', notes: [], builtAt: null, forcePrompt: false });
 });
@@ -3969,7 +3983,7 @@ app.post('/api/rooms', async (req, res) => {
     creatorDeviceId: createDeviceId,
   });
   if (idleOwned) {
-    const reused = reuseIdleOwnedRoom(idleOwned.id, { name, password });
+    const reused = await reuseIdleOwnedRoom(idleOwned.id, { name, password });
     if (reused?.error) {
       return res.status(400).json({ error: reused.error });
     }
@@ -4044,7 +4058,7 @@ app.post('/api/rooms', async (req, res) => {
     });
   }
 
-  const room = createRoom({
+  const room = await createRoom({
     name,
     password,
     creatorId,
@@ -4393,8 +4407,61 @@ try {
 
 app.get(['/', '/index.html'], sendSpaIndexHtml);
 
+const MAX_PRECOMPRESSED_CACHE_ENTRIES = 1024;
+const PRECOMPRESSED_MISS_TTL_MS = 30_000;
+const PRECOMPRESSED_MUTABLE_TTL_MS = 60_000;
+
+function acceptsContentEncoding(acceptEncodingHeader, encoding) {
+  const tokens = String(acceptEncodingHeader || '').toLowerCase().split(',');
+  for (const rawToken of tokens) {
+    const parts = rawToken.trim().split(';');
+    if (parts[0]?.trim() !== encoding) continue;
+    const qParam = parts.slice(1).find((part) => part.trim().startsWith('q='));
+    if (!qParam) return true;
+    const qValue = Number(qParam.trim().slice(2));
+    return Number.isFinite(qValue) && qValue > 0;
+  }
+  return false;
+}
+
 function servePrecompressedStatic(baseDir, urlPattern, resolveCacheControl) {
-  return (req, res, next) => {
+  const statCache = new Map();
+  const resolvedBaseDir = path.resolve(baseDir);
+  async function resolvePrecompressedMeta(originalPath, immutable) {
+    const cached = statCache.get(originalPath);
+    const now = Date.now();
+    if (cached && (!cached.expiresAt || cached.expiresAt > now)) {
+      return cached;
+    }
+    const [origStat, brStat, gzStat] = await Promise.all([
+      fs.promises.stat(originalPath).catch(() => null),
+      fs.promises.stat(`${originalPath}.br`).catch(() => null),
+      fs.promises.stat(`${originalPath}.gz`).catch(() => null),
+    ]);
+    const hasCompressed = Boolean(brStat?.isFile() || gzStat?.isFile());
+    const meta = origStat?.isFile()
+      ? {
+          br: brStat?.isFile() ? { path: `${originalPath}.br`, size: brStat.size, etag: `W/"${brStat.size}-${Math.trunc(brStat.mtimeMs)}-br"` } : null,
+          gz: gzStat?.isFile() ? { path: `${originalPath}.gz`, size: gzStat.size, etag: `W/"${gzStat.size}-${Math.trunc(gzStat.mtimeMs)}-gz"` } : null,
+          expiresAt: !hasCompressed
+            ? now + PRECOMPRESSED_MISS_TTL_MS
+            : immutable
+              ? 0
+              : now + PRECOMPRESSED_MUTABLE_TTL_MS,
+        }
+      : { br: null, gz: null, expiresAt: now + PRECOMPRESSED_MISS_TTL_MS };
+    if (statCache.size >= MAX_PRECOMPRESSED_CACHE_ENTRIES) {
+      const oldest = statCache.keys().next().value;
+      if (oldest !== undefined) statCache.delete(oldest);
+    }
+    statCache.set(originalPath, meta);
+    return meta;
+  }
+  return async (req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      next();
+      return;
+    }
     let relative = '';
     try {
       relative = decodeURIComponent(req.path).replace(/^\/+/, '');
@@ -4402,23 +4469,36 @@ function servePrecompressedStatic(baseDir, urlPattern, resolveCacheControl) {
       next();
       return;
     }
-    if (!relative || relative.includes('..') || !urlPattern.test(relative)) {
+    if (!relative || relative.includes('\0') || relative.includes('\\') || relative.includes('..') || !urlPattern.test(relative)) {
       next();
       return;
     }
-    const originalPath = path.join(baseDir, relative);
+    const originalPath = path.resolve(resolvedBaseDir, relative);
+    const relativeToBase = path.relative(resolvedBaseDir, originalPath);
+    if (!relativeToBase || relativeToBase.startsWith('..') || path.isAbsolute(relativeToBase)) {
+      next();
+      return;
+    }
     const acceptEncoding = String(req.headers['accept-encoding'] || '').toLowerCase();
-    const candidates = acceptEncoding.includes('br')
-      ? [[`${originalPath}.br`, 'br'], [`${originalPath}.gz`, 'gzip']]
-      : acceptEncoding.includes('gzip')
-        ? [[`${originalPath}.gz`, 'gzip']]
-        : [];
-    const selected = candidates.find(([filePath]) => fs.existsSync(filePath));
-    if (!selected || !fs.existsSync(originalPath)) {
+    const wantsBr = acceptsContentEncoding(acceptEncoding, 'br');
+    const wantsGzip = acceptsContentEncoding(acceptEncoding, 'gzip');
+    if (!wantsBr && !wantsGzip) {
       next();
       return;
     }
-    const [compressedPath, encoding] = selected;
+    const cacheControl = resolveCacheControl(relative);
+    const immutable = typeof cacheControl === 'string' && /\bimmutable\b/i.test(cacheControl);
+    const meta = await resolvePrecompressedMeta(originalPath, immutable);
+    const selected = wantsBr && meta.br
+      ? [meta.br, 'br']
+      : wantsGzip && meta.gz
+        ? [meta.gz, 'gzip']
+        : null;
+    if (!selected) {
+      next();
+      return;
+    }
+    const [fileMeta, encoding] = selected;
     const contentType = relative.endsWith('.css')
       ? 'text/css; charset=utf-8'
       : relative.endsWith('.json')
@@ -4431,12 +4511,30 @@ function servePrecompressedStatic(baseDir, urlPattern, resolveCacheControl) {
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Encoding', encoding);
     res.setHeader('Vary', 'Accept-Encoding');
-    const cacheControl = resolveCacheControl(relative);
+    res.setHeader('ETag', fileMeta.etag);
+    res.setHeader('Content-Length', String(fileMeta.size));
     if (cacheControl) res.setHeader('Cache-Control', cacheControl);
     if (baseDir.endsWith('sonic-workshop')) {
       res.setHeader('Access-Control-Allow-Origin', 'null');
     }
-    fs.createReadStream(compressedPath).on('error', next).pipe(res);
+    if (req.headers['if-none-match'] === fileMeta.etag) {
+      res.status(304).end();
+      return;
+    }
+    if (req.method === 'HEAD') {
+      res.status(200).end();
+      return;
+    }
+    const stream = fs.createReadStream(fileMeta.path);
+    res.once('close', () => {
+      if (!res.writableEnded) stream.destroy();
+    });
+    stream.on('error', (err) => {
+      statCache.delete(originalPath);
+      if (!res.headersSent) next(err);
+      else res.destroy(err);
+    });
+    stream.pipe(res);
   };
 }
 
@@ -4479,7 +4577,7 @@ app.use(express.static(clientDist, {
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
       return;
     }
-    if (rel.startsWith('qface/') || rel.startsWith('vendor/')) {
+    if (rel.startsWith('qface/') || rel.startsWith('vendor/') || rel.startsWith('desk-pet/')) {
       // QQ 表情几乎不变，浏览器长缓存 1 年
       res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     }
@@ -4579,49 +4677,110 @@ async function verifySocketAccountSession(socket) {
   }
 }
 
+const SOCKET_SESSION_SWEEP_MS = 30_000;
+const SOCKET_SESSION_VERIFY_TIMEOUT_MS = 5_000;
+const SOCKET_SESSION_VERIFY_CONCURRENCY = 20;
+const monitoredSocketSessions = new Map();
+let socketSessionSweepTimer = null;
+let socketSessionSweepRunning = false;
+
+function socketSessionMonitorKey(socket) {
+  if (socket.data.anonymous) return `anon:${socket.data.accountId || socket.id}`;
+  return `sess:${socketToAccountSessionKey.get(socket.id) || socket.id}`;
+}
+
+async function sweepMonitoredSocketSessions() {
+  if (socketSessionSweepRunning || monitoredSocketSessions.size === 0) return;
+  socketSessionSweepRunning = true;
+  try {
+    const groups = new Map();
+    for (const entry of monitoredSocketSessions.values()) {
+      if (entry.stopped) continue;
+      const key = socketSessionMonitorKey(entry.socket);
+      let list = groups.get(key);
+      if (!list) {
+        list = [];
+        groups.set(key, list);
+      }
+      list.push(entry);
+    }
+    const entries = [...groups.values()];
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < entries.length) {
+        const group = entries[cursor++];
+        const sample = group.find((item) => !item.stopped);
+        if (!sample) continue;
+        let deadline;
+        try {
+          const session = await Promise.race([
+            verifySocketAccountSession(sample.socket),
+            new Promise((resolve) => {
+              deadline = setTimeout(() => resolve({ valid: false, unavailable: true }), SOCKET_SESSION_VERIFY_TIMEOUT_MS);
+            }),
+          ]);
+          if (session.humanRequired) {
+            for (const item of group) item.stop();
+            suspendAccountSocketsForHumanChallenge(sample.socket.data.accountId);
+          } else if (!session.valid) {
+            const reason = session.unavailable ? 'session_unavailable' : 'session_invalidated';
+            for (const item of group) item.invalidate(reason);
+          }
+        } catch {
+          for (const item of group) item.invalidate('session_unavailable');
+        } finally {
+          clearTimeout(deadline);
+        }
+      }
+    };
+    const workerCount = Math.min(SOCKET_SESSION_VERIFY_CONCURRENCY, entries.length);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  } finally {
+    socketSessionSweepRunning = false;
+    if (monitoredSocketSessions.size === 0 && socketSessionSweepTimer) {
+      clearInterval(socketSessionSweepTimer);
+      socketSessionSweepTimer = null;
+    }
+  }
+}
+
 function monitorSocketAccountSession(socket) {
-  let stopped = false;
-  let checking = false;
-  let deadline;
   let expiry;
-  let interval;
-  const stop = () => {
-    stopped = true;
-    clearTimeout(expiry);
-    clearTimeout(deadline);
-    clearInterval(interval);
+  const entry = {
+    socket,
+    stopped: false,
+    stop() {
+      entry.stopped = true;
+      clearTimeout(expiry);
+      monitoredSocketSessions.delete(socket.id);
+      if (monitoredSocketSessions.size === 0 && socketSessionSweepTimer) {
+        clearInterval(socketSessionSweepTimer);
+        socketSessionSweepTimer = null;
+      }
+    },
+    invalidate(reason) {
+      if (entry.stopped) return;
+      entry.stop();
+      incrementMetric('account_socket_rejected_total', { reason });
+      socket.emit('account_session_invalidated', { reason, stopReconnect: false });
+      socket.disconnect(true);
+    },
   };
-  const invalidate = (reason) => {
-    if (stopped) return;
-    stop();
-    incrementMetric('account_socket_rejected_total', { reason });
-    socket.emit('account_session_invalidated', { reason, stopReconnect: false });
-    socket.disconnect(true);
-  };
-  socket.once('disconnect', stop);
+  socket.once('disconnect', entry.stop);
   const expiresAt = socket.data.accountExpiresAt;
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
-    invalidate('session_expired');
+    entry.invalidate('session_expired');
     return;
   }
-  expiry = setTimeout(() => invalidate('session_expired'), expiresAt - Date.now());
-  interval = setInterval(async () => {
-    if (stopped || checking) return;
-    checking = true;
-    deadline = setTimeout(() => invalidate('session_unavailable'), 5000);
-    try {
-      const session = await verifySocketAccountSession(socket);
-      if (session.humanRequired) { stop(); suspendAccountSocketsForHumanChallenge(socket.data.accountId); }
-      else if (!session.valid) invalidate(session.unavailable ? 'session_unavailable' : 'session_invalidated');
-    } catch {
-      invalidate('session_unavailable');
-    } finally {
-      clearTimeout(deadline);
-      checking = false;
-    }
-  }, 30000);
+  expiry = setTimeout(() => entry.invalidate('session_expired'), expiresAt - Date.now());
   expiry.unref?.();
-  interval.unref?.();
+  monitoredSocketSessions.set(socket.id, entry);
+  if (!socketSessionSweepTimer) {
+    socketSessionSweepTimer = setInterval(() => {
+      void sweepMonitoredSocketSessions();
+    }, SOCKET_SESSION_SWEEP_MS);
+    socketSessionSweepTimer.unref?.();
+  }
 }
 
 ({ handleLinuxdoAdminCallback, handleGithubAdminCallback } = mountAdminApi(app, {
@@ -5474,7 +5633,7 @@ io.on('connection', (socket) => {
     callback?.({ success: true, room: getViewerRoomPayload(socket, roomId) });
   });
 
-  socket.on('set_room_lock', ({ locked, password }, callback) => {
+  socket.on('set_room_lock', async ({ locked, password }, callback) => {
     if (rejectReadOnly(socket, callback)) return;
     if (rejectRateLimited(socket, limitSocketAction, 'set_room_lock', callback)) return;
 
@@ -5484,7 +5643,7 @@ io.on('connection', (socket) => {
       return;
     }
 
-    const result = setRoomLock(roomId, getSocketUserId(socket), { locked, password }, socket.id);
+    const result = await setRoomLock(roomId, getSocketUserId(socket), { locked, password }, socket.id);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;
@@ -7561,35 +7720,51 @@ io.on('connection', (socket) => {
   monitorSocketAccountSession(socket);
 });
 
-let autoAdvanceRunning = false;
+const AUTO_ADVANCE_CONCURRENCY = 8;
+const autoAdvanceInFlight = new Set();
 
 async function checkAutoAdvance() {
-  if (autoAdvanceRunning) return;
-  autoAdvanceRunning = true;
+  const candidates = [];
+  for (const roomId of listRoomIds()) {
+    if (autoAdvanceInFlight.has(roomId)) continue;
+    const internal = getRoomInternal(roomId);
+    if (!internal || internal.users.size === 0) continue;
+    const needsRetry = (internal.randomLoading || internal.randomError) && !internal.current;
+    const needsAdvance = Boolean(internal.isPlaying && internal.current);
+    if (needsRetry || needsAdvance) candidates.push(roomId);
+  }
+  if (candidates.length === 0) return;
 
-  try {
-    for (const roomId of listRoomIds()) {
-      const internal = getRoomInternal(roomId);
-      if (!internal || internal.users.size === 0) continue;
-
-      if ((internal.randomLoading || internal.randomError) && !internal.current) {
-        const retried = await retryStuckRandomLoading(roomId);
-        if (retried) {
-          emitRoomAndPlayback(roomId, retried);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < candidates.length) {
+      const roomId = candidates[cursor++];
+      if (autoAdvanceInFlight.has(roomId)) continue;
+      autoAdvanceInFlight.add(roomId);
+      try {
+        const internal = getRoomInternal(roomId);
+        if (!internal || internal.users.size === 0) continue;
+        if ((internal.randomLoading || internal.randomError) && !internal.current) {
+          const retried = await retryStuckRandomLoading(roomId);
+          if (retried) {
+            emitRoomAndPlayback(roomId, retried);
+          }
+          continue;
         }
-        continue;
-      }
-
-      if (!internal.isPlaying || !internal.current) continue;
-
-      const advanced = await advancePlaybackIfEnded(roomId);
-      if (advanced) {
-        emitRoomAndPlayback(roomId, advanced);
+        if (!internal.isPlaying || !internal.current) continue;
+        const advanced = await advancePlaybackIfEnded(roomId);
+        if (advanced) {
+          emitRoomAndPlayback(roomId, advanced);
+        }
+      } catch (err) {
+        console.error(`自动切歌检查失败 (${roomId}):`, err?.message || err);
+      } finally {
+        autoAdvanceInFlight.delete(roomId);
       }
     }
-  } finally {
-    autoAdvanceRunning = false;
-  }
+  };
+  const workerCount = Math.min(AUTO_ADVANCE_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
 }
 
 setInterval(() => {

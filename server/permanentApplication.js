@@ -37,6 +37,7 @@ const applications = new Map();
 const noticesByUser = new Map();
 
 let hydrated = false;
+let hydratePromise = null;
 
 function normalizeRoomId(roomId) {
   return String(roomId || '').trim().toUpperCase();
@@ -48,41 +49,52 @@ function normalizeText(value, max = 200) {
 
 async function ensureHydrated() {
   if (hydrated) return;
-  hydrated = true;
+  if (hydratePromise) return hydratePromise;
   const redis = getRedisClient();
   if (!redis) return;
 
-  try {
-    const rawApps = await redis.hGetAll(APPLICATIONS_REDIS_KEY);
-    for (const [roomId, raw] of Object.entries(rawApps || {})) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed?.status === 'pending' && parsed.roomId) {
-          applications.set(normalizeRoomId(parsed.roomId), parsed);
+  hydratePromise = (async () => {
+    let ok = true;
+    try {
+      const rawApps = await redis.hGetAll(APPLICATIONS_REDIS_KEY);
+      for (const [, raw] of Object.entries(rawApps || {})) {
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed?.status === 'pending' && parsed.roomId) {
+            applications.set(normalizeRoomId(parsed.roomId), parsed);
+          }
+        } catch {
+          // ignore bad entry
         }
-      } catch {
-        // ignore bad entry
       }
+    } catch (err) {
+      ok = false;
+      console.error('permanent-application: 读取申请列表失败:', err?.message || err);
     }
-  } catch (err) {
-    console.error('permanent-application: 读取申请列表失败:', err?.message || err);
-  }
 
-  try {
-    const rawNotices = await redis.hGetAll(NOTICES_REDIS_KEY);
-    for (const [userId, raw] of Object.entries(rawNotices || {})) {
-      try {
-        const list = JSON.parse(raw);
-        if (Array.isArray(list) && list.length) {
-          noticesByUser.set(userId, list.filter((item) => item?.id && item?.roomId));
+    try {
+      const rawNotices = await redis.hGetAll(NOTICES_REDIS_KEY);
+      for (const [userId, raw] of Object.entries(rawNotices || {})) {
+        try {
+          const list = JSON.parse(raw);
+          if (Array.isArray(list) && list.length) {
+            noticesByUser.set(userId, list.filter((item) => item?.id && item?.roomId));
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
+    } catch (err) {
+      ok = false;
+      console.error('permanent-application: 读取决策通知失败:', err?.message || err);
     }
-  } catch (err) {
-    console.error('permanent-application: 读取决策通知失败:', err?.message || err);
-  }
+
+    if (ok) hydrated = true;
+  })().finally(() => {
+    hydratePromise = null;
+  });
+
+  return hydratePromise;
 }
 
 async function persistApplication(roomId, application) {

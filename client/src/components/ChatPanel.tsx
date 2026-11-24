@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageCircle, MicOff, Trash2 } from 'lucide-react';
 import { useRoomStore } from '../stores/roomStore';
@@ -17,8 +17,9 @@ import ChatInputBar, { type ChatInputBarHandle, type PendingChatImage } from './
 import ChatMutePicker from './ChatMutePicker';
 import ConfirmModal from './ConfirmModal';
 import { useChatStore } from '../stores/chatStore';
-import RoomAiDesktopPet from './RoomAiDesktopPet';
 import { compactReplyText, compactSongCardsText } from '../lib/chatPanelUtils';
+
+const RoomAiDesktopPet = lazy(() => import('./RoomAiDesktopPet'));
 import { useChatRoomMeta, useChatRoomSlice } from '../lib/chatRoomSlice';
 import { fetchChatUploadEnabled } from '../api/chatImage';
 import { fetchStickerSearchEnabled } from '../api/stickerSearch';
@@ -404,13 +405,15 @@ export default memo(function ChatPanel({ className = '' }: { className?: string 
 
       <div ref={chatOverlayHostRef} className="pointer-events-none absolute inset-0 z-30" />
 
-      {!immersiveMode && (
-        <RoomAiDesktopPet
-          botName={roomAi?.botName || '小肥鱼'}
-          deskPetEnabled={roomAi ? roomAi.deskPetEnabled === true : roomAiDeskPetEnabledFlag === true}
-          aiEnabled={Boolean(roomAi?.enabled)}
-          onQuickWake={(botName) => inputBarRef.current?.applyReplyMention(botName)}
-        />
+      {!immersiveMode && (roomAi ? roomAi.deskPetEnabled === true : roomAiDeskPetEnabledFlag === true) && (
+        <Suspense fallback={null}>
+          <RoomAiDesktopPet
+            botName={roomAi?.botName || '小肥鱼'}
+            deskPetEnabled
+            aiEnabled={Boolean(roomAi?.enabled)}
+            onQuickWake={(botName) => inputBarRef.current?.applyReplyMention(botName)}
+          />
+        </Suspense>
       )}
 
       <ChatReactionPicker

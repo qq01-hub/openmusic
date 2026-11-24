@@ -10,12 +10,12 @@ import {
 } from './lib/galaxyHandGestureStartup';
 import { drawHandSkeleton } from './lib/drawHandSkeleton';
 import { patchRoomVisualFx, roomVisualFxLive } from '../../lib/roomVisualFxLive';
+import { isHostPageHidden, subscribeHostVisibility } from '../../hooks/useVisualRenderPolicy';
 
 /** Mineradio #gesture-hud + #hand-canvas — 仅 HUD 绘制；启停由 roomVisualFxLive 统一调度 */
 export default function GestureHudOverlay() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
-  const idleTimerRef = useRef(0);
 
   useEffect(() => {
     const unsubFail = onGalaxyGestureModeChange((mode, failed) => {
@@ -50,23 +50,30 @@ export default function GestureHudOverlay() {
     resize();
     window.addEventListener('resize', resize);
 
-    const scheduleDraw = (immediate = false) => {
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = 0;
-      }
-      cancelAnimationFrame(rafRef.current);
-      if (immediate) {
-        rafRef.current = requestAnimationFrame(draw);
-      } else {
-        idleTimerRef.current = window.setTimeout(() => {
-          idleTimerRef.current = 0;
-          rafRef.current = requestAnimationFrame(draw);
-        }, 120);
+    const clearHudAndCanvas = () => {
+      const hudEl = document.getElementById('gesture-hud');
+      if (hudEl) hudEl.classList.remove('show');
+      canvas.classList.remove('show');
+      if (canvas.width > 0 && canvas.height > 0) {
+        ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
       }
     };
 
+    const stopLoop = () => {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = 0;
+    };
+
+    const scheduleDraw = () => {
+      if (rafRef.current) return;
+      if (isHostPageHidden()) return;
+      if (!galaxyHandGestureLive.active && !isGalaxyHandGestureStarting()) return;
+      rafRef.current = requestAnimationFrame(draw);
+    };
+
     const draw = () => {
+      rafRef.current = 0;
+      if (isHostPageHidden()) return;
       const live = galaxyHandGestureLive;
       const starting = isGalaxyHandGestureStarting();
       const hud = live.hud;
@@ -76,20 +83,8 @@ export default function GestureHudOverlay() {
       const confirmEl = document.getElementById('gesture-confirm');
 
       if (!live.active && !starting) {
-        if (hudEl) hudEl.classList.remove('show');
-        canvas.classList.remove('show');
-        const W = window.innerWidth;
-        const H = window.innerHeight;
-        if (canvas.width > 0 && canvas.height > 0) {
-          ctx.clearRect(0, 0, W, H);
-        }
-        scheduleDraw(false);
+        clearHudAndCanvas();
         return;
-      }
-
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = 0;
       }
 
       if (starting) {
@@ -126,16 +121,30 @@ export default function GestureHudOverlay() {
       rafRef.current = requestAnimationFrame(draw);
     };
 
-    const unsubStartup = subscribeGalaxyHandGestureStartup(() => {
-      scheduleDraw(true);
-    });
-    rafRef.current = requestAnimationFrame(draw);
+    const syncRunning = () => {
+      if (isHostPageHidden()) {
+        stopLoop();
+        return;
+      }
+      if (galaxyHandGestureLive.active || isGalaxyHandGestureStarting()) {
+        scheduleDraw();
+      } else {
+        stopLoop();
+        clearHudAndCanvas();
+      }
+    };
+
+    const unsubStartup = subscribeGalaxyHandGestureStartup(syncRunning);
+    const unsubMode = onGalaxyGestureModeChange(syncRunning);
+    const unsubVisibility = subscribeHostVisibility(syncRunning);
+    syncRunning();
 
     return () => {
       window.removeEventListener('resize', resize);
-      cancelAnimationFrame(rafRef.current);
-      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      stopLoop();
       unsubStartup();
+      unsubMode();
+      unsubVisibility();
     };
   }, []);
   return (

@@ -34,6 +34,9 @@ import {
 import { resolveTopographyTheme } from './lib/topographyThemeResolve';
 import { getParticleRootGroup } from '../galaxy/lib/galaxyGestureRotation';
 
+const METEOR_COLOR_SCRATCH = new THREE.Color();
+const WHITE_COLOR = new THREE.Color(0xffffff);
+
 export default function TopographyMapScene() {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const mapMaterial = useMemo(() => createTopographyMapMaterial(), []);
@@ -143,6 +146,7 @@ export default function TopographyMapScene() {
      p.maxLife = 0.5 + Math.random() * 0.5;
      p.scale = Math.random() * 0.6 + 0.2;
      particleIndex.current = (idx + 1) % MAX_PARTICLES;
+     particlesDirtyRef.current = true;
   };
   
   const dummyMatrix = useMemo(() => new THREE.Matrix4(), []);
@@ -179,6 +183,8 @@ export default function TopographyMapScene() {
   })));
   const meteorIndex = useRef(0);
   const lastMeteorSpawnTime = useRef(-Infinity);
+  const meteorsDirtyRef = useRef(true);
+  const particlesDirtyRef = useRef(true);
 
   const addMeteor = (strength: number) => {
      const now = clock.getElapsedTime();
@@ -199,6 +205,7 @@ export default function TopographyMapScene() {
      m.strength = strength;
      
      meteorIndex.current = (idx + 1) % MAX_METEORS;
+     meteorsDirtyRef.current = true;
   };
   
   // Wire up audio topographyEngine beat detection
@@ -406,12 +413,13 @@ export default function TopographyMapScene() {
 
     // Update meteors
     if (meteorMeshRef.current) {
-        
         if (meteorMatRef.current) {
-            const mColor = new THREE.Color().copy(t.uWarmCore).lerp(new THREE.Color(0xffffff), 0.7);
-            meteorMatRef.current.color.lerp(mColor, lerpSpeed);
+            METEOR_COLOR_SCRATCH.copy(t.uWarmCore).lerp(WHITE_COLOR, 0.7);
+            meteorMatRef.current.color.lerp(METEOR_COLOR_SCRATCH, lerpSpeed);
         }
 
+        if (meteorsDirtyRef.current) {
+        let activeMeteors = 0;
         for (let i = 0; i < MAX_METEORS; i++) {
             const m = meteorsRef.current[i];
             if (!m.active) {
@@ -420,30 +428,38 @@ export default function TopographyMapScene() {
                 dummyMatrix.compose(dummyPosition, dummyRotation, dummyScale);
                 meteorMeshRef.current.setMatrixAt(i, dummyMatrix);
             } else {
+                activeMeteors += 1;
                 m.y -= m.speed * 60 * delta; // falling translation (faster)
                 if (m.y <= 0) {
                     m.active = false;
+                    activeMeteors -= 1;
                     addRipple(m.x, m.z, Math.min(m.strength * 1.0, 1.2), true); // miniature white wave impact
                     // Impact particles
                     for (let pIndex = 0; pIndex < 10; pIndex++) spawnParticle(m.x, 0.5, m.z, m.speed * 1.5);
+                    dummyPosition.set(0, -1000, 0);
+                    dummyScale.set(0, 0, 0);
+                } else {
+                    dummyPosition.set(m.x, m.y, m.z);
+                    dummyScale.set(1.5, 1.5, 1.5);
+                    if (Math.random() > 0.3) {
+                       spawnParticle(m.x, m.y, m.z, m.speed * 0.2); // trail
+                    }
                 }
-                dummyPosition.set(m.x, Math.max(0, m.y), m.z);
-                dummyScale.set(1.5, 1.5, 1.5);
                 dummyMatrix.compose(dummyPosition, dummyRotation, dummyScale);
                 meteorMeshRef.current.setMatrixAt(i, dummyMatrix);
-                
-                if (m.y > 0 && Math.random() > 0.3) {
-                   spawnParticle(m.x, m.y, m.z, m.speed * 0.2); // trail
-                }
             }
         }
         meteorMeshRef.current.instanceMatrix.needsUpdate = true;
+        meteorsDirtyRef.current = activeMeteors > 0;
+        }
     }
     
     // Update particles
     if (particleMeshRef.current) {
-        if (particleMatRef.current) particleMatRef.current.color.copy(meteorMatRef.current ? meteorMatRef.current.color : new THREE.Color(0xffffff));
+        if (particleMatRef.current) particleMatRef.current.color.copy(meteorMatRef.current ? meteorMatRef.current.color : WHITE_COLOR);
         
+        if (particlesDirtyRef.current) {
+        let activeParticles = 0;
         for (let i = 0; i < MAX_PARTICLES; i++) {
            const p = particlesRef.current[i];
            if (!p.active) {
@@ -455,8 +471,10 @@ export default function TopographyMapScene() {
                 p.life += delta;
                 if (p.life >= p.maxLife) {
                     p.active = false;
+                    dummyPosition.set(0, -1000, 0);
                     dummyScale.set(0, 0, 0);
                 } else {
+                    activeParticles += 1;
                     p.x += p.vx * delta * 10;
                     p.y += p.vy * delta * 10;
                     p.z += p.vz * delta * 10;
@@ -470,6 +488,8 @@ export default function TopographyMapScene() {
         }
         if (particleMeshRef.current) {
           particleMeshRef.current.instanceMatrix.needsUpdate = true;
+        }
+        particlesDirtyRef.current = activeParticles > 0;
         }
     }
   });

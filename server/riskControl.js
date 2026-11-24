@@ -36,6 +36,24 @@ function accountId(value) {
   return String(value);
 }
 
+function safeJsonParse(raw, fallback = null) {
+  if (typeof raw !== 'string' || !raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+}
+
+function parseJsonRecords(entries) {
+  const parsed = [];
+  for (const raw of entries) {
+    const item = safeJsonParse(raw, null);
+    if (item && typeof item === 'object' && !Array.isArray(item)) parsed.push(item);
+  }
+  return parsed;
+}
+
 function cleanIp(value) {
   const ip = String(value || '').trim();
   if (isIP(ip) === 4) return ip;
@@ -89,6 +107,9 @@ const RULES = [
   { id: 'emptyResponseRate', label: '已记录响应至少 100 次且空结果达到 80%，需先排除上游故障', threshold: 80, points: 0 },
   { id: 'musicOnlyBurst', label: '当日请求达到 1000 且音乐请求占比超过 90%', threshold: 1, points: 10 },
 ];
+const RULES_JSON = JSON.stringify(RULES);
+const POLICY_CACHE_TTL_MS = 3_000;
+const MAX_ENSURED_DAILY_KEYS = 10_000;
 
 export function evaluateRisk(input = {}) {
   const operationCounts = MUSIC_OPERATIONS.map(key => Math.max(0, Number(input.operations?.[key]) || 0));
@@ -426,6 +447,9 @@ const MUSIC_RESPONSE_SCRIPT = `
     `;
 
 export function createRiskControl({ getStore = getRedisClient, prefix = 'openmusic:risk:v1:', now = () => Date.now() } = {}) {
+  let cachedPolicy = null;
+  let cachedPolicyAt = 0;
+  const ensuredDailyKeys = new Set();
   function store() {
     const client = getStore();
     if (!client) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风控存储暂不可用，请稍后重试');
@@ -445,6 +469,9 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
   const roomDayKey = (id, timestamp) => `${prefix}room-day:${id}:${dateKey(timestamp)}`;
 
   async function ensureDaily(id, timestamp) {
+    const date = dateKey(timestamp);
+    const cacheKey = `${id}:${date}`;
+    if (ensuredDailyKeys.has(cacheKey)) return;
     const start = Math.floor((timestamp + CHINA_OFFSET) / DAY) * DAY - CHINA_OFFSET;
     const legacy = [start, start + DAY - 1].map(value => `${prefix}day:${id}:${new Date(value).toISOString().slice(0, 10)}`);
     await run(client => evalRedisScript(client, `
@@ -470,7 +497,9 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('SET', KEYS[5], imported and 'utc-conservative' or 'native', 'EX', 3024000)
       redis.call('EXPIRE', KEYS[1], 3024000)
       return 1
-    `, { keys: [dailyKey(id, timestamp), ...legacy, `${prefix}china-day-cutover`, `${dailyKey(id, timestamp)}:seeded`], arguments: [dateKey(timestamp)] }));
+    `, { keys: [dailyKey(id, timestamp), ...legacy, `${prefix}china-day-cutover`, `${dailyKey(id, timestamp)}:seeded`], arguments: [date] }));
+    if (ensuredDailyKeys.size >= MAX_ENSURED_DAILY_KEYS) ensuredDailyKeys.clear();
+    ensuredDailyKeys.add(cacheKey);
   }
 
   async function refreshScore(id) {
@@ -496,7 +525,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
           redis.call('ZADD', KEYS[10], score, ARGV[3]); redis.call('ZADD', KEYS[11], seen, ARGV[3]); redis.call('ZREM', KEYS[12], ARGV[3]); redis.call('ZREM', KEYS[13], ARGV[3])
         end
         return score
-      `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}recent-ips:${id}`, ipKey(address), `${prefix}clients:${id}`, roomDayKey(id, timestamp), `${prefix}scores`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [String(timestamp), JSON.stringify(RULES), id, address, expected] }));
+      `, { keys: [profileKey(id), dailyKey(id, timestamp), `${prefix}recent-ips:${id}`, ipKey(address), `${prefix}clients:${id}`, roomDayKey(id, timestamp), `${prefix}scores`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [String(timestamp), RULES_JSON, id, address, expected] }));
       if (result !== -1) {
         if (!Number.isSafeInteger(result) || result < 0 || result > 100) throw new RiskControlError('RISK_STORAGE_UNAVAILABLE', '风险评分暂不可用，请稍后重试');
         return result;
@@ -505,17 +534,27 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     throw new RiskControlError('RISK_SCORE_CONFLICT', '账户活动变化较快，请稍后重试');
   }
 
-  async function getPolicy() {
+  async function getPolicy({ fresh = false } = {}) {
+    const timestamp = now();
+    if (!fresh && cachedPolicy && timestamp - cachedPolicyAt < POLICY_CACHE_TTL_MS && timestamp >= cachedPolicyAt) {
+      return { ...cachedPolicy };
+    }
     return run(async (client) => {
       const raw = await client.get(`${prefix}policy`);
-      return raw ? validateRiskPolicy(JSON.parse(raw)) : { ...DEFAULT_POLICY };
+      const parsed = safeJsonParse(raw, null);
+      const policy = parsed ? validateRiskPolicy(parsed) : { ...DEFAULT_POLICY };
+      cachedPolicy = { ...policy };
+      cachedPolicyAt = timestamp;
+      return policy;
     });
   }
 
   async function setPolicy(input) {
     validateRiskPolicy(input);
-    const policy = validateRiskPolicy({ ...await getPolicy(), ...input });
+    const policy = validateRiskPolicy({ ...await getPolicy({ fresh: true }), ...input });
     await run((client) => client.set(`${prefix}policy`, JSON.stringify(policy)));
+    cachedPolicy = { ...policy };
+    cachedPolicyAt = now();
     return policy;
   }
 
@@ -558,9 +597,14 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const category = ['api', 'music', 'socket', 'image'].includes(kind) ? kind : 'api';
     const action = ['url', 'search', 'pic', 'lrc', 'song', 'playlist', 'search_playlist', 'fm', 'source', 'media', 'qr', 'queue', 'refresh'].includes(operation) ? operation : category;
     const [policy] = await Promise.all([getPolicy(), ensureDaily(id, timestamp)]);
+    const addressHash = createHash('sha256').update(address).digest('hex');
+    const addressIpKey = `${prefix}ip:${addressHash}`;
+    const today = dateKey(timestamp);
+    const minuteBucket = Math.floor(timestamp / 60_000);
+    const runtimeConfig = getRuntimeConfig();
     const options = {
-      keys: [profileKey(id), `${prefix}accounts`, `${prefix}minute:${id}:${Math.floor(timestamp / 60_000)}`, dailyKey(id, timestamp), `${ipKey(address)}:minute:${Math.floor(timestamp / 60_000)}`, `${prefix}recent-ips:${id}`, ipKey(address), `${prefix}scores`, `${prefix}alert:${id}`, `${prefix}status:`, `${prefix}events`, roomDayKey(id, timestamp), `${prefix}clients:${id}`, `${prefix}client-info:${id}`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}request-ips:${id}`, `${prefix}request-ip-counts:${id}`, `${prefix}request-events:${id}`, `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}today-requests:${dateKey(timestamp)}`, `${prefix}url-window:${id}:${createHash('sha256').update(address).digest('hex')}`],
-      arguments: [String(timestamp), id, address, category, String(account.email || ''), String(account.createdAt || 0), ...[policy.minuteLimit, policy.dayLimit, policy.musicMinuteLimit, policy.musicDayLimit, policy.ipMinuteLimit].map(String), action, music ? '1' : '0', JSON.stringify(RULES), ...clientSignal(userAgent), requestId, ['direct', 'trusted_proxy'].includes(network.route) ? network.route : '', network.untrustedForwarded === true ? '1' : '0', /curl|wget|python-requests|httpx|headless|selenium|playwright|okhttp|dart\//iu.test(String(userAgent).slice(0, 320)) ? '1' : '0', getRuntimeConfig().riskChallengeEnabled && getRuntimeConfig().turnstileEnabled ? '1' : '0', dateKey(timestamp), randomBytes(24).toString('hex'), String(eventName || '').replace(/[\r\n\x00-\x1f\x7f]/gu, '').slice(0, 96)],
+      keys: [profileKey(id), `${prefix}accounts`, `${prefix}minute:${id}:${minuteBucket}`, `${prefix}day-cn:${id}:${today}`, `${addressIpKey}:minute:${minuteBucket}`, `${prefix}recent-ips:${id}`, addressIpKey, `${prefix}scores`, `${prefix}alert:${id}`, `${prefix}status:`, `${prefix}events`, `${prefix}room-day:${id}:${today}`, `${prefix}clients:${id}`, `${prefix}client-info:${id}`, `${prefix}music-ips:${id}`, `${prefix}music-ip-changes:${id}`, `${prefix}request-ips:${id}`, `${prefix}request-ip-counts:${id}`, `${prefix}request-events:${id}`, `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}today-requests:${today}`, `${prefix}url-window:${id}:${addressHash}`],
+      arguments: [String(timestamp), id, address, category, String(account.email || ''), String(account.createdAt || 0), ...[policy.minuteLimit, policy.dayLimit, policy.musicMinuteLimit, policy.musicDayLimit, policy.ipMinuteLimit].map(String), action, music ? '1' : '0', RULES_JSON, ...clientSignal(userAgent), requestId, ['direct', 'trusted_proxy'].includes(network.route) ? network.route : '', network.untrustedForwarded === true ? '1' : '0', /curl|wget|python-requests|httpx|headless|selenium|playwright|okhttp|dart\//iu.test(String(userAgent).slice(0, 320)) ? '1' : '0', runtimeConfig.riskChallengeEnabled && runtimeConfig.turnstileEnabled ? '1' : '0', today, randomBytes(24).toString('hex'), String(eventName || '').replace(/[\r\n\x00-\x1f\x7f]/gu, '').slice(0, 96)],
     };
     const result = await run(client => evalRedisScript(client, CONSUME_SCRIPT, {
       ...options, arguments: [...options.arguments.slice(0, -1), riskChallengeChannel(client, prefix), String(policy.urlMinuteLimit), String(policy.urlBurstLimit), options.arguments.at(-1)],
@@ -783,21 +827,53 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       const profile = await client.hGetAll(profileKey(id));
       if (!profile.firstSeenAt) return null;
       const timestamp = now();
-      const [daily, rawIpCount, sharedAccounts, rawAccount, clientCount, roomCount, roomHistoryCount, estimated, unknownIpAt, musicIpCount, musicIpChanges] = await Promise.all([
-        client.hGetAll(dailyKey(id, timestamp)),
-        client.zCount(`${prefix}recent-ips:${id}`, timestamp - DAY, '+inf'),
-        cleanIp(profile.lastNetworkIp || profile.lastRequestIp || profile.lastLoginIp) !== 'unknown' ? client.zCount(ipKey(profile.lastNetworkIp || profile.lastRequestIp || profile.lastLoginIp), timestamp - HISTORY_SEC * 1000, '+inf') : 0,
-        client.get(`openmusic:account:${id}`),
-        client.zCount(`${prefix}clients:${id}`, timestamp - DAY, '+inf'),
-        client.zCard(roomDayKey(id, timestamp)),
-        client.zCount(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf'),
-        client.get(`${dailyKey(id, timestamp)}:seeded`),
-        client.zScore(`${prefix}recent-ips:${id}`, 'unknown'),
-        client.zCount(`${prefix}music-ips:${id}`, timestamp - 600000, '+inf'),
-        client.zCount(`${prefix}music-ip-changes:${id}`, timestamp - 600000, '+inf'),
-      ]);
+      const latestIp = cleanIp(profile.lastNetworkIp || profile.lastRequestIp || profile.lastLoginIp);
+      const hasLatestIp = latestIp !== 'unknown';
+      const todayDailyKey = dailyKey(id, timestamp);
+      let daily;
+      let rawIpCount;
+      let sharedAccounts;
+      let rawAccount;
+      let clientCount;
+      let roomCount;
+      let roomHistoryCount;
+      let estimated;
+      let unknownIpAt;
+      let musicIpCount;
+      let musicIpChanges;
+      if (typeof client.multi === 'function') {
+        const batch = client.multi()
+          .hGetAll(todayDailyKey)
+          .zCount(`${prefix}recent-ips:${id}`, timestamp - DAY, '+inf')
+          .get(`openmusic:account:${id}`)
+          .zCount(`${prefix}clients:${id}`, timestamp - DAY, '+inf')
+          .zCard(roomDayKey(id, timestamp))
+          .zCount(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf')
+          .get(`${todayDailyKey}:seeded`)
+          .zScore(`${prefix}recent-ips:${id}`, 'unknown')
+          .zCount(`${prefix}music-ips:${id}`, timestamp - 600000, '+inf')
+          .zCount(`${prefix}music-ip-changes:${id}`, timestamp - 600000, '+inf');
+        if (hasLatestIp) batch.zCount(ipKey(latestIp), timestamp - HISTORY_SEC * 1000, '+inf');
+        const results = await batch.exec();
+        [daily, rawIpCount, rawAccount, clientCount, roomCount, roomHistoryCount, estimated, unknownIpAt, musicIpCount, musicIpChanges] = results;
+        sharedAccounts = hasLatestIp ? results[10] : 0;
+      } else {
+        [daily, rawIpCount, sharedAccounts, rawAccount, clientCount, roomCount, roomHistoryCount, estimated, unknownIpAt, musicIpCount, musicIpChanges] = await Promise.all([
+          client.hGetAll(todayDailyKey),
+          client.zCount(`${prefix}recent-ips:${id}`, timestamp - DAY, '+inf'),
+          hasLatestIp ? client.zCount(ipKey(latestIp), timestamp - HISTORY_SEC * 1000, '+inf') : 0,
+          client.get(`openmusic:account:${id}`),
+          client.zCount(`${prefix}clients:${id}`, timestamp - DAY, '+inf'),
+          client.zCard(roomDayKey(id, timestamp)),
+          client.zCount(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf'),
+          client.get(`${todayDailyKey}:seeded`),
+          client.zScore(`${prefix}recent-ips:${id}`, 'unknown'),
+          client.zCount(`${prefix}music-ips:${id}`, timestamp - 600000, '+inf'),
+          client.zCount(`${prefix}music-ip-changes:${id}`, timestamp - 600000, '+inf'),
+        ]);
+      }
       const ipCount = rawIpCount - (unknownIpAt !== null && unknownIpAt >= timestamp - DAY ? 1 : 0);
-      const account = rawAccount ? JSON.parse(rawAccount) : null;
+      const account = safeJsonParse(rawAccount, null);
       const counts = Object.fromEntries(Object.entries(daily).map(([name, value]) => [name, Number(value)]));
       const evaluated = evaluateRisk({ musicMinutePeak: counts.musicMinutePeak, untrustedForwarded: counts.untrustedForwarded, automationClientRequests: counts.automationClientRequests, responseUrlOk: counts.response_url_ok, responseTotal: counts.response_total, responseEmpty: counts.response_empty, denied: counts.denied, minutePeak: counts.minutePeak, ipCount, sharedAccounts, musicIpCount, musicIpChanges,
         authFailures: counts.authFailures, clientCount, roomCount, errors: counts.errors,
@@ -811,7 +887,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       }
       return {
         humanChallenge: humanChallengeSnapshot(profile, dateKey(timestamp)),
-        id, email: profile.email || '', status: profile.status || 'normal', tags: JSON.parse(profile.tags || '[]'), note: profile.note || '', reason: profile.reason || '',
+        id, email: profile.email || '', status: profile.status || 'normal', tags: (() => { const parsed = safeJsonParse(profile.tags || '[]', []); return Array.isArray(parsed) ? parsed : []; })(), note: profile.note || '', reason: profile.reason || '',
         createdAt: Number(profile.createdAt || 0), firstSeenAt: Number(profile.firstSeenAt), lastSeenAt: Number(profile.lastSeenAt),
         registrationIp: profile.registrationIp || '', lastLoginIp: profile.lastLoginIp || '', lastRequestIp: profile.lastRequestIp || '', lastLoginAt: Number(profile.lastLoginAt || 0), loginCount: Number(profile.loginCount || 0),
         requests: Number(profile.requests || 0), musicRequests: Number(profile.musicRequests || 0), socketRequests: Number(profile.socketRequests || 0), denied: Number(profile.denied || 0), errors: Number(profile.errors || 0),
@@ -877,7 +953,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
           client.zRange(`${prefix}nicknames:${id}`, now() - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
         ]);
         if (!fields[5]) return null;
-        const account = rawAccount ? JSON.parse(rawAccount) : null;
+        const account = safeJsonParse(rawAccount, null);
         const identity = safeIdentity(account, { nickname: fields[0], email: fields[1] });
         const matched = !account?.deletedAt && matchesRiskAccountName(normalized, account || {}, [fields[0], ...nicknames]);
         const exactIdentity = id === query || identity.roomUserId === query;
@@ -1014,44 +1090,72 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     const result = await summary(id);
     if (!result) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     const timestamp = now();
-    const [ips, logins, days, related, roomIds, clientIds, decisions, policy, legacyDays, nicknames, ipRequests, requestEvents] = await run((client) => Promise.all([
-      client.zRangeWithScores(`${prefix}ips:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE', REV: false }),
-      client.lRange(`${prefix}logins:${id}`, 0, 99),
-      Promise.all(Array.from({ length: 14 }, async (_, index) => ({ date: dateKey(timestamp - index * DAY), ...await client.hGetAll(dailyKey(id, timestamp - index * DAY)) }))),
-      cleanIp(result.networkIp) !== 'unknown' ? client.zRange(ipKey(result.networkIp), '+inf', timestamp - HISTORY_SEC * 1000, { BY: 'SCORE', REV: true, LIMIT: { offset: 0, count: 20 } }) : [],
-      client.zRange(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
-      client.zRangeWithScores(`${prefix}clients:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
-      client.lRange(`${prefix}decisions:${id}`, 0, 99),
-      getPolicy(),
-      Promise.all(Array.from({ length: 14 }, async (_, index) => {
-        const date = new Date(timestamp - index * DAY).toISOString().slice(0, 10);
-        return { date, timeZone: 'UTC', ...await client.hGetAll(`${prefix}day:${id}:${date}`) };
-      })),
-      client.zRangeWithScores(`${prefix}nicknames:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
-      client.hVals(`${prefix}request-ip-counts:${id}`),
-      client.lRange(`${prefix}request-events:${id}`, 0, 199),
-    ]));
+    const cnDates = Array.from({ length: 14 }, (_, index) => dateKey(timestamp - index * DAY));
+    const utcDates = Array.from({ length: 14 }, (_, index) => new Date(timestamp - index * DAY).toISOString().slice(0, 10));
+    const hasNetworkIp = cleanIp(result.networkIp) !== 'unknown';
+    const [policy, detailBatch] = await Promise.all([
+      getPolicy({ fresh: true }),
+      run(async (client) => {
+        if (typeof client.multi === 'function') {
+          const batch = client.multi()
+            .zRangeWithScores(`${prefix}ips:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE', REV: false })
+            .lRange(`${prefix}logins:${id}`, 0, 99)
+            .zRange(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' })
+            .zRangeWithScores(`${prefix}clients:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' })
+            .lRange(`${prefix}decisions:${id}`, 0, 99)
+            .zRangeWithScores(`${prefix}nicknames:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' })
+            .hVals(`${prefix}request-ip-counts:${id}`)
+            .lRange(`${prefix}request-events:${id}`, 0, 199);
+          for (const date of cnDates) batch.hGetAll(`${prefix}day-cn:${id}:${date}`);
+          for (const date of utcDates) batch.hGetAll(`${prefix}day:${id}:${date}`);
+          if (hasNetworkIp) {
+            batch.zRange(ipKey(result.networkIp), '+inf', timestamp - HISTORY_SEC * 1000, { BY: 'SCORE', REV: true, LIMIT: { offset: 0, count: 20 } });
+          }
+          const values = await batch.exec();
+          const [ips, logins, roomIds, clientIds, decisions, nicknames, ipRequests, requestEvents] = values;
+          const days = cnDates.map((date, index) => ({ date, ...(values[8 + index] || {}) }));
+          const legacyDays = utcDates.map((date, index) => ({ date, timeZone: 'UTC', ...(values[22 + index] || {}) }));
+          const related = hasNetworkIp ? (values[36] || []) : [];
+          return { ips, logins, days, related, roomIds, clientIds, decisions, legacyDays, nicknames, ipRequests, requestEvents };
+        }
+        const [ips, logins, days, related, roomIds, clientIds, decisions, legacyDays, nicknames, ipRequests, requestEvents] = await Promise.all([
+          client.zRangeWithScores(`${prefix}ips:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE', REV: false }),
+          client.lRange(`${prefix}logins:${id}`, 0, 99),
+          Promise.all(cnDates.map(async (date) => ({ date, ...await client.hGetAll(`${prefix}day-cn:${id}:${date}`) }))),
+          hasNetworkIp ? client.zRange(ipKey(result.networkIp), '+inf', timestamp - HISTORY_SEC * 1000, { BY: 'SCORE', REV: true, LIMIT: { offset: 0, count: 20 } }) : [],
+          client.zRange(`${prefix}rooms:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
+          client.zRangeWithScores(`${prefix}clients:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
+          client.lRange(`${prefix}decisions:${id}`, 0, 99),
+          Promise.all(utcDates.map(async (date) => ({ date, timeZone: 'UTC', ...await client.hGetAll(`${prefix}day:${id}:${date}`) }))),
+          client.zRangeWithScores(`${prefix}nicknames:${id}`, timestamp - HISTORY_SEC * 1000, '+inf', { BY: 'SCORE' }),
+          client.hVals(`${prefix}request-ip-counts:${id}`),
+          client.lRange(`${prefix}request-events:${id}`, 0, 199),
+        ]);
+        return { ips, logins, days, related, roomIds, clientIds, decisions, legacyDays, nicknames, ipRequests, requestEvents };
+      }),
+    ]);
+    const { ips, logins, days, related, roomIds, clientIds, decisions, legacyDays, nicknames, ipRequests, requestEvents } = detailBatch;
     const [rooms, clients, errorSnapshot, rawMusicResponses] = await run(client => Promise.all([
-      roomIds.length ? client.hmGet(`${prefix}room-info:${id}`, roomIds).then(entries => entries.filter(Boolean).map(entry => JSON.parse(entry)).sort((left, right) => right.lastSeenAt - left.lastSeenAt)) : [],
+      roomIds.length ? client.hmGet(`${prefix}room-info:${id}`, roomIds).then(entries => parseJsonRecords(entries).sort((left, right) => Number(right.lastSeenAt || 0) - Number(left.lastSeenAt || 0))) : [],
       clientIds.length ? client.hmGet(`${prefix}client-info:${id}`, clientIds.map(entry => entry.value)).then(entries => entries.map((agent, index) => ({ userAgent: agent || '', lastSeenAt: clientIds[index].score })).sort((left, right) => right.lastSeenAt - left.lastSeenAt)) : [],
       client.multi().hGetAll(`${prefix}error-groups:${id}`).hGetAll(`${prefix}error-meta:${id}`)
         .lRange(`${prefix}error-events:${id}`, 0, 99).hGet(profileKey(id), 'errors').hGetAll(dailyKey(id, timestamp)).exec(),
       client.hVals(`${prefix}music-responses:${id}`),
     ]));
     const [errorGroups, errorMeta, errorEvents, errorTotal, errorDaily] = errorSnapshot;
-    const musicResponses = rawMusicResponses.map(raw => JSON.parse(raw)).filter(event => event.at >= timestamp - DAY).sort((a, b) => b.at - a.at);
+    const musicResponses = parseJsonRecords(rawMusicResponses).filter(event => Number(event.at || 0) >= timestamp - DAY).sort((a, b) => Number(b.at || 0) - Number(a.at || 0));
     const responseById = new Map(musicResponses.map(event => [event.requestId, event]));
-    return { ...result, errors: Number(errorTotal || 0), daily: { ...result.daily, errors: Number(errorDaily.errors || 0) }, ips: ips.map((entry) => ({ ip: entry.value, lastSeenAt: entry.score })).reverse(), logins: logins.map((entry) => JSON.parse(entry)).filter((entry) => entry.at >= timestamp - HISTORY_SEC * 1000), days, relatedAccounts: related,
-      rooms, clients, decisions: decisions.map(entry => JSON.parse(entry)).filter(entry => entry.at >= timestamp - HISTORY_SEC * 1000), policy,
-      ipRequests: ipRequests.map(entry => JSON.parse(entry)).filter(entry => entry.lastSeenAt >= timestamp - HISTORY_SEC * 1000).sort((a, b) => b.lastSeenAt - a.lastSeenAt),
-      requestEvents: requestEvents.map(entry => JSON.parse(entry)).filter(entry => entry.at >= timestamp - DAY).map(entry => ({ ...entry, response: responseById.get(String(entry.id)) })),
+    return { ...result, errors: Number(errorTotal || 0), daily: { ...result.daily, errors: Number(errorDaily.errors || 0) }, ips: ips.map((entry) => ({ ip: entry.value, lastSeenAt: entry.score })).reverse(), logins: parseJsonRecords(logins).filter((entry) => Number(entry.at || 0) >= timestamp - HISTORY_SEC * 1000), days, relatedAccounts: related,
+      rooms, clients, decisions: parseJsonRecords(decisions).filter(entry => Number(entry.at || 0) >= timestamp - HISTORY_SEC * 1000), policy,
+      ipRequests: parseJsonRecords(ipRequests).filter(entry => Number(entry.lastSeenAt || 0) >= timestamp - HISTORY_SEC * 1000).sort((a, b) => Number(b.lastSeenAt || 0) - Number(a.lastSeenAt || 0)),
+      requestEvents: parseJsonRecords(requestEvents).filter(entry => Number(entry.at || 0) >= timestamp - DAY).map(entry => ({ ...entry, response: responseById.get(String(entry.id)) })),
       musicResponses, musicResponseAnalysis: summarizeMusicSamples(musicResponses),
       nicknames: nicknames.map(entry => ({ name: entry.value, lastSeenAt: entry.score })).reverse(),
       errorBreakdown: {
         trackedTotal: Number(errorMeta.trackedTotal || 0), sinceAt: Number(errorMeta.sinceAt || 0),
         legacyUnclassified: Math.max(0, Number(errorTotal || 0) - Number(errorMeta.trackedTotal || 0)),
-        groups: Object.values(errorGroups).map(raw => { const group = JSON.parse(raw); return { ...group, today: Number(errorDaily[`error_group_${group.groupId}`] || 0) }; }).filter(group => group.lastSeenAt >= timestamp - HISTORY_SEC * 1000).sort((left, right) => right.count - left.count || right.lastSeenAt - left.lastSeenAt),
-        recent: errorEvents.map(raw => JSON.parse(raw)).filter(event => event.at >= timestamp - HISTORY_SEC * 1000).sort((left, right) => right.at - left.at),
+        groups: parseJsonRecords(Object.values(errorGroups)).map(group => ({ ...group, today: Number(errorDaily[`error_group_${group.groupId}`] || 0) })).filter(group => Number(group.lastSeenAt || 0) >= timestamp - HISTORY_SEC * 1000).sort((left, right) => Number(right.count || 0) - Number(left.count || 0) || Number(right.lastSeenAt || 0) - Number(left.lastSeenAt || 0)),
+        recent: parseJsonRecords(errorEvents).filter(event => Number(event.at || 0) >= timestamp - HISTORY_SEC * 1000).sort((left, right) => Number(right.at || 0) - Number(left.at || 0)),
       },
       legacyDays: legacyDays.filter(day => Object.keys(day).length > 2), timeZone: 'Asia/Shanghai', retention: { ipDays: 90, loginEntries: 100, dailyDays: 35, roomEntries: 200, clientEntries: 50, decisionEntries: 100 } };
   }
@@ -1114,13 +1218,13 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
       redis.call('EXPIRE', KEYS[8], 7776000)
       return cjson.encode({ found = 1, latestIp = latestIp })
     `, { keys: [profileKey(id), `${prefix}ips:${id}`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status:`, `${prefix}decisions:${id}`, `${prefix}scores`], arguments: [String(timestamp), id, previousStatus, reason] }));
-    const parsed = JSON.parse(result);
-    if (!parsed.found) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
+    const parsed = safeJsonParse(result, {});
+    if (!parsed?.found) throw new RiskControlError('RISK_ACCOUNT_NOT_FOUND', '尚无账户风控记录', 404);
     return { ok: true, status: 'normal', score: 0, latestIp: parsed.latestIp || '', resetAt: timestamp };
   }
 
   async function events() {
-    return run(async (client) => (await client.lRange(`${prefix}events`, 0, 199)).map((entry) => JSON.parse(entry)).filter((entry) => entry.at >= now() - HISTORY_SEC * 1000));
+    return run(async (client) => parseJsonRecords(await client.lRange(`${prefix}events`, 0, 199)).filter((entry) => Number(entry.at || 0) >= now() - HISTORY_SEC * 1000));
   }
 
   async function clearHistory(input) {
@@ -1131,6 +1235,7 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
     if (!await run(() => client.set(lockKey, token, { NX: true, EX: 300 }))) {
       throw new RiskControlError('RISK_CLEAR_IN_PROGRESS', '历史数据正在清理，请稍后刷新', 409);
     }
+    ensuredDailyKeys.clear();
     const startedAt = now();
     const seen = new Set();
     let accounts = 0;

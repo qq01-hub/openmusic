@@ -7,6 +7,7 @@ import type { BannedSong, ForbiddenWord, RoomUser, RoomMusicAccounts } from '../
 import type { DislikeSkipMode } from '../lib/dislikeSkip';
 import SourceBadge from './SourceBadge';
 import ConfirmModal from './ConfirmModal';
+import Tooltip from './Tooltip';
 import { modalEventBoundary } from './Modal';
 import RoomMusicAccountPanel from './RoomMusicAccountPanel';
 import { useDeskPetStore } from '../stores/deskPetStore';
@@ -986,7 +987,15 @@ export default function RoomSettingsModal({
                               <div className="min-w-0 flex-1">
                                 <div className="flex min-w-0 items-center gap-1.5">
                                   <SourceBadge source={playlist.source} className="shrink-0 rounded-full px-1.5 py-0 text-[9px]" />
-                                  {playlist.name ? <p className="min-w-0 truncate text-xs font-medium text-white" title={playlist.name}>{playlist.name}</p> : playlist.url ? <a href={playlist.url} target="_blank" rel="noreferrer" className="min-w-0 truncate text-xs font-medium text-netease-red underline-offset-2 hover:underline" title="打开导入链接">导入链接</a> : null}
+                                  {playlist.name ? (
+                                    <Tooltip content={playlist.name} side="top" shouldShow={(el) => el.scrollWidth > el.clientWidth} tapToShow>
+                                      <p className="min-w-0 truncate text-xs font-medium text-white">{playlist.name}</p>
+                                    </Tooltip>
+                                  ) : playlist.url ? (
+                                    <Tooltip content="打开导入链接" side="top">
+                                      <a href={playlist.url} target="_blank" rel="noreferrer" className="min-w-0 truncate text-xs font-medium text-netease-red underline-offset-2 hover:underline">导入链接</a>
+                                    </Tooltip>
+                                  ) : null}
                                 </div>
                                 <p className="mt-0.5 truncate text-[10px] text-netease-muted">{playlist.songs.length} 首歌曲</p>
                               </div>
