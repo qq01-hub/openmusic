@@ -7,6 +7,7 @@ import { getClientPlaybackState, getPlaybackTime } from '../lib/playbackState';
 import { getSharedAudio } from '../lib/audioElement';
 import { isAudioBoundToQueue } from '../lib/audioTrackBinding';
 import { isRoomAudioTakenOver } from '../lib/roomAudioPriority';
+import { selectDisplayedPlaybackTime } from '../lib/displayedPlaybackTime';
 import { isHostPageHidden, subscribeHostVisibility } from './useVisualRenderPolicy';
 import type { Song, QueueItem } from '../types';
 
@@ -56,19 +57,31 @@ function readAudioCurrentTime(song: TimeCapSong | null | undefined): number | nu
 }
 
 /**
- * 酷狗和汽水以本机实际播放位置显示，缓冲时不会凭房间时钟继续前进
- * 试听占用或音源尚未绑定时继续显示房间时间轴
+ * 全音源播放中优先以本机实际出声位置显示，消除切歌缓冲导致的整首抢跑
+ * 试听占用、待解锁、暂停或刚进房未就绪时回退房间时间轴，避免进度闪跳
  */
 function resolveDisplayedPlaybackTime(song: TimeCapSong | null | undefined): number | null {
   if (!song || !stateMatchesSong(song)) return null;
-  if ((song.source === 'kugou' || song.source === 'qishui')
-    && song.queueId && !isRoomAudioTakenOver()
-    && isAudioBoundToQueue(getSharedAudio(), song.queueId)) {
-    return readAudioCurrentTime(song);
-  }
+  const audio = getSharedAudio();
   const state = getClientPlaybackState();
-  if (state) return capSongTime(getPlaybackTime(state), song);
-  return readAudioCurrentTime(song);
+  const audioStore = useAudioStore.getState();
+  const audioBound = Boolean(song.queueId && isAudioBoundToQueue(audio, song.queueId));
+  const audioCurrentTime = audioBound ? readAudioCurrentTime(song) : null;
+  const stateTime = state ? capSongTime(getPlaybackTime(state), song) : null;
+  const selected = selectDisplayedPlaybackTime({
+    audioBound,
+    audioCurrentTime,
+    audioPaused: audio.paused,
+    audioSeeking: audio.seeking,
+    audioReadyState: audio.readyState,
+    trackLoading: audioStore.trackLoading,
+    roomTakenOver: isRoomAudioTakenOver(),
+    needsAudioUnlock: audioStore.needsAudioUnlock,
+    stateTime,
+    statePlaying: state ? state.status === 'playing' : Boolean(useRoomStore.getState().room?.isPlaying),
+    songSource: song.source,
+  });
+  return selected !== null ? selected : readAudioCurrentTime(song);
 }
 
 function publishAudioTimeForSong(song: TimeCapSong | null | undefined, force = false) {
@@ -193,9 +206,8 @@ function usePlaybackTimeLoop(
 }
 
 /**
- * 歌词/进度条用的高频播放时间（全局单例 RAF）。
- * 有控制权：本机 HTMLAudioElement.currentTime。
- * 听众：房间服务端播放时钟，本机误拖进度不影响展示。
+ * 歌词与进度条用的高频播放时间（全局单例 RAF）
+ * 播放中且本机音频已绑定就绪时优先读取本机 audio.currentTime，其余状态回退房间时钟
  */
 export function useSmoothPlaybackTime(): number {
   const isPlaying = useRoomStore((s) => s.room?.isPlaying ?? false);

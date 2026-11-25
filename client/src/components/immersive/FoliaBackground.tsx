@@ -178,17 +178,26 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   }, [ready]);
   useEffect(() => {
     if (!ready) return;
-    let raf = 0, last = 0;
+    let raf = 0, lastClock = 0, lastAudio = 0;
     let lastMap: ReturnType<typeof getCurrentBeatMap> = null;
     let lastKey = '';
     const tick = (now: number) => {
       raf = 0;
       if (isHostPageHidden()) return;
       raf = requestAnimationFrame(tick);
-      if (now - last < 33) return;
-      last = now;
-      if (clock.current.isPlaying) resumeGalaxyAudioContext();
-      const bands = readGalaxyAudioBands(1 / 30);
+      if (now - lastClock < 16) return;
+      lastClock = now;
+      const includeAudio = now - lastAudio >= 33;
+      let audioPayload: { bands: ReturnType<typeof readGalaxyAudioBands> & { lowMid: number; power: number }; spectrum: ReturnType<typeof getTopographyFrequencyBins512> } | null = null;
+      if (includeAudio) {
+        lastAudio = now;
+        if (clock.current.isPlaying) resumeGalaxyAudioContext();
+        const bands = readGalaxyAudioBands(1 / 30);
+        audioPayload = {
+          bands: { ...bands, lowMid: bands.mid, power: bands.energy },
+          spectrum: getTopographyFrequencyBins512(),
+        };
+      }
       if (lastKey !== clock.current.key) { lastMap = null; lastKey = clock.current.key; }
       const map = songRef.current ? getCurrentBeatMap(songRef.current) : null;
       if (map && map !== lastMap) {
@@ -198,9 +207,13 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
           impact: beat.impact, tone: { low: beat.low, mid: beat.body, high: beat.snap },
         })) });
       }
-      send('openmusic:folia-clock', { key: clock.current.key, time: readLocalPlaybackTime(songRef.current), playing: clock.current.isPlaying,
+      send('openmusic:folia-clock', {
+        key: clock.current.key,
+        time: readLocalPlaybackTime(songRef.current),
+        playing: clock.current.isPlaying,
         lyricOffsetSeconds: clock.current.lyricOffsetSeconds,
-        bands: { ...bands, lowMid: bands.mid, power: bands.energy }, spectrum: getTopographyFrequencyBins512() });
+        ...(audioPayload ?? {}),
+      });
     };
     const syncVisibility = () => {
       if (isHostPageHidden()) {
@@ -209,7 +222,8 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
         return;
       }
       if (!raf) {
-        last = 0;
+        lastClock = 0;
+        lastAudio = 0;
         raf = requestAnimationFrame(tick);
       }
     };

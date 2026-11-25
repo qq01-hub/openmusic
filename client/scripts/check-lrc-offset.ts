@@ -39,6 +39,51 @@ try {
   assert.equal(getLrcFallbackDurationMs(shifted), 39000);
   assert.equal(getDurationFromLrc(shifted, 60000), 60000);
   assert.equal(getLrcFallbackDurationMs('[offset:1000]\n[00:10.000]纯音乐'), undefined);
+
+  const { parseFoliaLyrics } = await import('../../vendor/folia/lyrics.ts');
+  const firstLyricLine = (parsed: ReturnType<typeof parseFoliaLyrics>) => parsed.lines.find(line => line.fullText !== '......');
+
+  const yrcParsed = parseFoliaLyrics({
+    wordFormat: 'yrc',
+    wordLyric: '[offset:500]\n[10000,2000](10000,800,0)你(10800,1200,0)好',
+    translation: '[offset:500]\n[00:10.000]Hello',
+  });
+  assert.equal(yrcParsed.isWordByWord, true);
+  const yrcLine = firstLyricLine(yrcParsed);
+  assert.ok(yrcLine);
+  assert.equal(yrcLine.startTime, 9.5);
+  assert.equal(yrcLine.words[0].startTime, 9.5);
+  assert.equal(yrcLine.words[1].startTime, 10.3);
+  assert.equal(yrcLine.translation, 'Hello');
+
+  const krcParsed = parseFoliaLyrics({
+    wordFormat: 'krc',
+    wordLyric: '[offset:200]\n[10200,1000]<0,400,0>晴<400,600,0>天',
+    translation: '[offset:200]\n[00:10.200]Sunny',
+  });
+  assert.equal(krcParsed.isWordByWord, true);
+  const krcLine = firstLyricLine(krcParsed);
+  assert.ok(krcLine);
+  assert.equal(krcLine.startTime, 10);
+  assert.equal(krcLine.words[0].startTime, 10);
+  assert.equal(krcLine.words[1].startTime, 10.4);
+  assert.equal(krcLine.translation, 'Sunny');
+
+  const qrcXml = `<?xml version="1.0" encoding="utf-8"?><QrcInfos><LyricInfo LyricCount="1"><Lyric_1 LyricType="1" LyricContent="[offset:-500]\n[10000,1000]I&apos;m (10000,400)&quot;ok&quot;(10400,600)"/></LyricInfo></QrcInfos>`;
+  const qrcParsed = parseFoliaLyrics({
+    wordFormat: 'qrc',
+    wordLyric: qrcXml,
+    translation: '[offset:-500]\n[00:10.000]我很好',
+  });
+  assert.equal(qrcParsed.isWordByWord, true);
+  const qrcLine = firstLyricLine(qrcParsed);
+  assert.ok(qrcLine);
+  assert.equal(qrcLine.startTime, 10.5);
+  assert.equal(qrcLine.words[0].startTime, 10.5);
+  assert.equal(qrcLine.words[1].startTime, 10.9);
+  assert.equal(qrcLine.fullText, `I'm "ok"`);
+  assert.equal(qrcLine.translation, '我很好');
+
   console.log('LRC offset checks passed');
 } finally {
   if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
