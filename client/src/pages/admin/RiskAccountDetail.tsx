@@ -12,7 +12,7 @@ const SOCKET_EVENTS: Record<string, string> = {
   set_room_playlist_roaming: '设置歌单漫游', music_account_qr_create: '创建音乐账号二维码',
   music_account_qr_check: '检查音乐账号二维码', music_account_bind: '绑定音乐账号',
   send_chat: '发送聊天消息', recall_chat: '撤回聊天消息', toggle_chat_reaction: '切换聊天反应',
-  add_song: '添加歌曲', remove_song: '移除歌曲', reorder_queue: '调整播放队列',
+  add_song: '添加歌曲', remove_song: '移除歌曲', reorder_queue: '调整播放队列', shuffle_queue: '随机打乱播放队列',
   set_room_play_mode: '设置播放模式', set_room_audio_quality: '设置播放音质',
   adjust_room_lyrics: '调整歌词偏移', set_room_announcement: '设置房间公告',
   join_room: '进入房间', leave_room: '离开房间', disconnect: '断开连接',

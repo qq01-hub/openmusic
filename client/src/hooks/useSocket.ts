@@ -1324,6 +1324,10 @@ export function useSocket() {
     });
   }, []);
 
+  const shuffleQueue = useCallback((): Promise<{ success: boolean; error?: string }> => {
+    return emitWithAck('shuffle_queue', {}, { success: false, error: '连接超时，请重试' });
+  }, []);
+
   const toggleQueueLike = useCallback((queueId: string): Promise<{ success: boolean; liked?: boolean; error?: string }> => {
     return emitWithAck('toggle_queue_like', { queueId }, { success: false, error: '连接超时，请重试' });
 
@@ -2167,6 +2171,7 @@ export function useSocket() {
 
     requestJump,
     reorderQueue,
+    shuffleQueue,
     toggleQueueLike,
     toggleCurrentDislike,
 

@@ -8,7 +8,7 @@ import { filterCrossPlatformDuplicates, type FavoriteDuplicateMode } from '../li
 
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 
-import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle, Megaphone } from 'lucide-react';
+import { Search, Loader2, Check, LogOut, X, Heart, Plus, Download, ListMusic, Upload, History, ListPlus, Pencil, Share2, Lock, LockOpen, ChevronLeft, SlidersHorizontal, Shield, Maximize2, Smartphone, ImagePlus, MoreHorizontal, RefreshCw, Users, Trash2, Shuffle, Dices, Megaphone } from 'lucide-react';
 import { isSongInRoomQueue } from '../lib/roomSongStatus';
 
 import { searchAllSongs, getAvailableSources, getSongByShareLink, listRooms, type SearchFilterMode } from '../api/music';
@@ -90,6 +90,7 @@ import JumpRequestBanner from '../components/JumpRequestBanner';
 import Toast from '../components/Toast';
 import ShareSongCardModal from '../components/ShareSongCardModal';
 import QueueSystemToast, { UpcomingSongNotice } from '../components/QueueSystemToast';
+import QueueTip from '../components/queue/QueueTip';
 import Tooltip from '../components/Tooltip';
 import RoomThemeColorPicker from '../components/RoomThemeColorPicker';
 import UserRoleMarks from '../components/UserRoleMarks';
@@ -427,7 +428,7 @@ export default function Room() {
     noindex: true,
   });
 
-  const { joinRoom, addSong, addSongs, removeSong, leaveRoom, shareSongToChat, createFavoriteShare, revokeFavoriteShare, previewFavoriteShare, importFavoriteShare, renameRoomName, setRoomLock, setRoomFmMode, setRoomQishuiProxy, setRoomPlaylistRoaming, setRoomAnnouncement, setRoomCustomCover, setChatHistoryVisibleOnJoin, setChatShowAvatars, setRoomHideIpLocation, setRoomJoinNotice, setRoomAiSettings, setRoomMaxAdmins, setRoomAdminSelfManageMemberTier, setRoomPlaybackRate, setSongRequestEnabled, unbanRoomSong, addRoomForbiddenWord, removeRoomForbiddenWord, setRoomMemberTier, removeRoomMemberTier, setRoomMemberSettings, loadSongHistory, transferOwner, destroyRoom, applyRoomPermanent, cancelRoomPermanent, clearQueue, createMusicAccountQr, checkMusicAccountQr, bindMusicAccount, listMusicAccounts, setMusicAccountShared, unbindMusicAccount, skipSong, togglePlay } = useSocket();
+  const { joinRoom, addSong, addSongs, removeSong, leaveRoom, shareSongToChat, createFavoriteShare, revokeFavoriteShare, previewFavoriteShare, importFavoriteShare, renameRoomName, setRoomLock, setRoomFmMode, setRoomQishuiProxy, setRoomPlaylistRoaming, setRoomAnnouncement, setRoomCustomCover, setChatHistoryVisibleOnJoin, setChatShowAvatars, setRoomHideIpLocation, setRoomJoinNotice, setRoomAiSettings, setRoomMaxAdmins, setRoomAdminSelfManageMemberTier, setRoomPlaybackRate, setSongRequestEnabled, unbanRoomSong, addRoomForbiddenWord, removeRoomForbiddenWord, setRoomMemberTier, removeRoomMemberTier, setRoomMemberSettings, loadSongHistory, transferOwner, destroyRoom, applyRoomPermanent, cancelRoomPermanent, clearQueue, shuffleQueue, createMusicAccountQr, checkMusicAccountQr, bindMusicAccount, listMusicAccounts, setMusicAccountShared, unbindMusicAccount, skipSong, togglePlay } = useSocket();
   const {
     favoriteIds,
     toggleFavorite,
@@ -503,6 +504,15 @@ export default function Room() {
   const [listPageSongs, setListPageSongs] = useState<SearchResult[]>([]);
   const [clearQueueConfirmOpen, setClearQueueConfirmOpen] = useState(false);
   const [clearingQueue, setClearingQueue] = useState(false);
+  const [shufflingQueue, setShufflingQueue] = useState(false);
+  const [queueSearchOpen, setQueueSearchOpen] = useState(false);
+  const handleToggleQueueSearch = useCallback(() => {
+    markGuideFeatureUsed('room-queue');
+    setQueueSearchOpen((prev) => !prev);
+  }, []);
+  const handleCloseQueueSearch = useCallback(() => {
+    setQueueSearchOpen(false);
+  }, []);
 
   const [sharePayload, setSharePayload] = useState<{ url: string; text: string } | null>(null);
   const [searchedKeyword, setSearchedKeyword] = useState('');
@@ -827,6 +837,19 @@ export default function Room() {
       showToast(res.error || '清空失败', 'error');
     }
   }, [clearQueue, clearingQueue, showToast]);
+
+  const handleShuffleQueue = useCallback(async () => {
+    if (shufflingQueue) return;
+    setShufflingQueue(true);
+    const res = await shuffleQueue();
+    setShufflingQueue(false);
+    if (res.success) {
+      markGuideFeatureUsed('room-queue');
+      showToast('已随机打乱播放队列', 'success');
+    } else {
+      showToast(res.error || '打乱队列失败', 'error');
+    }
+  }, [shuffleQueue, shufflingQueue, showToast]);
 
   useEffect(() => {
     const result = consumeLinuxdoReturnParam() || consumeGithubReturnParam();
@@ -3107,8 +3130,23 @@ export default function Room() {
       }`}
     >
       <div className="room-panel-divider relative flex items-center justify-between px-4 py-2.5 sm:py-3 border-b flex-shrink-0">
-        <div className="mr-3 flex min-w-0 flex-1 items-center gap-2.5">
+        <div className="mr-3 flex min-w-0 flex-1 items-center gap-2">
           <h2 className="shrink-0 text-sm font-medium">播放队列</h2>
+          <QueueTip content={queueSearchOpen ? '收起队列搜索' : '搜索播放队列'}>
+            <button
+              type="button"
+              onClick={handleToggleQueueSearch}
+              className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
+                queueSearchOpen
+                  ? 'bg-netease-red/15 text-netease-red'
+                  : 'text-netease-muted hover:bg-white/10 hover:text-white'
+              }`}
+              aria-label={queueSearchOpen ? '收起队列搜索' : '搜索播放队列'}
+              aria-expanded={queueSearchOpen}
+            >
+              <Search className="h-3.5 w-3.5" />
+            </button>
+          </QueueTip>
           <UpcomingSongNotice />
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -3121,7 +3159,24 @@ export default function Room() {
               清空列表
             </button>
           )}
-          <Tooltip content="从收藏随机点歌" side="bottom">
+          {canControlPlayback && (
+            <QueueTip content={queueLength < 2 ? '待播歌曲不足 2 首，无法打乱' : '随机打乱播放队列'}>
+              <button
+                type="button"
+                onClick={() => void handleShuffleQueue()}
+                disabled={shufflingQueue || queueLength < 2}
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md text-netease-muted transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                aria-label="随机打乱播放队列"
+              >
+                {shufflingQueue ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Shuffle className="h-3.5 w-3.5" />
+                )}
+              </button>
+            </QueueTip>
+          )}
+          <QueueTip content="从收藏随机点歌">
             <button
               type="button"
               onClick={() => void handleAddRandomFavorite()}
@@ -3132,10 +3187,10 @@ export default function Room() {
               {addingRandomFavorite ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Shuffle className="h-3.5 w-3.5" />
+                <Dices className="h-3.5 w-3.5" />
               )}
             </button>
-          </Tooltip>
+          </QueueTip>
           <span className="text-xs text-netease-muted">
             {queueCount > 0 ? `共 ${queueCount} 首` : '暂无歌曲'}
           </span>
@@ -3143,7 +3198,13 @@ export default function Room() {
         <QueueSystemToast />
       </div>
       <div className={`p-2 ${fillHeight ? 'flex-1 min-h-0 overflow-hidden flex flex-col' : ''}`}>
-        <QueuePanel fillHeight={fillHeight} onArtistClick={handleArtistClick} onShareSong={handleShareSongToChat} />
+        <QueuePanel
+          fillHeight={fillHeight}
+          searchOpen={queueSearchOpen}
+          onCloseSearch={handleCloseQueueSearch}
+          onArtistClick={handleArtistClick}
+          onShareSong={handleShareSongToChat}
+        />
       </div>
     </div>
   );
@@ -3573,7 +3634,53 @@ export default function Room() {
                 </div>
               ) : null
             }
-            queueContent={<QueuePanel fillHeight onArtistClick={handleArtistClick} onShareSong={handleShareSongToChat} />}
+            queueContent={
+              <QueuePanel
+                fillHeight
+                searchOpen={queueSearchOpen}
+                onCloseSearch={handleCloseQueueSearch}
+                onArtistClick={handleArtistClick}
+                onShareSong={handleShareSongToChat}
+              />
+            }
+            queueSearchOpen={queueSearchOpen}
+            onToggleQueueSearch={handleToggleQueueSearch}
+            queueHeaderActions={
+              <>
+                {canControlPlayback && (
+                  <QueueTip content={queueLength < 2 ? '待播歌曲不足 2 首，无法打乱' : '随机打乱播放队列'}>
+                    <button
+                      type="button"
+                      onClick={() => void handleShuffleQueue()}
+                      disabled={shufflingQueue || queueLength < 2}
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-40"
+                      aria-label="随机打乱播放队列"
+                    >
+                      {shufflingQueue ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Shuffle className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </QueueTip>
+                )}
+                <QueueTip content="从收藏随机点歌">
+                  <button
+                    type="button"
+                    onClick={() => void handleAddRandomFavorite()}
+                    disabled={addingRandomFavorite}
+                    className="inline-flex h-6 w-6 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white disabled:opacity-50"
+                    aria-label="从收藏随机点歌"
+                  >
+                    {addingRandomFavorite ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Dices className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </QueueTip>
+              </>
+            }
             chatContent={<ChatPanel />}
             settingsPanel={
               <ImmersiveFxSettingsPanel

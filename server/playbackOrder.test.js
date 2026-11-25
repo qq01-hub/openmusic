@@ -274,3 +274,81 @@ for (const mode of ['loop-all', 'shuffle-loop']) {
     assert.equal(room.current.queueId, 'random-2');
   });
 }
+
+function createShuffleQueueContext(room, controllerSet = new Set(['owner-1'])) {
+  let persisted = 0;
+  const rooms = new Map();
+  if (room) rooms.set(room.id, room);
+  const context = vm.createContext({
+    rooms,
+    Math,
+    Array,
+    isControllerConnection: (_room, actorId) => controllerSet.has(actorId),
+    persistRoom: () => { persisted += 1; },
+    lazyRoomResult: (target) => ({ room: target }),
+  });
+  const start = roomSource.indexOf('export function shuffleQueue(');
+  const end = roomSource.indexOf('export async function approveJump(');
+  const code = roomSource.slice(start, end).replace('export function shuffleQueue(', 'function shuffleQueue(');
+  vm.runInContext(code, context);
+  return { shuffleQueue: context.shuffleQueue, getPersisted: () => persisted };
+}
+
+test('shuffleQueue 支持房主和管理员打乱待播队列、写入 manualOrder 且不动当前播放曲目', () => {
+  const room = {
+    id: 'ROOM01',
+    current: { queueId: 'now-1', name: '正在播放' },
+    queue: [
+      { queueId: 'q-1', name: '江南', artist: '林俊杰' },
+      { queueId: 'q-2', name: '晴天', artist: '周杰伦' },
+      { queueId: 'q-3', name: '修炼爱情', artist: '林俊杰' },
+    ],
+  };
+  const { shuffleQueue, getPersisted } = createShuffleQueueContext(room, new Set(['owner-1', 'admin-1']));
+
+  const denied = shuffleQueue('ROOM01', 'guest-1', 'conn-guest');
+  assert.equal(denied.error, '仅房主或管理员可打乱播放队列');
+  assert.equal(getPersisted(), 0);
+
+  const res = shuffleQueue('ROOM01', 'admin-1', 'conn-admin', () => 0.99);
+  assert.equal(res.error, undefined);
+  assert.equal(getPersisted(), 1);
+  assert.equal(room.current.queueId, 'now-1');
+  const shuffledIds = Array.from(room.queue, (song) => song.queueId);
+  assert.notDeepEqual(shuffledIds, ['q-1', 'q-2', 'q-3']);
+  assert.deepEqual(
+    [...shuffledIds].sort(),
+    ['q-1', 'q-2', 'q-3'],
+  );
+  assert.deepEqual(Array.from(room.queue, (song) => song.manualOrder), [0, 1, 2]);
+  assert.equal(room.queue.some((song) => Boolean(song.ownerPriority)), false);
+});
+
+test('shuffleQueue 待播不足 2 首或房间不存在时拒绝执行', () => {
+  const room = {
+    id: 'ROOM02',
+    current: { queueId: 'now-1', name: '正在播放' },
+    queue: [{ queueId: 'q-1', name: '江南' }],
+  };
+  const { shuffleQueue, getPersisted } = createShuffleQueueContext(room, new Set(['owner-1']));
+
+  assert.equal(shuffleQueue('MISSING', 'owner-1').error, '房间不存在');
+  assert.equal(shuffleQueue('ROOM02', 'owner-1').error, '待播歌曲不足 2 首，无法打乱');
+  assert.equal(getPersisted(), 0);
+});
+
+test('shuffleQueue 在仅 2 首待播歌曲时确保顺序发生变化', () => {
+  const room = {
+    id: 'ROOM03',
+    current: null,
+    queue: [
+      { queueId: 'q-1', name: '第一首' },
+      { queueId: 'q-2', name: '第二首' },
+    ],
+  };
+  const { shuffleQueue } = createShuffleQueueContext(room, new Set(['owner-1']));
+  const res = shuffleQueue('ROOM03', 'owner-1', 'conn-owner', () => 0.99);
+  assert.equal(res.error, undefined);
+  assert.deepEqual(Array.from(room.queue, (song) => song.queueId), ['q-2', 'q-1']);
+  assert.deepEqual(Array.from(room.queue, (song) => song.manualOrder), [0, 1]);
+});

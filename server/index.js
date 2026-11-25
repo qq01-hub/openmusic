@@ -169,6 +169,7 @@ import {
   setSharedPlaybackMedia,
   requestJump,
   reorderQueue,
+  shuffleQueue,
   toggleQueueLike,
   toggleCurrentDislike,
   approveJump,
@@ -7052,6 +7053,26 @@ io.on('connection', (socket) => {
     }
 
     const result = reorderQueue(roomId, getSocketUserId(socket), orderedQueueIds, movedQueueId, socket.id);
+    if (result.error) {
+      callback?.({ success: false, error: result.error });
+      return;
+    }
+
+    emitQueueSnapshot(roomId);
+    callback?.({ success: true });
+  });
+
+  socket.on('shuffle_queue', (_payload, callback) => {
+    if (rejectReadOnly(socket, callback)) return;
+    if (rejectRateLimited(socket, limitSocketAction, 'shuffle_queue', callback)) return;
+
+    const roomId = socketToRoom.get(socket.id);
+    if (!roomId) {
+      callback?.({ success: false, error: '未加入房间' });
+      return;
+    }
+
+    const result = shuffleQueue(roomId, getSocketUserId(socket), socket.id);
     if (result.error) {
       callback?.({ success: false, error: result.error });
       return;

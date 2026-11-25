@@ -54,6 +54,7 @@ const ACTION_EVENTS = new Set([
   'finish_song',
   'request_jump',
   'reorder_queue',
+  'shuffle_queue',
   'toggle_queue_like',
   'toggle_current_dislike',
   'approve_jump',

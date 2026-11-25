@@ -7,6 +7,7 @@ import {
   subscribeFullscreenChange,
 } from '../../lib/browserFullscreen';
 import QueueSystemToast, { UpcomingSongNotice } from '../QueueSystemToast';
+import QueueTip from '../queue/QueueTip';
 import Tooltip from '../Tooltip';
 import { stopSongPreview } from '../../lib/songPreviewPlayer';
 import { stopChatCardPlayback } from '../../lib/chatCardPlayer';
@@ -32,6 +33,9 @@ interface Props {
   searchResults?: ReactNode;
   showSearchResults?: boolean;
   queueContent: ReactNode;
+  queueSearchOpen?: boolean;
+  onToggleQueueSearch?: () => void;
+  queueHeaderActions?: ReactNode;
   chatContent: ReactNode;
   settingsPanel: ReactNode;
   player: ReactNode;
@@ -77,6 +81,9 @@ export default function RoomImmersiveShell({
   searchResults,
   showSearchResults = false,
   queueContent,
+  queueSearchOpen = false,
+  onToggleQueueSearch,
+  queueHeaderActions,
   chatContent,
   settingsPanel,
   player,
@@ -572,18 +579,38 @@ export default function RoomImmersiveShell({
       >
         <div className="mineradio-glass-panel m-3 flex h-[calc(100%-1.5rem)] flex-col overflow-hidden rounded-[22px]">
           <div className="relative flex shrink-0 items-center justify-between border-b border-white/10 px-4 py-3">
-            <div className="mr-3 flex min-w-0 flex-1 items-center gap-2.5">
+            <div className="mr-3 flex min-w-0 flex-1 items-center gap-2">
               <h2 className="shrink-0 text-sm font-medium text-white/90">播放队列</h2>
+              {onToggleQueueSearch && (
+                <QueueTip content={queueSearchOpen ? '收起队列搜索' : '搜索播放队列'}>
+                  <button
+                    type="button"
+                    onClick={onToggleQueueSearch}
+                    className={`inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors ${
+                      queueSearchOpen
+                        ? 'bg-white/15 text-white'
+                        : 'text-white/55 hover:bg-white/10 hover:text-white'
+                    }`}
+                    aria-label={queueSearchOpen ? '收起队列搜索' : '搜索播放队列'}
+                    aria-expanded={queueSearchOpen}
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </button>
+                </QueueTip>
+              )}
               <UpcomingSongNotice />
             </div>
-            <button
-              type="button"
-              onClick={() => setOpenPanel(null)}
-              className="shrink-0 rounded-lg p-1 text-white/40 hover:bg-white/10 hover:text-white"
-              aria-label="关闭队列"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {queueHeaderActions}
+              <button
+                type="button"
+                onClick={() => setOpenPanel(null)}
+                className="shrink-0 rounded-lg p-1 text-white/40 hover:bg-white/10 hover:text-white"
+                aria-label="关闭队列"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
             <QueueSystemToast />
           </div>
           <div className="relative min-h-0 flex-1 overflow-hidden p-2">

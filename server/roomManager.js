@@ -6040,6 +6040,41 @@ export function reorderQueue(roomId, actorId, orderedQueueIds, movedQueueId = nu
   return lazyRoomResult(room);
 }
 
+export function shuffleQueue(roomId, actorId, connectionId = null, random = Math.random) {
+  const room = rooms.get(roomId);
+  if (!room) return { error: "房间不存在" };
+  if (!isControllerConnection(room, actorId, connectionId)) {
+    return { error: "仅房主或管理员可打乱播放队列" };
+  }
+  if (!Array.isArray(room.queue) || room.queue.length < 2) {
+    return { error: "待播歌曲不足 2 首，无法打乱" };
+  }
+
+  const originalIds = room.queue.map((song) => song.queueId);
+  const shuffled = [...room.queue];
+  const rand = typeof random === "function" ? random : Math.random;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let idx = shuffled.length - 1; idx > 0; idx -= 1) {
+      const swapIdx = Math.floor(rand() * (idx + 1));
+      [shuffled[idx], shuffled[swapIdx]] = [shuffled[swapIdx], shuffled[idx]];
+    }
+    if (shuffled.some((song, index) => song.queueId !== originalIds[index])) break;
+  }
+
+  if (shuffled.every((song, index) => song.queueId === originalIds[index])) {
+    [shuffled[0], shuffled[1]] = [shuffled[1], shuffled[0]];
+  }
+
+  room.queue = shuffled.map((song, index) => {
+    song.manualOrder = index;
+    return song;
+  });
+
+  persistRoom(room);
+  return lazyRoomResult(room);
+}
+
 export async function approveJump(roomId, socketId, requestId, connectionId = null) {
   const room = rooms.get(roomId);
   if (!room) return { error: "房间不存在" };
