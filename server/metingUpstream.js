@@ -17,7 +17,7 @@ const MAX_RECENT_ERRORS = 20;
 const METING_RESPONSE_CACHE_MAX = 2048;
 const METING_RESPONSE_CACHE = createMetingResponseCache({
   maxEntries: METING_RESPONSE_CACHE_MAX,
-  shouldCache: (snapshot) => snapshot.status >= 200 && snapshot.status < 400,
+  shouldCache: (snapshot) => snapshot.status >= 200 && snapshot.status < 400 && snapshot.cacheable !== false,
 });
 
 const METING_CACHE_TTLS = {
@@ -322,6 +322,10 @@ export const __test = {
   roomNeedsScopedProxy,
   buildUpstreamRequest,
   buildMetingCacheKey,
+  extractUrlCandidateFromPayload,
+  isNeteaseFakeOuterUrl,
+  isCacheableMetingSnapshot,
+  snapshotMetingResponse,
   markFailure,
   metingResponseCache: METING_RESPONSE_CACHE,
 };
@@ -339,18 +343,70 @@ function stableJson(value) {
 function buildMetingCacheKey(query, options) {
   const context = getMetingRequestContext();
   const quality = String(query?.quality || '').trim();
+  const type = String(query?.type || '').trim().toLowerCase();
   const roomId = String(context.roomId || '').trim().toUpperCase();
   const server = String(query?.server || 'netease');
-  const scoped = roomNeedsScopedProxy(roomId, server, query?.type);
+  const scoped = roomNeedsScopedProxy(roomId, server, type);
   const accountScope = scoped ? createHash('sha256').update(getRoomScopedAccount(roomId, server).cookie).digest('hex') : '';
+  const sanitizedQuery = {};
+  for (const [key, value] of Object.entries(query && typeof query === 'object' ? query : {})) {
+    const lower = key.toLowerCase();
+    if (lower === 'roomid' || lower === 'room_id' || lower === 'auth' || lower === 'token') continue;
+    sanitizedQuery[key] = value;
+  }
   return `${upstreamSignature}\n${stableJson({
-    query,
-    // URL 缓存必须按音质隔离，避免低音质结果复用到高音质请求。
+    query: sanitizedQuery,
+    // URL 缓存必须按音质隔离，避免低音质结果复用到高音质请求
     quality,
     options: { method: options?.method || 'GET', redirect: options?.redirect || '' },
-    roomId,
+    roomId: scoped || type === 'fm' ? roomId : '',
     accountScope,
   })}`;
+}
+
+function extractUrlCandidateFromPayload(rawText) {
+  const text = String(rawText || '').trim();
+  if (!text) return '';
+  if (text.startsWith('{') || text.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(text);
+      const candidate = Array.isArray(parsed) ? parsed[0]?.url : parsed?.url;
+      return typeof candidate === 'string' ? candidate.trim() : '';
+    } catch {
+      // 非合法 JSON 时回落按纯文本检测
+    }
+  }
+  return text.replace(/^['"]|['"]$/g, '').trim();
+}
+
+function isNeteaseFakeOuterUrl(rawUrl) {
+  const candidate = String(rawUrl || '').trim();
+  if (!candidate) return false;
+  try {
+    const parsed = new URL(candidate.startsWith('@') ? candidate.slice(1).trim() : candidate);
+    const host = parsed.hostname.toLowerCase();
+    return (host === 'music.163.com' || host === 'www.music.163.com')
+      && /\/song\/media\/outer\/url/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function isCacheableMetingSnapshot(snapshot, type) {
+  if (!snapshot || snapshot.status < 200 || snapshot.status >= 400) return false;
+  if (type === 'url' && snapshot.status === 200) {
+    const candidate = extractUrlCandidateFromPayload(snapshot.body);
+    if (isNoUrlPayload(candidate) || isNeteaseFakeOuterUrl(candidate)) return false;
+  }
+  if ((type === 'search' || type === 'search_playlist' || type === 'search_dj') && snapshot.status === 200) {
+    try {
+      const parsed = JSON.parse(snapshot.body);
+      if (Array.isArray(parsed) && parsed.length === 0) return false;
+    } catch {
+      // 非 JSON 保持默认判断
+    }
+  }
+  return true;
 }
 
 function createCachedMetingResponse(snapshot) {
@@ -370,14 +426,16 @@ function createCachedMetingResponse(snapshot) {
   };
 }
 
-async function snapshotMetingResponse(response) {
+async function snapshotMetingResponse(response, type = '') {
   const body = await response.text();
-  return {
+  const snapshot = {
     status: Number(response.status || 0),
     body,
     contentType: response.headers?.get?.('content-type') || '',
     location: response.headers?.get?.('location') || '',
   };
+  snapshot.cacheable = isCacheableMetingSnapshot(snapshot, type);
+  return snapshot;
 }
 
 // 轮询起点每次前移；冷却中的上游排到最后兜底（全部故障时仍会尝试）；禁用的完全跳过
@@ -577,26 +635,17 @@ async function fetchMetingApiUncached(query, options = {}, timeoutMs = 10000) {
       if (isUrl && response.status === 200) {
         try {
           const text = typeof response.clone === 'function' ? await response.clone().text() : await response.text();
-          const normalized = String(text || '').trim().replace(/^['"]|['"]$/g, '').trim();
-          if (isNoUrlPayload(normalized)) {
+          const candidate = extractUrlCandidateFromPayload(text);
+          if (isNoUrlPayload(candidate)) {
             markSoftFailure(upstream, '返回空播放地址', query);
             emptyUrlResponse = response;
             continue;
           }
           // 网易云 outer/url 假直链（实为 404），当作空结果继续换上游
-          try {
-            const parsed = new URL(normalized.startsWith('@') ? normalized.slice(1).trim() : normalized);
-            const host = parsed.hostname.toLowerCase();
-            if (
-              (host === 'music.163.com' || host === 'www.music.163.com')
-              && /\/song\/media\/outer\/url/i.test(parsed.pathname)
-            ) {
-              markSoftFailure(upstream, '返回网易云不可播外链', query);
-              emptyUrlResponse = response;
-              continue;
-            }
-          } catch {
-            // 非 URL 文本交由调用方处理
+          if (isNeteaseFakeOuterUrl(candidate)) {
+            markSoftFailure(upstream, '返回网易云不可播外链', query);
+            emptyUrlResponse = response;
+            continue;
           }
         } catch {
           // 无法读取时按原响应返回，交由调用方处理
@@ -662,21 +711,25 @@ export async function fetchMetingApi(query, options = {}, timeoutMs = 10000) {
   const ttlMs = type === 'fm' ? 0 : (METING_CACHE_TTLS[type] || 15_000);
   const rawOptions = options && typeof options === 'object' ? options : {};
   const { bypassCache = false, ...fetchOptions } = rawOptions;
-  const key = buildMetingCacheKey(query, fetchOptions);
   let snapshot;
-  if (bypassCache) {
-    snapshot = await snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs));
-    if (ttlMs > 0 && snapshot.status >= 200 && snapshot.status < 400) {
-      METING_RESPONSE_CACHE.set(key, snapshot, ttlMs);
-    } else {
-      METING_RESPONSE_CACHE.delete(key);
-    }
+  if (type === 'fm') {
+    snapshot = await snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs), type);
   } else {
-    snapshot = await METING_RESPONSE_CACHE.get(
-      key,
-      async () => snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs)),
-      ttlMs,
-    );
+    const key = buildMetingCacheKey(query, fetchOptions);
+    if (bypassCache) {
+      snapshot = await snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs), type);
+      if (ttlMs > 0 && snapshot.status >= 200 && snapshot.status < 400 && snapshot.cacheable !== false) {
+        METING_RESPONSE_CACHE.set(key, snapshot, ttlMs);
+      } else {
+        METING_RESPONSE_CACHE.delete(key);
+      }
+    } else {
+      snapshot = await METING_RESPONSE_CACHE.get(
+        key,
+        async () => snapshotMetingResponse(await fetchMetingApiUncached(query, fetchOptions, timeoutMs), type),
+        ttlMs,
+      );
+    }
   }
   const keywords = getRuntimeConfig().blockedArtistKeywords;
   if (keywords?.length && snapshot.status >= 200 && snapshot.status < 300

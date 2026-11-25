@@ -1,4 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 const FILEHELPER_ORIGIN = 'https://szfilehelper.weixin.qq.com';
 
@@ -16,6 +18,8 @@ const SKIP_RES_HEADERS = new Set([
   'etag', 'last-modified', 'expires', 'age', 'cache-control', 'cdn-cache-control',
   'surrogate-control', 'x-cache', 'x-cache-lookup',
 ]);
+const MAX_WX_REWRITE_BYTES = 4 * 1024 * 1024;
+const MAX_WX_PASSTHROUGH_BYTES = 32 * 1024 * 1024;
 
 function isNoCacheWxEndpoint(targetUrl) {
   const path = String(targetUrl?.pathname || '');
@@ -324,7 +328,52 @@ function readWechatXmlField(bodyText, field) {
   }
 }
 
-function rememberLoginCookies(target, bodyText, upstream) {
+function resolveWxProxyTenantKey(req) {
+  const raw = String(req?.wxProxyTenantId || req?.account?.id || req?.apiIdentity?.userId || '').trim();
+  return raw || 'anon';
+}
+
+async function readBoundedResponseBuffer(upstream, maxBytes) {
+  const declared = Number(upstream.headers?.get?.('content-length') || 0);
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try { await upstream.body?.cancel?.(); } catch { /* ignore */ }
+    const error = new Error('微信代理响应体超过大小限制');
+    error.statusCode = 413;
+    throw error;
+  }
+  const reader = upstream.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    if (buffer.length > maxBytes) {
+      const error = new Error('微信代理响应体超过大小限制');
+      error.statusCode = 413;
+      throw error;
+    }
+    return buffer;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      total += chunk.length;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        const error = new Error('微信代理响应体超过大小限制');
+        error.statusCode = 413;
+        throw error;
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks, total);
+}
+
+function rememberLoginCookies(req, target, bodyText, upstream) {
   const hosts = new Set(['szfilehelper.weixin.qq.com', 'filehelper.weixin.qq.com', 'wx.qq.com', 'wx2.qq.com', 'wx8.qq.com']);
   if (target.protocol !== 'https:' || target.port || target.username || target.password || !hosts.has(target.hostname) || target.pathname !== '/cgi-bin/mmwebwx-bin/webwxnewloginpage' || upstream.status !== 200) return null;
   const ret = readWechatXmlField(bodyText, 'ret');
@@ -332,14 +381,17 @@ function rememberLoginCookies(target, bodyText, upstream) {
   const wxsid = readWechatXmlField(bodyText, 'wxsid');
   const wxuin = readWechatXmlField(bodyText, 'wxuin');
   if (!wxsid || !/^\d{1,32}$/u.test(String(wxuin || '').trim())) return null;
+  const tenant = resolveWxProxyTenantKey(req);
   const cookieStr = collectRawUpstreamCookies(upstream);
   if (cookieStr) {
     const now = Date.now();
     const entry = { cookies: cookieStr, at: now };
-    wxLoginCookieJar.delete(wxsid);
-    wxLoginCookieJar.set(wxsid, entry);
-    wxLoginCookieJar.delete(`uin:${wxuin}`);
-    wxLoginCookieJar.set(`uin:${wxuin}`, entry);
+    const sidKey = `${tenant}:sid:${wxsid}`;
+    const uinKey = `${tenant}:uin:${wxuin}`;
+    wxLoginCookieJar.delete(sidKey);
+    wxLoginCookieJar.set(sidKey, entry);
+    wxLoginCookieJar.delete(uinKey);
+    wxLoginCookieJar.set(uinKey, entry);
     for (const [key, jarEntry] of wxLoginCookieJar) {
       if (now - jarEntry.at > WX_LOGIN_JAR_TTL_MS) wxLoginCookieJar.delete(key);
     }
@@ -353,14 +405,15 @@ function rememberLoginCookies(target, bodyText, upstream) {
 }
 
 function resolveUpstreamCookies(req, targetUrl, bodyBuffer) {
+  const tenant = resolveWxProxyTenantKey(req);
   let cookie = filterWechatCookies(req.headers.cookie || '');
   const wxsidMatch = cookie.match(/(?:^|;\s*)wxsid=([^;]+)/);
   const wxsid = wxsidMatch?.[1];
-  let jarEntry = wxsid ? wxLoginCookieJar.get(wxsid) : null;
+  let jarEntry = wxsid ? wxLoginCookieJar.get(`${tenant}:sid:${wxsid}`) : null;
   if (!jarEntry) {
     const wxuinMatch = cookie.match(/(?:^|;\s*)wxuin=([^;]+)/);
     const wxuin = wxuinMatch?.[1];
-    if (wxuin) jarEntry = wxLoginCookieJar.get(`uin:${wxuin}`);
+    if (wxuin) jarEntry = wxLoginCookieJar.get(`${tenant}:uin:${wxuin}`);
   }
   if (jarEntry && Date.now() - jarEntry.at < WX_LOGIN_JAR_TTL_MS) {
     cookie = mergeCookieStrings(jarEntry.cookies, cookie);
@@ -592,32 +645,84 @@ async function forwardWxUpstream(fetchWithTimeout, req, res, targetUrl, errorLab
   res.set('X-OpenMusic-WxProxy', '1');
   if (isNoCacheWxEndpoint(upstreamTarget)) applyNoCacheHeaders(res);
 
-  const buffer = Buffer.from(await upstream.arrayBuffer());
-  const bodyText = buffer.toString('utf8');
-  const verifiedWechatUin = rememberLoginCookies(upstreamTarget, bodyText, upstream);
-  if (verifiedWechatUin) appendWechatLoginProofCookie(res, verifiedWechatUin, cookieOptions);
+  const needsRewrite = shouldRewriteBody(contentType) && !shouldSkipBodyRewrite(upstreamTarget);
+  const needsLoginInspect = upstreamTarget.pathname === '/cgi-bin/mmwebwx-bin/webwxnewloginpage';
+  const needsDebugInspect = process.env.DEBUG_WX === '1' && upstreamTarget.pathname.includes('webwxinit');
 
-  if (process.env.DEBUG_WX === '1' && upstreamTarget.pathname.includes('webwxinit')) {
-    let initRet = '';
+  if (needsRewrite || needsLoginInspect || needsDebugInspect) {
+    let buffer;
     try {
-      initRet = String(JSON.parse(bodyText)?.BaseResponse?.Ret ?? '');
-    } catch {
-      initRet = 'non-json';
+      buffer = await readBoundedResponseBuffer(upstream, MAX_WX_REWRITE_BYTES);
+    } catch (err) {
+      if (!res.headersSent) {
+        const status = err?.statusCode === 413 ? 413 : 502;
+        res.status(status).type('text/plain; charset=utf-8').send(`${errorLabel}：${err?.message || '响应读取失败'}`);
+      }
+      return;
     }
-    console.info('[wx-proxy] webwxinit', {
-      upstream: upstreamUrl,
-      status: upstream.status,
-      ret: initRet,
-      bodyLen: buffer.length,
-    });
-  }
+    const bodyText = buffer.toString('utf8');
+    const verifiedWechatUin = rememberLoginCookies(req, upstreamTarget, bodyText, upstream);
+    if (verifiedWechatUin) appendWechatLoginProofCookie(res, verifiedWechatUin, cookieOptions);
 
-  if (shouldRewriteBody(contentType) && !shouldSkipBodyRewrite(upstreamTarget)) {
-    const text = rewriteResponseBody(bodyText, upstreamTarget.origin, contentType, upstreamTarget);
-    if (!res.headersSent) res.status(upstream.status).send(text);
+    if (needsDebugInspect) {
+      let initRet = '';
+      try {
+        initRet = String(JSON.parse(bodyText)?.BaseResponse?.Ret ?? '');
+      } catch {
+        initRet = 'non-json';
+      }
+      console.info('[wx-proxy] webwxinit', {
+        upstream: upstreamUrl,
+        status: upstream.status,
+        ret: initRet,
+        bodyLen: buffer.length,
+      });
+    }
+
+    if (needsRewrite) {
+      const text = rewriteResponseBody(bodyText, upstreamTarget.origin, contentType, upstreamTarget);
+      if (!res.headersSent) res.status(upstream.status).send(text);
+      return;
+    }
+
+    if (!res.headersSent) res.status(upstream.status).send(buffer);
     return;
   }
 
+  const declaredLen = Number(upstream.headers.get('content-length') || 0);
+  if (Number.isFinite(declaredLen) && declaredLen > MAX_WX_PASSTHROUGH_BYTES) {
+    try { await upstream.body?.cancel?.(); } catch { /* ignore */ }
+    if (!res.headersSent) res.status(413).type('text/plain; charset=utf-8').send('微信代理响应体过大');
+    return;
+  }
+
+  if (upstream.body) {
+    const stream = Readable.fromWeb(upstream.body);
+    let streamedBytes = 0;
+    stream.on('data', (chunk) => {
+      streamedBytes += chunk.length;
+      if (streamedBytes > MAX_WX_PASSTHROUGH_BYTES) {
+        stream.destroy(new Error('微信代理流式响应超过大小限制'));
+      }
+    });
+    res.status(upstream.status);
+    try {
+      await pipeline(stream, res);
+    } catch {
+      if (!res.headersSent) res.status(502).end();
+    }
+    return;
+  }
+
+  let buffer;
+  try {
+    buffer = await readBoundedResponseBuffer(upstream, MAX_WX_PASSTHROUGH_BYTES);
+  } catch (err) {
+    if (!res.headersSent) {
+      res.status(err?.statusCode === 413 ? 413 : 502).type('text/plain; charset=utf-8').send(`${errorLabel}：${err?.message || '响应读取失败'}`);
+    }
+    return;
+  }
   if (!res.headersSent) res.status(upstream.status).send(buffer);
 }
 

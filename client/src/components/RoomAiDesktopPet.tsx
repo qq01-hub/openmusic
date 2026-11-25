@@ -190,7 +190,19 @@ export default function RoomAiDesktopPet({
 
   // Refs
   const posRef = useRef(pos);
-  posRef.current = pos;
+  const tiltRef = useRef(tiltDeg);
+  const facingLeftRef = useRef(facingLeft);
+  facingLeftRef.current = facingLeft;
+  const effectiveScaleRef = useRef(effectiveScale);
+  effectiveScaleRef.current = effectiveScale;
+  const petContainerRef = useRef<HTMLDivElement>(null);
+  const petTiltRef = useRef<HTMLDivElement>(null);
+  const rhythmEnergyRef = useRef(rhythmEnergy);
+  const sessionListenSecondsRef = useRef(sessionListenSeconds);
+  const showBubbleBarsRef = useRef(showBubbleBars);
+  showBubbleBarsRef.current = showBubbleBars;
+  const showMusicLedgerRef = useRef(showMusicLedger);
+  showMusicLedgerRef.current = showMusicLedger;
   const velRef = useRef<{ vx: number; vy: number }>({ vx: 0, vy: 0 });
   const stateRef = useRef<PetState>(petState);
   stateRef.current = petState;
@@ -211,6 +223,37 @@ export default function RoomAiDesktopPet({
   const lastSongKeyRef = useRef('');
   const clickTimestampsRef = useRef<number[]>([]);
 
+  const applyPetTransform = useCallback((x: number, y: number, tilt?: number) => {
+    posRef.current = { x, y };
+    if (petContainerRef.current) {
+      petContainerRef.current.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0) scale(${effectiveScaleRef.current})`;
+    }
+    if (tilt !== undefined) {
+      tiltRef.current = tilt;
+      if (petTiltRef.current) {
+        petTiltRef.current.style.transform = `rotate(${tilt}deg)`;
+      }
+    }
+  }, []);
+
+  const commitPos = useCallback((next: { x: number; y: number }, tilt?: number) => {
+    applyPetTransform(next.x, next.y, tilt);
+    setPos(next);
+    if (tilt !== undefined) setTiltDeg(tilt);
+  }, [applyPetTransform]);
+
+  const commitTilt = useCallback((tilt: number) => {
+    tiltRef.current = tilt;
+    if (petTiltRef.current) {
+      petTiltRef.current.style.transform = `rotate(${tilt}deg)`;
+    }
+    setTiltDeg(tilt);
+  }, []);
+
+  useLayoutEffect(() => {
+    applyPetTransform(posRef.current.x, posRef.current.y);
+  }, [effectiveScale, applyPetTransform]);
+
   // 桌宠只响应当前成员发起的对话，聊天室仍保留全房间任务
   const ownThinkingTask = useMemo(
     () => getDeskPetThinkingTask(aiProcessing, myUserId),
@@ -227,20 +270,20 @@ export default function RoomAiDesktopPet({
     roamTargetRef.current = null;
     lastInteractRef.current = Date.now();
     autoDozeRef.current = false;
-    setTiltDeg(0);
+    commitTilt(0);
     setOriginalAction(name);
     setPlayKey((serial) => serial + 1);
     setPetState('original_action');
     setMenuPos(null);
     setShowActSubmenu(false);
-  }, []);
+  }, [commitTilt]);
   useEffect(() => { remainingAutoActionsRef.current.clear(); }, [character]);
   useEffect(() => {
     if (roamEnabled || stateRef.current !== 'roam') return;
     roamTargetRef.current = null;
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState(baseStateRef.current);
-  }, [roamEnabled]);
+  }, [commitTilt, roamEnabled]);
   const activeThinkingStep = useMemo(() => {
     const active = ownThinkingTask;
     if (!active) return '';
@@ -288,7 +331,7 @@ export default function RoomAiDesktopPet({
         const rect = queueEl.getBoundingClientRect();
         if (rect.width > PET_W && rect.height > PET_H && rect.bottom <= window.innerHeight) {
           hasAlignedQueuePosRef.current = true;
-          setPos(
+          commitPos(
             clampViewportPos(
               Math.round(rect.right - PET_W - 14),
               Math.round(rect.bottom - PET_H - 12),
@@ -299,7 +342,7 @@ export default function RoomAiDesktopPet({
       }
       if (isMobileViewport) {
         hasAlignedQueuePosRef.current = true;
-        setPos(
+        commitPos(
           clampViewportPos(
             window.innerWidth - PET_W - 8,
             window.innerHeight - PET_H - 96,
@@ -316,7 +359,7 @@ export default function RoomAiDesktopPet({
     return () => {
       if (rafId) window.cancelAnimationFrame(rafId);
     };
-  }, [clampViewportPos, deskPetEnabled, isMobileViewport, petEnabled]);
+  }, [clampViewportPos, commitPos, deskPetEnabled, isMobileViewport, petEnabled]);
 
   const triggerSquash = useCallback((sx: number, sy: number, durationMs = 260) => {
     if (squashTimerRef.current) window.clearTimeout(squashTimerRef.current);
@@ -362,8 +405,16 @@ export default function RoomAiDesktopPet({
       if (bubbleTimerRef.current) window.clearTimeout(bubbleTimerRef.current);
       setBubble({ text, aiOnly: Boolean(options?.aiOnly), command: Boolean(options?.command) });
       aiCommandBubbleUntilRef.current = options?.command ? Date.now() + durationMs : 0;
-      setShowBubbleBars(Boolean(options?.withBars));
-      setShowMusicLedger(Boolean(options?.withLedger));
+      const withBars = Boolean(options?.withBars);
+      const withLedger = Boolean(options?.withLedger);
+      if (withBars || withLedger) {
+        setRhythmEnergy(Math.round(rhythmEnergyRef.current));
+      }
+      if (withLedger) {
+        setSessionListenSeconds(sessionListenSecondsRef.current);
+      }
+      setShowBubbleBars(withBars);
+      setShowMusicLedger(withLedger);
       bubbleTimerRef.current = window.setTimeout(() => {
         setBubble(null);
         setShowBubbleBars(false);
@@ -390,14 +441,14 @@ export default function RoomAiDesktopPet({
           : aiEnabled
             ? `🫧 队列快听完啦，要不要点我 @${botName} 帮大家搜几首同风格的神曲呀？`
             : '🫧 队列快听完啦，去搜索里为大家添几首喜欢的歌吧～',
-        `🐟 咕噜咕噜～听着《${songTitle}》，本鱼的音浪能量已经充到 ${Math.round(rhythmEnergy)}% 啦！`,
+        `🐟 咕噜咕噜～听着《${songTitle}》，本鱼的音浪能量已经充到 ${Math.round(rhythmEnergyRef.current)}% 啦！`,
       ];
       if (Math.random() < 0.65) {
         return dynamicLines[Math.floor(Math.random() * dynamicLines.length)];
       }
     }
     return GENERAL_MUSIC_LINES[Math.floor(Math.random() * GENERAL_MUSIC_LINES.length)];
-  }, [aiEnabled, botName, currentSong, queueLength, rhythmEnergy, userCount]);
+  }, [aiEnabled, botName, currentSong, queueLength, userCount]);
 
   // 喂食音符点心
   const handleFeedMusicSnack = useCallback((silent = false) => {
@@ -405,23 +456,24 @@ export default function RoomAiDesktopPet({
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
     roamTargetRef.current = null;
     autoDozeRef.current = false;
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('eat');
     setPlayKey((serial) => serial + 1);
     lastInteractRef.current = Date.now();
-    setRhythmEnergy((v) => Math.min(100, v + 18));
+    rhythmEnergyRef.current = Math.min(100, rhythmEnergyRef.current + 18);
+    setRhythmEnergy(Math.round(rhythmEnergyRef.current));
     setMoodScore((v) => Math.min(100, v + 10));
     setInteractionCount((c) => c + 1);
     spawnParticle('food', food.icon, 0, -18);
     window.setTimeout(() => spawnParticle('heart', '💖', 12, -8), 320);
     triggerSquash(1.18, 0.84, 320);
     if (!silent) say(food.line, 5200, { withBars: true, force: true });
-  }, [say, spawnParticle, triggerSquash]);
+  }, [commitTilt, say, spawnParticle, triggerSquash]);
 
   // 摸摸头夸夸
   const handlePatPet = useCallback((silent = false) => {
     if (stateTimerRef.current) window.clearTimeout(stateTimerRef.current);
-    setTiltDeg(0);
+    commitTilt(0);
     playOriginalAction(UPSTREAM_ANIM.clicks[Math.floor(Math.random() * UPSTREAM_ANIM.clicks.length)]);
     setMoodScore((v) => Math.min(100, v + 12));
     setInteractionCount((c) => c + 1);
@@ -430,7 +482,7 @@ export default function RoomAiDesktopPet({
     triggerSquash(1.15, 0.86, 260);
     const line = PAT_LINES[Math.floor(Math.random() * PAT_LINES.length)];
     if (!silent) say(line, 4600, { withBars: true, force: true });
-  }, [playOriginalAction, say, spawnParticle, triggerSquash]);
+  }, [commitTilt, playOriginalAction, say, spawnParticle, triggerSquash]);
 
   // 扫描房间内可交互的真实前端 DOM 组件
   const findRoomUiTargets = useCallback(() => {
@@ -484,7 +536,7 @@ export default function RoomAiDesktopPet({
     const rawY = rect.top + rect.height / 2 - PET_H * 0.65;
     const dest = clampViewportPos(rawX, rawY);
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: dest.x,
@@ -507,7 +559,7 @@ export default function RoomAiDesktopPet({
       },
     };
     return true;
-  }, [clampViewportPos, findRoomUiTargets, say, spawnParticle]);
+  }, [clampViewportPos, commitTilt, findRoomUiTargets, say, spawnParticle]);
 
   // 动作3：偷偷点击某个按钮，不触发实际效果，反而被按钮弹飞并傲娇生气！（Sneak Click & Bounce）
   const triggerSneakClickButtonAction = useCallback((silent = false) => {
@@ -521,7 +573,7 @@ export default function RoomAiDesktopPet({
       rect.top + rect.height / 2 - PET_H * 0.62,
     );
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     if (!silent) say(`🐾 嘿嘿，趁没人注意，本鱼悄悄去戳一下「${name}」按钮…`, 2600);
 
@@ -560,7 +612,7 @@ export default function RoomAiDesktopPet({
       },
     };
     return true;
-  }, [clampViewportPos, findRoomUiTargets, say, spawnButtonRipple, spawnParticle, triggerSquash]);
+  }, [clampViewportPos, commitTilt, findRoomUiTargets, say, spawnButtonRipple, spawnParticle, triggerSquash]);
 
   // 动作4：在底栏播放进度条上踩着音浪冲浪滑行（Surf Progress Bar）
   const triggerSurfProgressAction = useCallback((silent = false) => {
@@ -572,7 +624,7 @@ export default function RoomAiDesktopPet({
     const startX = Math.max(24, Math.round(w * 0.14));
     const endX = Math.min(w - PET_W - 24, Math.round(w * 0.78));
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: startX,
@@ -602,7 +654,7 @@ export default function RoomAiDesktopPet({
         };
       },
     };
-  }, [currentSong?.name, isPlaying, say, spawnParticle, triggerSquash]);
+  }, [commitTilt, currentSong?.name, isPlaying, say, spawnParticle, triggerSquash]);
 
   // 动作5：坐在播放队列面板顶部甩竿垂钓待播好歌（Fish in Queue）
   const triggerFishQueueAction = useCallback((silent = false) => {
@@ -612,7 +664,7 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + rect.width * 0.55 - PET_W / 2, rect.top - PET_H * 0.65)
       : clampViewportPos(window.innerWidth * 0.52, window.innerHeight * 0.28);
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: dest.x,
@@ -637,7 +689,7 @@ export default function RoomAiDesktopPet({
         }, 4800);
       },
     };
-  }, [clampViewportPos, queueLength, say, spawnParticle, triggerSquash]);
+  }, [clampViewportPos, commitTilt, queueLength, say, spawnParticle, triggerSquash]);
 
   // 动作6：跑到左下角专辑封面旁戴墨镜搓碟打碟（DJ Scratch Cover）
   const triggerDjCoverAction = useCallback((silent = false) => {
@@ -647,7 +699,7 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + 58, rect.top - PET_H + 6)
       : clampViewportPos(48, window.innerHeight - PET_H - 80);
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: dest.x,
@@ -668,7 +720,7 @@ export default function RoomAiDesktopPet({
         }, 5200);
       },
     };
-  }, [clampViewportPos, currentSong?.name, say, spawnParticle]);
+  }, [clampViewportPos, commitTilt, currentSong?.name, say, spawnParticle]);
 
   // 动作7：在热榜或搜索区举着放大镜寻宝（Treasure Hunt Hotlist）
   const triggerTreasureHotAction = useCallback((silent = false) => {
@@ -680,7 +732,7 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + Math.min(140, rect.width * 0.45), rect.top + Math.min(120, rect.height * 0.35))
       : clampViewportPos(90, window.innerHeight * 0.36);
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: dest.x,
@@ -697,7 +749,7 @@ export default function RoomAiDesktopPet({
         }, 5000);
       },
     };
-  }, [clampViewportPos, say, spawnParticle]);
+  }, [clampViewportPos, commitTilt, say, spawnParticle]);
 
   // 动作8：趴在聊天室输入框上沿擦灰尘催大家聊天点歌（Perch Chat Input）
   const triggerPerchChatAction = useCallback((silent = false) => {
@@ -707,7 +759,7 @@ export default function RoomAiDesktopPet({
       ? clampViewportPos(rect.left + rect.width * 0.5 - PET_W / 2, rect.bottom - PET_H - 54)
       : clampViewportPos(window.innerWidth - PET_W - 80, window.innerHeight - PET_H - 130);
 
-    setTiltDeg(0);
+    commitTilt(0);
     setPetState('roam');
     roamTargetRef.current = {
       x: dest.x,
@@ -730,7 +782,7 @@ export default function RoomAiDesktopPet({
         }, 5200);
       },
     };
-  }, [aiEnabled, botName, clampViewportPos, say, spawnParticle]);
+  }, [aiEnabled, botName, clampViewportPos, commitTilt, say, spawnParticle]);
 
   const petAiHandlerRef = useRef<(command: 'get_state' | 'control', args: DeskPetAiArgs) => DeskPetAiResult>(() => ({ success: false }));
   petAiHandlerRef.current = (command, args) => {
@@ -760,8 +812,8 @@ export default function RoomAiDesktopPet({
         interactions: capabilities.includes('interact') ? interactions : [],
         actions: matching.slice(offset, offset + 8), nextOffset: offset + 8 < matching.length ? offset + 8 : null,
         focusRemainingSeconds: pomodoroEndAt ? Math.max(0, Math.ceil((pomodoroEndAt - Date.now()) / 1000)) : 0,
-        songsListenedCount, listenSeconds: sessionListenSeconds, interactionCount,
-        energy: Math.round(rhythmEnergy), mood: Math.round(moodScore),
+        songsListenedCount, listenSeconds: sessionListenSecondsRef.current, interactionCount,
+        energy: Math.round(rhythmEnergyRef.current), mood: Math.round(moodScore),
       } };
     }
     const action = args.action!;
@@ -784,7 +836,7 @@ export default function RoomAiDesktopPet({
       roamTargetRef.current = null;
       autoDozeRef.current = false;
       lastInteractRef.current = Date.now();
-      setTiltDeg(0);
+      commitTilt(0);
       setMenuPos(null);
       setShowActSubmenu(false);
     }
@@ -857,7 +909,10 @@ export default function RoomAiDesktopPet({
     lastSongKeyRef.current = nextKey;
     if (isFirstMount) return;
     setSongsListenedCount((c) => c + 1);
-    setRhythmEnergy((v) => Math.min(100, v + 8));
+      rhythmEnergyRef.current = Math.min(100, rhythmEnergyRef.current + 8);
+      if (showBubbleBarsRef.current || showMusicLedgerRef.current) {
+        setRhythmEnergy(Math.round(rhythmEnergyRef.current));
+      }
     if (dialogEnabled) {
       if (!['drag', 'slingshot_aim', 'physics', 'sleep'].includes(stateRef.current)
         && !ONE_SHOT_STATES.has(stateRef.current)) {
@@ -921,14 +976,32 @@ export default function RoomAiDesktopPet({
       if (isHostPageHidden() && !pomodoroEndAt) return;
       tickCount += 1;
       if (isPlaying) {
-        setSessionListenSeconds((s) => s + 1);
-        setRhythmEnergy((v) => (v >= 100 ? v : Math.min(100, v + 0.15)));
+        const prevListenMins = Math.floor(sessionListenSecondsRef.current / 60);
+        sessionListenSecondsRef.current += 1;
+        if (showMusicLedgerRef.current && Math.floor(sessionListenSecondsRef.current / 60) !== prevListenMins) {
+          setSessionListenSeconds(sessionListenSecondsRef.current);
+        }
+        const prevEnergyRounded = Math.round(rhythmEnergyRef.current);
+        rhythmEnergyRef.current = rhythmEnergyRef.current >= 100 ? 100 : Math.min(100, rhythmEnergyRef.current + 0.15);
+        if (
+          (showBubbleBarsRef.current || showMusicLedgerRef.current)
+          && Math.round(rhythmEnergyRef.current) !== prevEnergyRounded
+        ) {
+          setRhythmEnergy(Math.round(rhythmEnergyRef.current));
+        }
         if (tickCount % 6 === 0 && (stateRef.current === 'idle' || stateRef.current === 'work')) {
           const notes = ['♪', '🎵', '🎶'];
           spawnParticle('note', notes[tickCount % notes.length], (tickCount % 2 === 0 ? 1 : -1) * 14, -12);
         }
       } else {
-        setRhythmEnergy((v) => (v <= 25 ? v : Math.max(25, v - 0.08)));
+        const prevEnergyRounded = Math.round(rhythmEnergyRef.current);
+        rhythmEnergyRef.current = rhythmEnergyRef.current <= 25 ? 25 : Math.max(25, rhythmEnergyRef.current - 0.08);
+        if (
+          (showBubbleBarsRef.current || showMusicLedgerRef.current)
+          && Math.round(rhythmEnergyRef.current) !== prevEnergyRounded
+        ) {
+          setRhythmEnergy(Math.round(rhythmEnergyRef.current));
+        }
       }
       if (pomodoroEndAt) {
         const diff = Math.max(0, pomodoroEndAt - Date.now());
@@ -979,7 +1052,8 @@ export default function RoomAiDesktopPet({
         const vx = springStep(velRef.current.vx, posRef.current.x, target.x, dt);
         const vy = springStep(velRef.current.vy, posRef.current.y, target.y, dt);
         velRef.current = { vx, vy };
-        setPos(clampViewportPos(posRef.current.x + vx * dt, posRef.current.y + vy * dt));
+        const nextPos = clampViewportPos(posRef.current.x + vx * dt, posRef.current.y + vy * dt);
+        applyPetTransform(nextPos.x, nextPos.y);
       } else if (curState === 'physics') {
         const min = clampViewportPos(-Infinity, -Infinity);
         const max = clampViewportPos(Infinity, Infinity);
@@ -997,10 +1071,19 @@ export default function RoomAiDesktopPet({
           if (step.atRest) { rest = true; break; }
         }
         velRef.current = { vx: next.vx, vy: next.vy };
-        if (Math.abs(next.vx) > 8) setFacingLeft(next.vx < 0);
-        setTiltDeg(rest ? 0 : Math.max(-28, Math.min(28, next.vx * 0.032)));
-        setPos({ x: next.x, y: next.y });
-        if (rest) setPetState(baseStateRef.current);
+        if (Math.abs(next.vx) > 8) {
+          const nextFacing = next.vx < 0;
+          if (facingLeftRef.current !== nextFacing) {
+            facingLeftRef.current = nextFacing;
+            setFacingLeft(nextFacing);
+          }
+        }
+        const nextTilt = rest ? 0 : Math.max(-28, Math.min(28, next.vx * 0.032));
+        applyPetTransform(next.x, next.y, nextTilt);
+        if (rest) {
+          commitPos({ x: next.x, y: next.y }, 0);
+          setPetState(baseStateRef.current);
+        }
       } else if ((curState === 'roam' || curState === 'surf_progress') && roamTargetRef.current) {
         const target = roamTargetRef.current;
         const dx = target.x - posRef.current.x;
@@ -1009,8 +1092,7 @@ export default function RoomAiDesktopPet({
 
         if (dist <= 6) {
           const finalPos = { x: target.x, y: target.y };
-          setPos(finalPos);
-          setTiltDeg(0);
+          commitPos(finalPos, 0);
           const cb = target.onArrive;
           roamTargetRef.current = null;
           if (cb) cb();
@@ -1022,9 +1104,12 @@ export default function RoomAiDesktopPet({
             posRef.current.y +
             (dy / dist) * stepDist +
             Math.sin(now / 150) * 0.45;
-          setFacingLeft(dx < 0);
-          setTiltDeg(dx < 0 ? -5 : 5);
-          setPos({ x: nx, y: ny });
+          const nextFacing = dx < 0;
+          if (facingLeftRef.current !== nextFacing) {
+            facingLeftRef.current = nextFacing;
+            setFacingLeft(nextFacing);
+          }
+          applyPetTransform(nx, ny, nextFacing ? -5 : 5);
         }
       }
 
@@ -1181,7 +1266,8 @@ export default function RoomAiDesktopPet({
   // 窗口尺寸变化时保持在视口内
   useEffect(() => {
     const onResize = () => {
-      setPos((prev) => clampViewportPos(prev.x, prev.y));
+      const clamped = clampViewportPos(posRef.current.x, posRef.current.y);
+      commitPos(clamped);
     };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
@@ -1298,7 +1384,7 @@ export default function RoomAiDesktopPet({
           moveEvent.clientY - dragOffsetRef.current.dy,
         );
         if (physicsEnabled) dragTargetRef.current = nextPos;
-        else setPos(nextPos);
+        else applyPetTransform(nextPos.x, nextPos.y);
         const now = performance.now();
         dragSamplesRef.current.push({ x: moveEvent.clientX, y: moveEvent.clientY, t: now });
         dragSamplesRef.current = trimTrail(dragSamplesRef.current, now);
@@ -1332,7 +1418,11 @@ export default function RoomAiDesktopPet({
       if (dragMovedRef.current) {
         if (physicsEnabled) {
           const velocity = estimateReleaseVelocity(dragSamplesRef.current, performance.now());
-          if (!velocity) { setPetState(baseStateRef.current); return; }
+          if (!velocity) {
+            commitPos({ ...posRef.current }, 0);
+            setPetState(baseStateRef.current);
+            return;
+          }
           const { vx, vy } = velocity;
           velRef.current = velocity;
           setPetState('physics');
@@ -1340,6 +1430,7 @@ export default function RoomAiDesktopPet({
             say('哇啊啊～飞起来咯！慢点甩，鱼尾巴要转成螺旋桨啦 🌀', 3800);
           }
         } else {
+          commitPos({ ...posRef.current }, 0);
           setPetState('idle');
         }
         return;
@@ -1413,10 +1504,11 @@ export default function RoomAiDesktopPet({
     );
   }
 
-  const bubbleFlipBelow = pos.y < Math.min(280 * effectiveScale, window.innerHeight / 2);
+  const renderPos = posRef.current;
+  const bubbleFlipBelow = renderPos.y < Math.min(280 * effectiveScale, window.innerHeight / 2);
   const bubbleMaxWidth = Math.min(260, (window.innerWidth - 24) / effectiveScale);
   const bubbleHalfWidth = bubbleMaxWidth * effectiveScale / 2;
-  const petCenterX = pos.x + PET_W / 2;
+  const petCenterX = renderPos.x + PET_W / 2;
   const bubbleOffset = (Math.max(12 + bubbleHalfWidth,
     Math.min(window.innerWidth - 12 - bubbleHalfWidth, petCenterX)) - petCenterX) / effectiveScale;
   const displayBubbleText = !dialogEnabled ? '' : bubble?.command && aiEnabled ? bubble.text : isAiThinking && workEnabled
@@ -1447,8 +1539,8 @@ export default function RoomAiDesktopPet({
       {slingshotPull && (
         <svg className="pointer-events-none fixed inset-0 h-full w-full z-[45]">
           <line
-            x1={pos.x + PET_W / 2}
-            y1={pos.y + PET_H / 2}
+            x1={renderPos.x + PET_W / 2}
+            y1={renderPos.y + PET_H / 2}
             x2={slingshotPull.curX}
             y2={slingshotPull.curY}
             stroke="#4d6bfe"
@@ -1461,8 +1553,9 @@ export default function RoomAiDesktopPet({
 
       {/* 桌宠主体容器 */}
       <div
+        ref={petContainerRef}
         style={{
-          transform: `translate3d(${Math.round(pos.x)}px, ${Math.round(pos.y)}px, 0) scale(${effectiveScale})`,
+          transform: `translate3d(${Math.round(renderPos.x)}px, ${Math.round(renderPos.y)}px, 0) scale(${effectiveScale})`,
           transformOrigin: 'center bottom',
           width: PET_W,
           height: PET_H,
@@ -1596,8 +1689,8 @@ export default function RoomAiDesktopPet({
             onClick={(e) => {
               e.stopPropagation();
               setMenuPos({
-                x: Math.max(12, Math.round(pos.x + PET_W / 2)),
-                y: Math.max(12, Math.round(pos.y + PET_H / 2)),
+                x: Math.max(12, Math.round(posRef.current.x + PET_W / 2)),
+                y: Math.max(12, Math.round(posRef.current.y + PET_H / 2)),
               });
               setShowActSubmenu(false);
             }}
@@ -1634,8 +1727,9 @@ export default function RoomAiDesktopPet({
             className="h-full w-full transition-transform duration-200"
           >
             <div
+              ref={petTiltRef}
               style={{
-                transform: `rotate(${tiltDeg}deg)`,
+                transform: `rotate(${tiltRef.current}deg)`,
               }}
               className="h-full w-full transition-transform duration-200"
             >
@@ -1810,7 +1904,7 @@ export default function RoomAiDesktopPet({
               roamTargetRef.current = null;
               autoDozeRef.current = false;
               lastInteractRef.current = Date.now();
-              setTiltDeg(0);
+              commitTilt(0);
               const nextSleeping = petState !== 'sleep';
               setPetState(nextSleeping ? 'sleep' : baseStateRef.current);
               setMenuPos(null);

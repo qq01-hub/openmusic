@@ -10,7 +10,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
-      max_memory_restart: '300M',
+      max_memory_restart: '640M',
       kill_timeout: 30000,
       listen_timeout: 10000,
       env: {

@@ -3,10 +3,76 @@ import type { Song } from '../types';
 const DATABASE_NAME = 'openmusic-song-audio-v1';
 const AUDIO_STORE = 'audio';
 const META_STORE = 'metadata';
-const MAX_CACHE_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_SONG_BYTES = 256 * 1024 * 1024;
-const MAX_CACHE_SONGS = 128;
+const DESKTOP_MAX_CACHE_BYTES = 512 * 1024 * 1024;
+const MOBILE_MAX_CACHE_BYTES = 128 * 1024 * 1024;
+const DESKTOP_MAX_SONG_BYTES = 48 * 1024 * 1024;
+const MOBILE_MAX_SONG_BYTES = 20 * 1024 * 1024;
+const DESKTOP_MAX_CACHE_SONGS = 64;
+const MOBILE_MAX_CACHE_SONGS = 24;
+const MAX_AUTO_CACHE_DURATION_MS = 12 * 60 * 1000;
+const LOSSLESS_QUALITY_PATTERN = /无损|母带|沉浸|环绕|空间|全景|flac|hires|hi-res|jymaster|jyeffect|sky|lossless|dolby/iu;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60_000;
+
+type NetworkConnectionLike = {
+  saveData?: boolean;
+  effectiveType?: string;
+};
+
+function isMobileCacheProfile(): boolean {
+  if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/Android|iPhone|iPad|iPod|Mobile|HarmonyOS/iu.test(ua)) return true;
+  try {
+    return window.matchMedia?.('(pointer: coarse)')?.matches === true;
+  } catch {
+    return false;
+  }
+}
+
+function getCacheLimits() {
+  const mobile = isMobileCacheProfile();
+  return {
+    mobile,
+    maxCacheBytes: mobile ? MOBILE_MAX_CACHE_BYTES : DESKTOP_MAX_CACHE_BYTES,
+    maxSongBytes: mobile ? MOBILE_MAX_SONG_BYTES : DESKTOP_MAX_SONG_BYTES,
+    maxCacheSongs: mobile ? MOBILE_MAX_CACHE_SONGS : DESKTOP_MAX_CACHE_SONGS,
+  };
+}
+
+function isConstrainedNetwork(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const connection = (navigator as Navigator & { connection?: NetworkConnectionLike }).connection;
+  if (!connection) return false;
+  if (connection.saveData) return true;
+  const effectiveType = String(connection.effectiveType || '').toLowerCase();
+  return effectiveType === 'slow-2g' || effectiveType === '2g' || effectiveType === '3g';
+}
+
+export function shouldAutoCacheSongAudio(qualityLabel?: string, durationMs?: number): boolean {
+  if (typeof indexedDB === 'undefined') return false;
+  if (isMobileCacheProfile() || isConstrainedNetwork()) return false;
+  if (qualityLabel && LOSSLESS_QUALITY_PATTERN.test(qualityLabel)) return false;
+  if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs > MAX_AUTO_CACHE_DURATION_MS) return false;
+  return true;
+}
+
+async function resolveEffectiveCacheBudget(maxCacheBytes: number): Promise<number> {
+  if (typeof navigator === 'undefined' || typeof navigator.storage?.estimate !== 'function') {
+    return maxCacheBytes;
+  }
+  try {
+    const estimate = await navigator.storage.estimate();
+    const quota = Number(estimate?.quota);
+    const usage = Number(estimate?.usage);
+    if (!Number.isFinite(quota) || quota <= 0) return maxCacheBytes;
+    const reserve = Math.max(128 * 1024 * 1024, Math.floor(quota * 0.15));
+    const safeTotal = Math.max(0, quota - reserve);
+    const remaining = Number.isFinite(usage) && usage >= 0 ? Math.max(0, safeTotal - usage) : safeTotal;
+    return Math.min(maxCacheBytes, Math.max(32 * 1024 * 1024, remaining));
+  } catch {
+    return maxCacheBytes;
+  }
+}
 
 type CacheMetadata = { key: string; size: number; createdAt: number; usedAt: number };
 type LocalAudioSource = { key: string; objectUrl: string; remoteUrl: string; resolveFallback?: () => Promise<string> };
@@ -89,7 +155,7 @@ export async function getCachedSongAudio(key: string): Promise<Blob | null> {
         const content = audio.get(key);
         content.onsuccess = () => {
           const blob = content.result;
-          if (blob instanceof Blob && blob.size > 0 && blob.size === meta.size && blob.size <= MAX_SONG_BYTES) {
+          if (blob instanceof Blob && blob.size > 0 && blob.size === meta.size && blob.size <= DESKTOP_MAX_SONG_BYTES) {
             result = blob;
             metadata.put({ ...meta, usedAt: Date.now() });
           } else {
@@ -118,7 +184,7 @@ async function hasValidCachedSongAudio(db: IDBDatabase, key: string): Promise<bo
       const request = metadata.get(key);
       request.onsuccess = () => {
         const meta = request.result as CacheMetadata | undefined;
-        if (!meta || !Number.isFinite(meta.createdAt) || Date.now() - meta.createdAt > CACHE_TTL_MS || meta.size <= 0 || meta.size > MAX_SONG_BYTES) {
+        if (!meta || !Number.isFinite(meta.createdAt) || Date.now() - meta.createdAt > CACHE_TTL_MS || meta.size <= 0 || meta.size > DESKTOP_MAX_SONG_BYTES) {
           return;
         }
         const audioCheck = typeof audio.getKey === 'function' ? audio.getKey(key) : audio.get(key);
@@ -137,6 +203,9 @@ async function hasValidCachedSongAudio(db: IDBDatabase, key: string): Promise<bo
 
 async function storeAudio(db: IDBDatabase, key: string, blob: Blob, signal: AbortSignal): Promise<void> {
   if (signal.aborted || rejectedKeys.has(key)) return;
+  const { maxCacheBytes, maxCacheSongs } = getCacheLimits();
+  const effectiveBudget = await resolveEffectiveCacheBudget(maxCacheBytes);
+  if (signal.aborted || rejectedKeys.has(key) || blob.size > effectiveBudget) return;
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction([AUDIO_STORE, META_STORE], 'readwrite');
     const abort = () => tx.abort();
@@ -155,13 +224,14 @@ async function storeAudio(db: IDBDatabase, key: string, blob: Blob, signal: Abor
         return true;
       }).sort((a, b) => a.usedAt - b.usedAt);
       let total = entries.reduce((size, entry) => size + entry.size, 0);
-      while (entries.length >= MAX_CACHE_SONGS || total + blob.size > MAX_CACHE_BYTES) {
+      while (entries.length >= maxCacheSongs || total + blob.size > effectiveBudget) {
         const oldest = entries.shift();
         if (!oldest) break;
         total -= oldest.size;
         metadata.delete(oldest.key);
         audio.delete(oldest.key);
       }
+      if (total + blob.size > effectiveBudget) return;
       audio.put(blob, key);
       metadata.put({ key, size: blob.size, createdAt: now, usedAt: now } satisfies CacheMetadata);
     };
@@ -172,6 +242,7 @@ async function storeAudio(db: IDBDatabase, key: string, blob: Blob, signal: Abor
 }
 
 async function downloadAudio(url: string, signal: AbortSignal): Promise<Blob | null> {
+  const { maxSongBytes } = getCacheLimits();
   const response = await fetch(url, { credentials: 'same-origin', cache: 'force-cache', signal });
   const type = response.headers.get('Content-Type') || '';
   // 206 首包、播放列表和错误页都不是完整音频，禁止当作整曲持久化
@@ -182,7 +253,7 @@ async function downloadAudio(url: string, signal: AbortSignal): Promise<Blob | n
     return null;
   }
   const expectedSize = Number(response.headers.get('Content-Length'));
-  if (expectedSize > MAX_SONG_BYTES) { await response.body.cancel(); return null; }
+  if (expectedSize > maxSongBytes) { await response.body.cancel(); return null; }
   const reader = response.body.getReader();
   const chunks: ArrayBuffer[] = [];
   let size = 0;
@@ -191,7 +262,7 @@ async function downloadAudio(url: string, signal: AbortSignal): Promise<Blob | n
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (signal.aborted || size > MAX_SONG_BYTES) {
+      if (signal.aborted || size > maxSongBytes) {
         await reader.cancel();
         return null;
       }
@@ -211,7 +282,13 @@ async function downloadAudio(url: string, signal: AbortSignal): Promise<Blob | n
 
 /** 当前曲可播放后再后台保存，失败不影响播放器，也不额外开启服务端代理 */
 export function cacheSongAudio(key: string, url: string, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted || rejectedKeys.has(key) || typeof indexedDB === 'undefined') return Promise.resolve();
+  if (
+    signal?.aborted
+    || rejectedKeys.has(key)
+    || typeof indexedDB === 'undefined'
+    || isMobileCacheProfile()
+    || isConstrainedNetwork()
+  ) return Promise.resolve();
   const existing = pendingDownloads.get(key);
   if (existing) return existing;
   const task = downloadChain.then(async () => {

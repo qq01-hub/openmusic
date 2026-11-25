@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
-import { useSmoothPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
+import { readLocalPlaybackTime } from '../../hooks/useSmoothPlaybackTime';
 import { useTrackLyrics } from '../../hooks/useTrackLyrics';
 import { findActiveLyricIndex } from '../../lib/lyricActiveIndex';
 import { immersiveLyricIndexes } from '../../lib/immersiveLyricLines';
 import { roomVisualFxLive, subscribeRoomVisualFx } from '../../lib/roomVisualFxLive';
 import { subscribeStageLyricPalette } from '../../lib/stageLyricPaletteLive';
+import { useAudioStore } from '../../stores/audioStore';
 import { useRoomStore } from '../../stores/roomStore';
 import { ensureLyricFontLoaded } from '../../lib/lyricFonts';
 import { getGalaxyBeatCameraKick } from './lib/galaxyCinema';
@@ -60,9 +61,24 @@ function smoothstep(p: number): number {
 /** Mineradio stageLyrics + 行图层轨道 — 所有着色器预设共用 */
 export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' }: Props) {
   const current = useRoomStore((s) => s.room?.current ?? null);
-  const currentTime = useSmoothPlaybackTime();
+  const playbackVersion = useAudioStore((s) => s.playbackVersion);
   const lyrics = useTrackLyrics(current);
-  const activeIndex = findActiveLyricIndex(lyrics, currentTime);
+  const [activeIndex, setActiveIndex] = useState<number>(() =>
+    findActiveLyricIndex(lyrics, readLocalPlaybackTime(current)),
+  );
+  const activeIndexRef = useRef(activeIndex);
+  activeIndexRef.current = activeIndex;
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  const lyricsRef = useRef(lyrics);
+  lyricsRef.current = lyrics;
+  useEffect(() => {
+    const nextIndex = findActiveLyricIndex(lyrics, readLocalPlaybackTime(current));
+    if (nextIndex !== activeIndexRef.current) {
+      activeIndexRef.current = nextIndex;
+      setActiveIndex(nextIndex);
+    }
+  }, [current, lyrics, playbackVersion, isPlaying]);
   const activeLine = activeIndex >= 0 ? lyrics[activeIndex] : null;
   const currentLine = activeLine?.text ?? null;
   const { camera, gl, size } = useThree();
@@ -301,6 +317,11 @@ export default function GalaxyStageLyrics({ isPlaying, spatialAnchor = 'galaxy' 
   );
 
   useFrame((state, rawDelta) => {
+    const liveIndex = findActiveLyricIndex(lyricsRef.current, readLocalPlaybackTime(currentRef.current));
+    if (liveIndex !== activeIndexRef.current) {
+      activeIndexRef.current = liveIndex;
+      setActiveIndex(liveIndex);
+    }
     const delta = Math.min(rawDelta, 1 / 20);
     const hero = heroRef.current;
     const outgoing = outgoingRef.current;

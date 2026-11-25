@@ -18,6 +18,39 @@ import { isHostPageHidden, subscribeHostVisibility } from '../../hooks/useVisual
 export { preloadFoliaStage } from '../../lib/foliaStageLoader';
 
 type Track = Pick<QueueItem, 'queueId' | 'id' | 'source' | 'name' | 'artist' | 'pic' | 'url' | 'duration' | 'lrc'>;
+type StructuredLyricsCacheEntry = {
+  lyrics: Record<string, unknown>;
+  expiresAt: number;
+};
+const STRUCTURED_LYRICS_CACHE_MAX = 40;
+const STRUCTURED_LYRICS_CACHE_TTL_MS = 10 * 60_000;
+const structuredLyricsCache = new Map<string, StructuredLyricsCacheEntry>();
+const SILENT_SPECTRUM = new Uint8Array(512);
+const SILENT_AUDIO_BANDS = { bass: 0, lowMid: 0, mid: 0, vocal: 0, treble: 0, beat: 0, energy: 0, power: 0 };
+
+function readStructuredLyricsCache(cacheKey: string): Record<string, unknown> | null {
+  const entry = structuredLyricsCache.get(cacheKey);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    structuredLyricsCache.delete(cacheKey);
+    return null;
+  }
+  structuredLyricsCache.delete(cacheKey);
+  structuredLyricsCache.set(cacheKey, entry);
+  return entry.lyrics;
+}
+
+function writeStructuredLyricsCache(cacheKey: string, lyrics: Record<string, unknown>): void {
+  if (![lyrics.lyric, lyrics.wordLyric].some((value) => typeof value === 'string' && value.trim())) return;
+  structuredLyricsCache.delete(cacheKey);
+  structuredLyricsCache.set(cacheKey, { lyrics, expiresAt: Date.now() + STRUCTURED_LYRICS_CACHE_TTL_MS });
+  while (structuredLyricsCache.size > STRUCTURED_LYRICS_CACHE_MAX) {
+    const oldestKey = structuredLyricsCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    structuredLyricsCache.delete(oldestKey);
+  }
+}
+
 export default function FoliaBackground({ song, isPlaying }: { song: Track | null | undefined; isPlaying: boolean }) {
   const host = useRef<HTMLDivElement>(null);
   const [reload, setReload] = useState(0);
@@ -28,21 +61,38 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   const stageReady = useRef(false);
   const stageMounted = useRef(false);
   const failStage = useRef<(() => void) | null>(null);
+  const clearProgressTimerRef = useRef<(() => void) | null>(null);
+  const directReceiverRef = useRef<((data: Record<string, unknown>) => void) | null>(null);
+  const playbackVersion = useAudioStore((s) => s.playbackVersion);
   const key = song ? getTrackKey(song) : '';
   const lyricOffsetSeconds = useRoomLyricOffset(song);
   const clock = useRef({ isPlaying, key, lyricOffsetSeconds });
   const songRef = useRef(song);
   songRef.current = song;
   clock.current = { isPlaying, key, lyricOffsetSeconds };
-  const send = (type: string, data: Record<string, unknown> = {}) => window.postMessage({ type, ...data }, location.origin);
+  const send = (type: string, data: Record<string, unknown> = {}) => {
+    if (directReceiverRef.current) {
+      directReceiverRef.current({ type, ...data });
+      return;
+    }
+    window.postMessage({ type, ...data }, location.origin);
+  };
   useEffect(() => {
     let disposed = false;
     let unmount: (() => void) | undefined;
     const controller = new AbortController();
     stageReady.current = false;
     stageMounted.current = false;
+    directReceiverRef.current = null;
     setLoadingProgress(8);
-    const progressTimer = window.setInterval(() => setLoadingProgress((value) => Math.min(92, value + 3)), 180);
+    let progressTimer: number | null = window.setInterval(() => setLoadingProgress((value) => Math.min(92, value + 3)), 180);
+    const clearProgressTimer = () => {
+      if (progressTimer !== null) {
+        window.clearInterval(progressTimer);
+        progressTimer = null;
+      }
+    };
+    clearProgressTimerRef.current = clearProgressTimer;
     const shadow = host.current!.shadowRoot || host.current!.attachShadow({ mode: 'open' });
     delete host.current!.dataset.ready;
     const dispose = () => {
@@ -50,9 +100,11 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       disposed = true;
       stageReady.current = false;
       stageMounted.current = false;
+      directReceiverRef.current = null;
       controller.abort();
       window.clearTimeout(timeout);
-      window.clearInterval(progressTimer);
+      clearProgressTimer();
+      if (clearProgressTimerRef.current === clearProgressTimer) clearProgressTimerRef.current = null;
       unmount?.();
       shadow.replaceChildren();
     };
@@ -94,7 +146,11 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       container.style.cssText = 'width:100%;height:100%;position:relative';
       shadow.append(container);
       stageMounted.current = true;
-      unmount = stage.mountFolia(container);
+      unmount = stage.mountFolia(container, {
+        registerReceiver: (receiver) => {
+          directReceiverRef.current = receiver;
+        },
+      });
     })().catch(fail);
     return () => {
       if (failStage.current === fail) failStage.current = null;
@@ -108,6 +164,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       if (event.data?.type === 'openmusic:folia-ready') {
         if (stageReady.current) return;
         stageReady.current = true;
+        clearProgressTimerRef.current?.();
         setLoadingProgress(100);
         setReady(value => value + 1);
         setFailed(false);
@@ -138,6 +195,12 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       if (!cancelled) send('openmusic:folia-cover', { key, cover: cover || '' });
     }).catch(() => {});
     if (track) void (async () => {
+      const lyricsCacheKey = `${track.source || 'netease'}:${track.id}`;
+      const cachedLyrics = readStructuredLyricsCache(lyricsCacheKey);
+      if (cachedLyrics) {
+        if (!cancelled) send('openmusic:folia-lyrics', { key, lyrics: cachedLyrics });
+        return;
+      }
       let lyrics: Record<string, unknown> = {};
       try {
         const query = new URLSearchParams({ server: track.source || 'netease', type: 'lrc', id: track.id, format: 'json' });
@@ -152,6 +215,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       if (![lyrics.lyric, lyrics.wordLyric].some(value => typeof value === 'string' && value.trim())) {
         lyrics = { ...lyrics, lyric: await getLyrics(track).catch(() => '') };
       }
+      writeStructuredLyricsCache(lyricsCacheKey, lyrics);
       if (!cancelled) send('openmusic:folia-lyrics', { key, lyrics });
       if (cancelled) return;
       const original = parseLrc(typeof lyrics.lyric === 'string' ? lyrics.lyric : '');
@@ -162,7 +226,9 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       }));
       const translated = await getTranslatedLyricLines(track, lines);
       if (!cancelled && translated !== lines) {
-        send('openmusic:folia-lyrics', { key, lyrics: { ...lyrics, translation: serializeLyricTranslations(translated) } });
+        const mergedLyrics = { ...lyrics, translation: serializeLyricTranslations(translated) };
+        writeStructuredLyricsCache(lyricsCacheKey, mergedLyrics);
+        send('openmusic:folia-lyrics', { key, lyrics: mergedLyrics });
       }
     })();
     return () => { cancelled = true; controller.abort(); };
@@ -178,6 +244,38 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
   }, [ready]);
   useEffect(() => {
     if (!ready) return;
+    const pushClock = (withAudio: boolean, playingNow: boolean) => {
+      let audioPayload: {
+        bands: { bass: number; lowMid: number; mid: number; vocal: number; treble: number; beat: number; energy: number; power: number };
+        spectrum: Uint8Array | null;
+      } | null = null;
+      if (withAudio) {
+        if (playingNow) {
+          resumeGalaxyAudioContext();
+          const bands = readGalaxyAudioBands(1 / 30);
+          audioPayload = {
+            bands: { ...bands, lowMid: bands.mid, power: bands.energy },
+            spectrum: getTopographyFrequencyBins512(),
+          };
+        } else {
+          audioPayload = {
+            bands: SILENT_AUDIO_BANDS,
+            spectrum: SILENT_SPECTRUM,
+          };
+        }
+      }
+      send('openmusic:folia-clock', {
+        key: clock.current.key,
+        time: readLocalPlaybackTime(songRef.current),
+        playing: playingNow,
+        lyricOffsetSeconds: clock.current.lyricOffsetSeconds,
+        ...(audioPayload ?? {}),
+      });
+    };
+    if (!isPlaying) {
+      if (!isHostPageHidden()) pushClock(true, false);
+      return;
+    }
     let raf = 0, lastClock = 0, lastAudio = 0;
     let lastMap: ReturnType<typeof getCurrentBeatMap> = null;
     let lastKey = '';
@@ -188,15 +286,8 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       if (now - lastClock < 16) return;
       lastClock = now;
       const includeAudio = now - lastAudio >= 33;
-      let audioPayload: { bands: ReturnType<typeof readGalaxyAudioBands> & { lowMid: number; power: number }; spectrum: ReturnType<typeof getTopographyFrequencyBins512> } | null = null;
       if (includeAudio) {
         lastAudio = now;
-        if (clock.current.isPlaying) resumeGalaxyAudioContext();
-        const bands = readGalaxyAudioBands(1 / 30);
-        audioPayload = {
-          bands: { ...bands, lowMid: bands.mid, power: bands.energy },
-          spectrum: getTopographyFrequencyBins512(),
-        };
       }
       if (lastKey !== clock.current.key) { lastMap = null; lastKey = clock.current.key; }
       const map = songRef.current ? getCurrentBeatMap(songRef.current) : null;
@@ -207,13 +298,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
           impact: beat.impact, tone: { low: beat.low, mid: beat.body, high: beat.snap },
         })) });
       }
-      send('openmusic:folia-clock', {
-        key: clock.current.key,
-        time: readLocalPlaybackTime(songRef.current),
-        playing: clock.current.isPlaying,
-        lyricOffsetSeconds: clock.current.lyricOffsetSeconds,
-        ...(audioPayload ?? {}),
-      });
+      pushClock(includeAudio, clock.current.isPlaying);
     };
     const syncVisibility = () => {
       if (isHostPageHidden()) {
@@ -233,7 +318,7 @@ export default function FoliaBackground({ song, isPlaying }: { song: Track | nul
       unsubscribe();
       cancelAnimationFrame(raf);
     };
-  }, [ready]);
+  }, [ready, isPlaying, key, lyricOffsetSeconds, playbackVersion]);
   return <div className="pointer-events-auto absolute inset-0 z-10">
     {analyzeBeats && <GalaxyBeatMapDriver song={song} isPlaying={isPlaying} />}
     <div ref={host} data-folia-stage aria-label="Folia 沉浸歌词舞台" className="absolute inset-0" />

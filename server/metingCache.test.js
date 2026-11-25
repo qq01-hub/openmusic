@@ -1,7 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createMetingResponseCache } from './metingCache.js';
-import { __test as metingUpstreamTest, invalidateMetingUrlCache, runWithMetingRequestContext } from './metingUpstream.js';
+import {
+  __test as metingUpstreamTest,
+  invalidateMetingUrlCache,
+  registerMetingRoomResolver,
+  runWithMetingRequestContext,
+} from './metingUpstream.js';
+import { fetchCustomMusicApi, getJsonPath, normalizeMusicApis } from './customMusicApi.js';
 
 test('搜索联想的 Meting 500 不写后台错误记录，但保留失败计数和冷却', () => {
   const upstream = { failCount: 0, recentErrors: [], lastError: '已有错误', lastErrorAt: 1 };
@@ -68,16 +74,114 @@ test('切歌瞬间同一房间的大量 URL 请求只触发一次上游加载', 
   assert.ok(requests.every((result) => result.body === 'url'));
 });
 
-test('不同房间的 URL 缓存键保持隔离', async () => {
-  const makeKey = (roomId) => runWithMetingRequestContext(
+test('未绑定私有账号的公共房间共享 URL 缓存键并剥离敏感透传参数', () => {
+  const makeKey = (roomId, extra = {}) => runWithMetingRequestContext(
     { roomId },
     () => metingUpstreamTest.buildMetingCacheKey(
-      { server: 'netease', type: 'url', id: '1', quality: 'high' },
+      { server: 'netease', type: 'url', id: '1', quality: 'high', ...extra },
       {},
     ),
   );
 
-  assert.notEqual(await makeKey('ROOM1'), await makeKey('ROOM2'));
+  assert.equal(makeKey('ROOM1', { roomId: 'ROOM1', auth: 'secret-a' }), makeKey('ROOM2', { room_id: 'ROOM2', token: 'secret-b' }));
+});
+
+test('绑定私有音乐账号的房间按账号和房间隔离缓存键', () => {
+  registerMetingRoomResolver((roomId) => ({
+    musicAccounts: roomId === 'PRIV1'
+      ? { netease: { hasVip: true, isValid: true } }
+      : null,
+    musicAccountSecrets: roomId === 'PRIV1'
+      ? { netease: 'MUSIC_U=room-private-cookie-1' }
+      : null,
+  }));
+  try {
+    const privateKey = runWithMetingRequestContext(
+      { roomId: 'PRIV1' },
+      () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'url', id: '1', quality: 'high' }, {}),
+    );
+    const publicKey = runWithMetingRequestContext(
+      { roomId: 'PUB2' },
+      () => metingUpstreamTest.buildMetingCacheKey({ server: 'netease', type: 'url', id: '1', quality: 'high' }, {}),
+    );
+    assert.notEqual(privateKey, publicKey);
+  } finally {
+    registerMetingRoomResolver(null);
+  }
+});
+
+test('空播放链、JSON 包装的网易云 outer/url 假直链与空搜索数组不会写入缓存', async () => {
+  const fakeOuterSnapshot = await metingUpstreamTest.snapshotMetingResponse(
+    new Response(JSON.stringify({ url: 'https://music.163.com/song/media/outer/url?id=12345.mp3' }), { status: 200 }),
+    'url',
+  );
+  assert.equal(fakeOuterSnapshot.cacheable, false);
+  assert.equal(metingUpstreamTest.isNeteaseFakeOuterUrl(metingUpstreamTest.extractUrlCandidateFromPayload(fakeOuterSnapshot.body)), true);
+
+  const emptyUrlSnapshot = await metingUpstreamTest.snapshotMetingResponse(
+    new Response(JSON.stringify({ url: '' }), { status: 200 }),
+    'url',
+  );
+  assert.equal(emptyUrlSnapshot.cacheable, false);
+
+  const emptySearchSnapshot = await metingUpstreamTest.snapshotMetingResponse(
+    new Response('[]', { status: 200 }),
+    'search',
+  );
+  assert.equal(emptySearchSnapshot.cacheable, false);
+
+  const validUrlSnapshot = await metingUpstreamTest.snapshotMetingResponse(
+    new Response(JSON.stringify({ url: 'https://m701.music.126.net/real-song.mp3' }), { status: 200 }),
+    'url',
+  );
+  assert.equal(validUrlSnapshot.cacheable, true);
+});
+
+test('自定义音乐接口拦截原型链访问、内网 SSRF 地址并在多操作间共享响应缓存', async () => {
+  assert.equal(getJsonPath({ data: { url: 'ok' } }, '$.__proto__.polluted'), undefined);
+  assert.equal(getJsonPath({ data: { url: 'ok' } }, '$.constructor.name'), undefined);
+  assert.equal(getJsonPath({ data: { url: 'ok' } }, '$.data.url'), 'ok');
+
+  assert.throws(() => normalizeMusicApis([{
+    id: 'local-ssrf',
+    platforms: ['netease'],
+    operations: ['url'],
+    url: 'http://169.254.169.254/latest/meta-data/',
+    mapping: { url: '$.url' },
+  }]), /内网|元数据/);
+
+  let upstreamCalls = 0;
+  const config = {
+    musicApis: normalizeMusicApis([{
+      id: 'shared-multi-op',
+      platforms: ['netease'],
+      operations: ['url', 'lrc'],
+      url: 'https://api.example.com/song?id={id}',
+      mapping: { url: '$.url', lrc: '$.lrc' },
+    }]),
+  };
+  const mockFetch = async () => {
+    upstreamCalls += 1;
+    return new Response(JSON.stringify({
+      url: 'https://cdn.example.com/track.mp3',
+      lrc: '[00:00.00]测试歌词',
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  const urlRes = await fetchCustomMusicApi(
+    { server: 'netease', type: 'url', id: '42' },
+    { config, fetchImpl: mockFetch },
+  );
+  const lrcRes = await fetchCustomMusicApi(
+    { server: 'netease', type: 'lrc', id: '42' },
+    { config, fetchImpl: mockFetch },
+  );
+  assert.equal(await urlRes.text(), 'https://cdn.example.com/track.mp3');
+  assert.equal(await lrcRes.text(), '[00:00.00]测试歌词');
+  assert.equal(upstreamCalls, 1);
 });
 
 test('加载失败不会污染缓存，下一次请求可以重试', async () => {

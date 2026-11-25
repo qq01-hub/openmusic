@@ -221,6 +221,9 @@ function AiMessageContent({
   );
   const resizeCallback = useRef(onContentResize);
   resizeCallback.current = onContentResize;
+  const lastResizeAtRef = useRef(0);
+  const pendingResizeRafRef = useRef(0);
+  const pendingResizeTimerRef = useRef<number | null>(null);
   const animationProgress = useRef(0);
   const [visibleChars, setVisibleChars] = useState<number>(() =>
     shouldAnimate.current ? 0 : messageText.length,
@@ -244,7 +247,6 @@ function AiMessageContent({
       current = Math.min(total, current + step);
       animationProgress.current = current;
       setVisibleChars(current);
-      resizeCallback.current?.();
       if (current >= total) {
         shouldAnimate.current = false;
         window.clearInterval(timer);
@@ -252,6 +254,42 @@ function AiMessageContent({
     }, 22);
     return () => window.clearInterval(timer);
   }, [msgId, messageText]);
+
+  useLayoutEffect(() => {
+    if (!resizeCallback.current) return;
+    const isDone = visibleChars >= messageText.length;
+    const flush = () => {
+      if (pendingResizeRafRef.current) {
+        window.cancelAnimationFrame(pendingResizeRafRef.current);
+        pendingResizeRafRef.current = 0;
+      }
+      pendingResizeRafRef.current = window.requestAnimationFrame(() => {
+        pendingResizeRafRef.current = 0;
+        lastResizeAtRef.current = performance.now();
+        resizeCallback.current?.();
+      });
+    };
+    const elapsed = performance.now() - lastResizeAtRef.current;
+    if (isDone || elapsed >= 70) {
+      if (pendingResizeTimerRef.current !== null) {
+        window.clearTimeout(pendingResizeTimerRef.current);
+        pendingResizeTimerRef.current = null;
+      }
+      flush();
+      return;
+    }
+    if (pendingResizeTimerRef.current === null) {
+      pendingResizeTimerRef.current = window.setTimeout(() => {
+        pendingResizeTimerRef.current = null;
+        flush();
+      }, Math.max(16, 70 - elapsed));
+    }
+  }, [visibleChars, messageText.length]);
+
+  useEffect(() => () => {
+    if (pendingResizeRafRef.current) window.cancelAnimationFrame(pendingResizeRafRef.current);
+    if (pendingResizeTimerRef.current !== null) window.clearTimeout(pendingResizeTimerRef.current);
+  }, []);
 
   const displayedText = visibleChars >= messageText.length
     ? messageText

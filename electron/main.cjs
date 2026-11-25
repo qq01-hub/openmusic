@@ -18,6 +18,13 @@ function readPackagedAppUrl() {
 
 const appUrl = process.env.OPENMUSIC_URL
   || (app.isPackaged ? readPackagedAppUrl() || 'http://localhost:4000' : 'http://localhost:5173');
+const expectedAppOrigin = (() => {
+  try {
+    return new URL(appUrl).origin;
+  } catch {
+    return '';
+  }
+})();
 const appIcon = path.join(__dirname, 'openmusic.ico');
 Menu.setApplicationMenu(null);
 let mainWindow;
@@ -40,6 +47,23 @@ function isSafeExternalUrl(rawUrl) {
   } catch {
     return false;
   }
+}
+
+function isTrustedIpcSender(event, allowedWindows) {
+  const sender = event?.sender;
+  if (!sender || sender.isDestroyed()) return false;
+  const matched = allowedWindows.find((win) => win && !win.isDestroyed() && win.webContents === sender);
+  if (!matched) return false;
+  const frameUrl = String(event?.senderFrame?.url || sender.getURL?.() || '').trim();
+  if (matched === mainWindow) {
+    if (!expectedAppOrigin || !frameUrl) return false;
+    try {
+      return new URL(frameUrl).origin === expectedAppOrigin;
+    } catch {
+      return false;
+    }
+  }
+  return frameUrl.startsWith('file://');
 }
 
 function sendToWindow(win, channel, ...args) {
@@ -229,34 +253,66 @@ function broadcastLyricsStyle() {
   sendToWindow(lyricsSettingsWindow, 'lyrics-style-update', lyricsStyle);
 }
 
-ipcMain.handle('lyrics-open', createLyricsWindow);
-ipcMain.handle('lyrics-close', () => { if (lyricsWindow && !lyricsWindow.isDestroyed()) lyricsWindow.close(); });
-ipcMain.handle('lyrics-settings-open', () => { showLyricsSettings(); });
-ipcMain.handle('lyrics-settings-close', () => { if (lyricsSettingsWindow && !lyricsSettingsWindow.isDestroyed()) lyricsSettingsWindow.close(); });
+ipcMain.handle('lyrics-open', (event) => {
+  if (!isTrustedIpcSender(event, [mainWindow])) return;
+  createLyricsWindow();
+});
+ipcMain.handle('lyrics-close', (event) => {
+  if (!isTrustedIpcSender(event, [mainWindow, lyricsWindow])) return;
+  if (lyricsWindow && !lyricsWindow.isDestroyed()) lyricsWindow.close();
+});
+ipcMain.handle('lyrics-settings-open', (event) => {
+  if (!isTrustedIpcSender(event, [lyricsWindow])) return;
+  showLyricsSettings();
+});
+ipcMain.handle('lyrics-settings-close', (event) => {
+  if (!isTrustedIpcSender(event, [lyricsSettingsWindow])) return;
+  if (lyricsSettingsWindow && !lyricsSettingsWindow.isDestroyed()) lyricsSettingsWindow.close();
+});
 ipcMain.handle('lyrics-lock-toggle', (event) => {
-  if (event.sender !== lyricsWindow?.webContents) return lyricsLocked;
+  if (!isTrustedIpcSender(event, [lyricsWindow])) return lyricsLocked;
   setLyricsLocked(!lyricsLocked);
   return lyricsLocked;
 });
 ipcMain.on('lyrics-drag-start', (event) => {
-  if (lyricsLocked || !lyricsWindow || lyricsWindow.isDestroyed() || event.sender !== lyricsWindow.webContents) return;
+  if (lyricsLocked || !lyricsWindow || lyricsWindow.isDestroyed() || !isTrustedIpcSender(event, [lyricsWindow])) return;
   const cursor = screen.getCursorScreenPoint();
   const bounds = lyricsWindow.getBounds();
   lyricsDragOffset = { x: cursor.x - bounds.x, y: cursor.y - bounds.y };
 });
 ipcMain.on('lyrics-drag-move', (event) => {
-  if (!lyricsDragOffset || lyricsLocked || !lyricsWindow || lyricsWindow.isDestroyed() || event.sender !== lyricsWindow.webContents) return;
+  if (!lyricsDragOffset || lyricsLocked || !lyricsWindow || lyricsWindow.isDestroyed() || !isTrustedIpcSender(event, [lyricsWindow])) return;
   const cursor = screen.getCursorScreenPoint();
   lyricsWindow.setPosition(cursor.x - lyricsDragOffset.x, cursor.y - lyricsDragOffset.y);
   constrainLyricsWindow();
 });
-ipcMain.on('lyrics-drag-end', (event) => { if (event.sender === lyricsWindow?.webContents) lyricsDragOffset = null; });
-ipcMain.on('lyrics-update', (_event, value) => { lastLyrics = sanitizeLyrics(value); sendToWindow(lyricsWindow, 'lyrics-update', lastLyrics); });
-ipcMain.handle('lyrics-style-get', () => lyricsStyle);
-ipcMain.on('lyrics-style-set', (_event, value) => { lyricsStyle = normalizeLyricsStyle({ ...lyricsStyle, ...value }); broadcastLyricsStyle(); scheduleSaveLyricsPreferences(); });
+ipcMain.on('lyrics-drag-end', (event) => {
+  if (isTrustedIpcSender(event, [lyricsWindow])) lyricsDragOffset = null;
+});
+ipcMain.on('lyrics-update', (event, value) => {
+  if (!isTrustedIpcSender(event, [mainWindow])) return;
+  lastLyrics = sanitizeLyrics(value);
+  sendToWindow(lyricsWindow, 'lyrics-update', lastLyrics);
+});
+ipcMain.handle('lyrics-style-get', (event) => (
+  isTrustedIpcSender(event, [lyricsSettingsWindow, lyricsWindow]) ? lyricsStyle : null
+));
+ipcMain.on('lyrics-style-set', (event, value) => {
+  if (!isTrustedIpcSender(event, [lyricsSettingsWindow])) return;
+  lyricsStyle = normalizeLyricsStyle({ ...lyricsStyle, ...value });
+  broadcastLyricsStyle();
+  scheduleSaveLyricsPreferences();
+});
 
-ipcMain.handle('app-show-main', showMainWindow);
-ipcMain.handle('app-quit', () => { isQuitting = true; app.quit(); });
+ipcMain.handle('app-show-main', (event) => {
+  if (!isTrustedIpcSender(event, [mainWindow])) return;
+  showMainWindow();
+});
+ipcMain.handle('app-quit', (event) => {
+  if (!isTrustedIpcSender(event, [mainWindow])) return;
+  isQuitting = true;
+  app.quit();
+});
 
 function createTray() {
   tray = new Tray(appIcon);

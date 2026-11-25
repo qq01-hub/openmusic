@@ -1,3 +1,6 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
+import { isBlockedMediaHostname } from './mediaProxy.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 
 export const MUSIC_API_PLATFORMS = new Set(['netease', 'tencent', 'kugou', 'qishui']);
@@ -25,7 +28,34 @@ const responseCache = new Map();
 const RESPONSE_CACHE_TTL_MS = 10_000;
 const RESPONSE_CACHE_MAX_ENTRIES = 2048;
 const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+const FORBIDDEN_JSON_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 let configSignature = '';
+
+function isMetadataOrLinkLocalHost(hostname) {
+  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/u, '');
+  if (!host) return true;
+  if (host === 'metadata.google.internal' || host === 'metadata' || host === 'metadata.goog') return true;
+  if (/^169\.254\./.test(host) || /^::ffff:169\.254\./.test(host) || /^fe[89ab]/i.test(host)) return true;
+  return false;
+}
+
+function isDisallowedCustomApiHostname(hostname) {
+  if (isMetadataOrLinkLocalHost(hostname)) return true;
+  if (process.env.ALLOW_PRIVATE_CUSTOM_MUSIC_API === '1') return false;
+  return isBlockedMediaHostname(hostname);
+}
+
+async function assertSafeCustomApiTarget(parsedUrl) {
+  const host = String(parsedUrl.hostname || '').replace(/^\[|\]$/g, '');
+  if (isDisallowedCustomApiHostname(host)) {
+    throw new Error('自定义音乐接口目标地址不允许指向内网或元数据主机');
+  }
+  if (isIP(host)) return;
+  const records = await dnsLookup(host, { all: true });
+  if (!records.length || records.some((record) => isDisallowedCustomApiHostname(record.address))) {
+    throw new Error('自定义音乐接口域名解析到受限内网或元数据地址');
+  }
+}
 
 function pruneResponseCache(now = Date.now()) {
   for (const [key, entry] of responseCache) {
@@ -97,6 +127,10 @@ export function getJsonPath(value, path) {
   for (const token of tokens) {
     if (token === '$') continue;
     if (current === null || current === undefined) return undefined;
+    if (typeof token === 'string') {
+      if (FORBIDDEN_JSON_KEYS.has(token)) return undefined;
+      if (!Object.prototype.hasOwnProperty.call(current, token)) return undefined;
+    }
     current = current[token];
   }
   return current;
@@ -223,7 +257,13 @@ export function normalizeMusicApis(raw) {
         server: platforms[0],
       }));
       if (probe.protocol !== 'http:' && probe.protocol !== 'https:') throw new Error();
-    } catch {
+      if (isDisallowedCustomApiHostname(probe.hostname)) {
+        throw new Error('BLOCKED_HOST');
+      }
+    } catch (err) {
+      if (err?.message === 'BLOCKED_HOST') {
+        throw new Error(`musicApis[${index}].url 不允许指向内网或云元数据地址`);
+      }
       throw new Error(`musicApis[${index}].url 必须是 http/https 地址模板`);
     }
     const body = item.body === undefined || item.body === null ? '' : item.body;
@@ -440,11 +480,21 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
   for (const [name, value] of Object.entries(endpoint.params)) {
     url.searchParams.set(name, renderTemplate(value, variables));
   }
-  const cacheKey = JSON.stringify([
+  const renderedBody = endpoint.method === 'POST' ? renderTemplate(endpoint.body, variables) : '';
+  const canShareResponse = endpoint.operations.length > 1;
+  const cacheKey = JSON.stringify(canShareResponse ? [
     endpoint.id,
+    endpoint.method,
+    query?.server || '',
+    url.toString(),
+    renderedBody,
+  ] : [
+    endpoint.id,
+    endpoint.method,
     query?.server || '',
     query?.type || '',
     url.toString(),
+    renderedBody,
     query?.id || '',
     query?.keyword || '',
     query?.quality || '',
@@ -453,7 +503,6 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
     query?.album || '',
     query?.n || '',
   ]);
-  const canShareResponse = endpoint.operations.length > 1;
   const cached = canShareResponse ? responseCache.get(cacheKey) : null;
   if (cached && cached.expires > Date.now()) {
     if (preview) return { payload: cached.payload, result: null };
@@ -478,10 +527,13 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (fetchImpl === fetch) {
+      await assertSafeCustomApiTarget(url);
+    }
     const response = await fetchImpl(url.toString(), {
       method: endpoint.method,
       headers,
-      body: endpoint.method === 'POST' ? renderTemplate(endpoint.body, variables) : undefined,
+      body: endpoint.method === 'POST' ? renderedBody : undefined,
       signal: controller.signal,
       redirect: 'error',
     });

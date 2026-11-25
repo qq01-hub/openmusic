@@ -49,8 +49,9 @@ COPY server ./server
 COPY deploy/updater ./deploy/updater
 COPY --from=server-deps /app/deploy/updater/node_modules ./deploy/updater/node_modules
 COPY --from=client-builder /app/client/dist ./client/dist
-RUN mkdir -p ./server/downloads
+RUN rm -f ./server/*.test.js && mkdir -p ./server/downloads
 
 EXPOSE 4000
 WORKDIR /app/server
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/api/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
 CMD ["node", "index.js"]

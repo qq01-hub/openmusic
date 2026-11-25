@@ -1,4 +1,5 @@
-import { useState, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useMemo, Suspense } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useCallback, useDeferredValue, useRef, useMemo, Suspense } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { createPortal } from 'react-dom';
 import { lazyWithRetry } from '../lib/lazyWithRetry';
 import MusicLoading from '../components/MusicLoading';
@@ -271,6 +272,32 @@ interface PlaylistSearchBackup {
 
 type SearchDetailOrigin = 'radio' | 'recommend-playlist';
 
+const RoomOnlineUsersBridge = memo(function RoomOnlineUsersBridge({
+  onNotice,
+}: {
+  onNotice: (message: string, type?: 'success' | 'error') => void;
+}) {
+  const snapshot = useRoomStore(useShallow((s) => {
+    const r = s.room;
+    if (!r) return null;
+    return { users: r.users, creatorId: r.creatorId, memberTiers: r.memberTiers };
+  }));
+  if (!snapshot) return null;
+  return (
+    <OnlineUsers
+      users={snapshot.users}
+      creatorId={snapshot.creatorId}
+      memberTiers={snapshot.memberTiers}
+      onNotice={onNotice}
+    />
+  );
+});
+
+const RoomOnlineCountBadge = memo(function RoomOnlineCountBadge() {
+  const userCount = useRoomStore((s) => s.room?.userCount ?? 0);
+  return <span>{userCount} 人在线</span>;
+});
+
 
 export default function Room() {
   const { roomId } = useParams<{ roomId: string }>();
@@ -310,7 +337,69 @@ export default function Room() {
     );
   }, [roomId, location.pathname, location.search, location.state, navigate]);
 
-  const room = useRoomStore((s) => s.room);
+  const room = useRoomStore(useShallow((s) => {
+    const r = s.room;
+    if (!r) return null;
+    return {
+      id: r.id,
+      name: r.name,
+      creatorId: r.creatorId,
+      ownerAccountId: r.ownerAccountId,
+      hasPassword: r.hasPassword,
+      isLocked: r.isLocked,
+      current: r.current,
+      isPlaying: r.isPlaying,
+      randomLoading: r.randomLoading,
+      randomError: r.randomError,
+      audioQuality: r.audioQuality,
+      playbackRate: r.playbackRate,
+      customCoverUrl: r.customCoverUrl,
+      announcementEnabled: r.announcementEnabled,
+      announcementText: r.announcementText,
+      fmSource: r.fmSource,
+      neteaseFmMode: r.neteaseFmMode,
+      fmModeBeforeOff: r.fmModeBeforeOff,
+      qishuiProxyEnabled: r.qishuiProxyEnabled,
+      qishuiProxyPercent: r.qishuiProxyPercent,
+      playlistRoaming: r.playlistRoaming,
+      chatHistoryVisibleOnJoin: r.chatHistoryVisibleOnJoin,
+      chatShowAvatars: r.chatShowAvatars,
+      hideIpLocation: r.hideIpLocation,
+      joinNoticeEnabled: r.joinNoticeEnabled,
+      joinNoticeCooldownSec: r.joinNoticeCooldownSec,
+      roomAi: r.roomAi,
+      roomAiEnabled: r.roomAiEnabled,
+      roomAiDeskPetEnabled: r.roomAiDeskPetEnabled,
+      roomAiBotName: r.roomAiBotName,
+      roomAiPersona: r.roomAiPersona,
+      songRequestEnabled: r.songRequestEnabled,
+      queueLikeSortEnabled: r.queueLikeSortEnabled,
+      memberJumpEnabled: r.memberJumpEnabled,
+      memberSeekEnabled: r.memberSeekEnabled,
+      memberPauseEnabled: r.memberPauseEnabled,
+      systemMediaPlayBound: r.systemMediaPlayBound,
+      systemMediaSkipBound: r.systemMediaSkipBound,
+      dislikeSkipMode: r.dislikeSkipMode,
+      dislikeSkipThreshold: r.dislikeSkipThreshold,
+      dislikeSkipPercent: r.dislikeSkipPercent,
+      clearSongsOnLeaveEnabled: r.clearSongsOnLeaveEnabled,
+      clearSongsOnLeaveDelaySec: r.clearSongsOnLeaveDelaySec,
+      deferOfflineRequesterSongs: r.deferOfflineRequesterSongs,
+      songRequestMinStaySec: r.songRequestMinStaySec,
+      songRequestMaxPerUser: r.songRequestMaxPerUser,
+      songRequestCooldownSec: r.songRequestCooldownSec,
+      queueMaxLength: r.queueMaxLength,
+      bannedSongs: r.bannedSongs,
+      forbiddenWords: r.forbiddenWords,
+      maxAdmins: r.maxAdmins,
+      adminSelfManageMemberTierEnabled: r.adminSelfManageMemberTierEnabled,
+      protectedFromDestroy: r.protectedFromDestroy,
+      permanentApplication: r.permanentApplication,
+      musicAccounts: r.musicAccounts,
+    };
+  }));
+  const queueLength = useRoomStore((s) => s.room?.queue.length ?? 0);
+  const myMemberTier = useRoomStore((s) => (s.mySocketId ? s.room?.memberTiers?.[s.mySocketId] : undefined));
   const nickname = useRoomStore((s) => s.nickname);
   const showPlayer = useRoomStore((s) => s.showPlayer);
   const setShowPlayer = useRoomStore((s) => s.setShowPlayer);
@@ -355,21 +444,19 @@ export default function Room() {
   } = useFavorites();
   const { queueKeys, playedKeys } = useRoomSongKeySets();
   const currentSongKey = room?.current ? songKey(room.current) : '';
-  const isCurrentUserReadOnly = useMemo(
-    () => Boolean(room?.users.find((user) => user.id === mySocketId)?.readOnly),
-    [room?.users, mySocketId],
+  const isCurrentUserReadOnly = useRoomStore((s) =>
+    Boolean(s.room?.users.find((user) => user.id === s.mySocketId)?.readOnly),
   );
-  const cancelableQueueKeys = useMemo(
-    () => new Set(
-      (room?.queue || [])
+  const cancelableQueueKeys = useRoomStore(
+    useShallow((s) => new Set(
+      (s.room?.queue || [])
         .filter((song) => !isCurrentUserReadOnly && (
           canControlPlayback
           || song.requestedById === mySocketId
           || (!song.requestedById && song.requestedBy === nickname)
         ))
         .map(songKey),
-    ),
-    [canControlPlayback, isCurrentUserReadOnly, mySocketId, nickname, room?.queue],
+    )),
   );
 
 
@@ -584,6 +671,18 @@ export default function Room() {
   const [announcementSaving, setAnnouncementSaving] = useState(false);
   const [announcementPopupOpen, setAnnouncementPopupOpen] = useState(false);
   const [memberOpen, setMemberOpen] = useState(false);
+  const modalRoomData = useRoomStore(useShallow((s) => {
+    if (!settingsOpen && !memberOpen) return null;
+    const r = s.room;
+    if (!r) return null;
+    return {
+      users: r.users,
+      userNicknames: r.userNicknames,
+      adminIds: r.adminIds,
+      memberTiers: r.memberTiers,
+      memberSettings: r.memberSettings,
+    };
+  }));
   const [qualityOpen, setQualityOpen] = useState(false);
   const sharedMembershipEnabled = useSiteFeaturesStore((s) => s.sharedMembershipEnabled);
   const [memberSaving, setMemberSaving] = useState(false);
@@ -772,14 +871,17 @@ export default function Room() {
   }, [roomId]);
 
   const isCreator = Boolean(room?.creatorId && mySocketId && room.creatorId === mySocketId);
-  const songRequestBlockReason = getSongRequestBlockReason(
-    room,
-    isOwner,
-    isAdmin,
-    mySocketId,
-    lastSongRequestAtRef.current,
-    canControlPlayback,
-  );
+  const getCurrentSongRequestBlockReason = useCallback(() => {
+    const state = useRoomStore.getState();
+    return getSongRequestBlockReason(
+      state.room,
+      state.isOwner,
+      state.isAdmin,
+      state.mySocketId,
+      lastSongRequestAtRef.current || null,
+      state.canControlPlayback,
+    );
+  }, []);
   const canModerate = isOwner || isAdmin;
   // 普通成员在点歌冷却开启时隐藏批量点歌，房主/管理员不受此限制
   const showBulkAddSong = canModerate || (room?.songRequestCooldownSec ?? 0) <= 0;
@@ -1178,8 +1280,9 @@ export default function Room() {
 
   const handleAddRandomFavorite = useCallback(async () => {
     if (addingRandomFavorite) return;
-    if (songRequestBlockReason) {
-      showToast(songRequestBlockReason, 'error');
+    const blockReason = getCurrentSongRequestBlockReason();
+    if (blockReason) {
+      showToast(blockReason, 'error');
       return;
     }
     setAddingRandomFavorite(true);
@@ -1224,7 +1327,7 @@ export default function Room() {
     } finally {
       setAddingRandomFavorite(false);
     }
-  }, [addingRandomFavorite, songRequestBlockReason, listFavorites, applyFavorites, addSong, showToast]);
+  }, [addingRandomFavorite, getCurrentSongRequestBlockReason, listFavorites, applyFavorites, addSong, showToast]);
 
   const handleImportFavoritesJson = useCallback(() => {
     const input = document.createElement('input');
@@ -1994,8 +2097,9 @@ export default function Room() {
   }, [searchDetailOrigin, isPlaylistResults, playlistSearchBackup, handleBackToPlaylistSearch, clearSearchResults, resetRadioProgramState]);
 
   const handleAdd = useCallback(async (song: SearchResult, jump = false): Promise<boolean> => {
-    if (songRequestBlockReason) {
-      showToast(songRequestBlockReason, 'error');
+    const blockReason = getCurrentSongRequestBlockReason();
+    if (blockReason) {
+      showToast(blockReason, 'error');
       return false;
     }
     const key = songKey(song);
@@ -2021,7 +2125,7 @@ export default function Room() {
       showToast(res.error, 'error');
     }
     return false;
-  }, [songRequestBlockReason, addSong, showToast]);
+  }, [getCurrentSongRequestBlockReason, addSong, showToast]);
 
   const handleReplayHistorySong = useCallback(async (song: SongHistoryItem) => {
     const key = songKey(song);
@@ -2922,8 +3026,8 @@ export default function Room() {
 
 
 
-  const queueCount = (room.current ? 1 : 0) + room.queue.length;
-  const canClearQueue = isOwner && room.queue.length > 0;
+  const queueCount = (room.current ? 1 : 0) + queueLength;
+  const canClearQueue = isOwner && queueLength > 0;
   const showDesktopSearchOverlay = Boolean(searchedKeyword || searching || playlistSearchLoading);
   const isCuratedDetailView = isPlaylistResults || isRadioResults;
   const canBackFromDetail = isRadioResults
@@ -3582,8 +3686,8 @@ export default function Room() {
         forbiddenWordSaving={forbiddenWordSaving}
         onAddForbiddenWord={handleAddForbiddenWord}
         onRemoveForbiddenWord={handleRemoveForbiddenWord}
-        memberTierCount={Object.keys(room?.memberTiers ?? {}).length}
-        users={room?.users ?? []}
+        memberTierCount={Object.keys(modalRoomData?.memberTiers ?? {}).length}
+        users={modalRoomData?.users ?? []}
         myUserId={mySocketId}
         transferSaving={transferSaving}
         destroySaving={destroySaving}
@@ -3643,15 +3747,15 @@ export default function Room() {
       <Suspense fallback={null}>
       <RoomMemberModal
         open={memberOpen}
-        users={room?.users ?? []}
-        userNicknames={room?.userNicknames ?? {}}
+        users={modalRoomData?.users ?? []}
+        userNicknames={modalRoomData?.userNicknames ?? {}}
         creatorId={room?.creatorId ?? undefined}
-        adminIds={room?.adminIds ?? []}
+        adminIds={modalRoomData?.adminIds ?? []}
         isOwner={isOwner}
         myUserId={mySocketId}
         adminSelfManageMemberTierEnabled={Boolean(room?.adminSelfManageMemberTierEnabled)}
-        memberTiers={room?.memberTiers ?? {}}
-        memberSettings={room?.memberSettings ?? DEFAULT_MEMBER_SETTINGS}
+        memberTiers={modalRoomData?.memberTiers ?? {}}
+        memberSettings={modalRoomData?.memberSettings ?? DEFAULT_MEMBER_SETTINGS}
         saving={memberSaving}
         onClose={() => setMemberOpen(false)}
         onSaveSettings={handleSaveMemberSettings}
@@ -3805,7 +3909,7 @@ export default function Room() {
                 <UserRoleMarks
                   isOwner={isOwner}
                   isAdmin={(isAdmin || canControlPlayback) && !isOwner}
-                  memberTier={mySocketId ? room?.memberTiers?.[mySocketId] : undefined}
+                  memberTier={myMemberTier}
                 />
 
                 {canOpenRoomSettings && (
@@ -3872,7 +3976,7 @@ export default function Room() {
                       <div className="flex min-w-0 max-w-full items-center gap-1.5">
                         <span className="inline-flex h-5 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2 text-[10px] leading-none text-white/70">
                           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400/85" aria-hidden="true" />
-                          <span>{room.userCount} 人在线</span>
+                          <RoomOnlineCountBadge />
                         </span>
                         <RoomFmModeBadge
                           className="min-w-0"
@@ -3931,12 +4035,7 @@ export default function Room() {
 
             {room && !isMdUp && (
               <div className="flex-shrink-0 pt-0.5">
-                <OnlineUsers
-                  users={room.users}
-                  creatorId={room.creatorId}
-                  memberTiers={room.memberTiers}
-                  onNotice={showToast}
-                />
+                <RoomOnlineUsersBridge onNotice={showToast} />
               </div>
             )}
 
@@ -4128,12 +4227,7 @@ export default function Room() {
             </div>
 
             {room && isMdUp && (
-              <OnlineUsers
-                users={room.users}
-                creatorId={room.creatorId}
-                memberTiers={room.memberTiers}
-                onNotice={showToast}
-              />
+              <RoomOnlineUsersBridge onNotice={showToast} />
             )}
 
           </div>

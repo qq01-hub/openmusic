@@ -121,37 +121,41 @@ function buildProperties(cameraDistance = WE_CAMERA_DISTANCE) {
   };
 }
 
-function buildAudioSamples(
+function fillAudioSamples(
+  target: Float32Array,
   raw: Uint8Array | null,
   inputGain: number,
   isPlaying: boolean,
   beat = 0,
   bass = 0,
-): number[] {
-  if (!raw?.length) return new Array(512).fill(0);
+): Float32Array {
+  if (!raw?.length) {
+    target.fill(0);
+    return target;
+  }
   let sum = 0;
-  let max = 0;
   for (let i = 0; i < 512; i++) {
     const value = (raw[Math.min(raw.length - 1, i)] || 0) / 255;
     sum += value;
-    max = Math.max(max, value);
   }
   const mean = sum / 512;
   const floor = Math.max(0.035, Math.min(0.2, mean * 0.48));
   const peakFloor = Math.max(0.38, Math.min(0.76, mean * 1.72));
   const bodyGain = Math.max(0.28, 0.33 - mean * 0.1);
   const gain = Math.max(0.4, Math.min(1, inputGain / 100)) * (isPlaying ? 1 : 0.12);
-  return Array.from({ length: 512 }, (_, i) => {
+  for (let i = 0; i < 512; i++) {
     const value = (raw[Math.min(raw.length - 1, i)] || 0) / 255;
     const body = Math.pow(Math.max(0, Math.min(1, (value - floor) / Math.max(0.001, 1 - floor))), 1.55);
     const peak = Math.pow(Math.max(0, Math.min(1, (value - peakFloor) / Math.max(0.001, 1 - peakFloor))), 1.08);
     const lowLift = i < 36 ? (1 - i / 36) * (beat * 0.035 + bass * 0.022) : 0;
-    return Math.max(0, Math.min(0.52, body * bodyGain + peak * 0.12 + lowLift)) * gain;
-  });
+    target[i] = Math.max(0, Math.min(0.52, body * bodyGain + peak * 0.12 + lowLift)) * gain;
+  }
+  return target;
 }
 
 export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const audioSamplesRef = useRef<Float32Array>(new Float32Array(512));
   const [ready, setReady] = useState(false);
   const [revision, setRevision] = useState(0);
   const renderPolicy = useVisualRenderPolicy(isPlaying);
@@ -193,38 +197,40 @@ export default function SonicWorkshopBackground({ song, isPlaying }: Props) {
     if (!ready || paused) return;
     const audio = getSharedAudio();
     const fallbackDurationSec = (normalizeDurationMs(song?.duration) ?? 0) / 1000;
-    const pushMedia = () => {
-      iframeRef.current?.contentWindow?.postMessage({
-        type: 'mineradio-sonic-workshop-media',
-        media: {
-          title: song?.name || '',
-          artist: song?.artist || '',
-          // 播放器和专辑封面均已关闭，避免 iframe 再请求未签名的 /api/meting 封面。
-          thumbnail: '',
-          primaryColor: stageLyricPaletteLive.palette.primary,
-          textColor: stageLyricPaletteLive.palette.highlight,
-          isPlaying,
-          position: audio.currentTime || 0,
-          duration: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDurationSec,
-        },
-      }, '*');
-    };
-    pushMedia();
-    const timer = window.setInterval(pushMedia, 250);
-    return () => window.clearInterval(timer);
+    iframeRef.current?.contentWindow?.postMessage({
+      type: 'mineradio-sonic-workshop-media',
+      media: {
+        title: song?.name || '',
+        artist: song?.artist || '',
+        // 播放器和专辑封面均已关闭，避免 iframe 再请求未签名的 /api/meting 封面。
+        thumbnail: '',
+        primaryColor: stageLyricPaletteLive.palette.primary,
+        textColor: stageLyricPaletteLive.palette.highlight,
+        isPlaying,
+        position: audio.currentTime || 0,
+        duration: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : fallbackDurationSec,
+      },
+    }, '*');
   }, [ready, paused, song, isPlaying, revision]);
 
   useEffect(() => {
     if (!ready || paused) return;
+    const samples = audioSamplesRef.current;
+    if (!isPlaying) {
+      samples.fill(0);
+      iframeRef.current?.contentWindow?.postMessage({ type: 'mineradio-sonic-workshop-audio', samples }, '*');
+      return;
+    }
     let frame = 0;
     let lastPush = 0;
     const tick = (now: number) => {
       frame = requestAnimationFrame(tick);
       if (now - lastPush < 33) return;
       lastPush = now;
-      if (isPlaying) resumeGalaxyAudioContext();
+      resumeGalaxyAudioContext();
       const bands = readGalaxyAudioBands(1 / 30);
-      const samples = buildAudioSamples(
+      fillAudioSamples(
+        samples,
         getTopographyFrequencyBins512(),
         roomVisualFxLive.current.sonicWorkshopInputGain,
         isPlaying,

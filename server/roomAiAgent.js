@@ -73,6 +73,10 @@ import {
 
 const MAX_TOOL_ROUNDS = 8;
 const AI_MAX_ATTEMPTS = 3;
+const AI_MAX_GLOBAL_QUEUE = 64;
+const AI_MAX_ROOM_QUEUE = 8;
+const AI_RECENT_REQUEST_MAX = 2000;
+const AI_RETRY_BACKOFF_MS = [2000, 5000];
 /**
  * 真正产生外部副作用的工具：重试时命中台账，避免重复执行。
  * send_song_card 不在此列——它只是把卡片放进本轮缓冲，真正发送发生在 flush，
@@ -96,7 +100,24 @@ const MUTATING_TOOL_NAMES = new Set([
 const aiQueue = [];
 const aiActiveTasks = new Map();
 const aiRecentRequestIds = new Map();
+const aiPendingRetries = new Map();
 const AI_REQUEST_DEDUPE_TTL_MS = 2 * 60 * 1000;
+
+function isRoomEligibleForAi(roomId) {
+  const room = getRoomInternal(roomId);
+  return Boolean(room && Number(room.users?.size) > 0);
+}
+
+function getRoomQueuedTaskCount(roomId) {
+  let count = 0;
+  for (const task of aiQueue) {
+    if (task.roomId === roomId) count += 1;
+  }
+  for (const entry of aiPendingRetries.values()) {
+    if (entry.roomId === roomId) count += 1;
+  }
+  return count;
+}
 
 function getRoomAiTaskWeight(room) {
   const onlineCount = Math.max(0, Number(room?.users?.size) || 0);
@@ -164,6 +185,12 @@ function emitQueuedStatuses() {
 }
 
 function pumpAiQueue() {
+  for (let idx = aiQueue.length - 1; idx >= 0; idx -= 1) {
+    if (!isRoomEligibleForAi(aiQueue[idx].roomId)) {
+      const [dropped] = aiQueue.splice(idx, 1);
+      dropped.onStatus?.({ status: 'end', queuePosition: 0, pendingCount: 0 });
+    }
+  }
   const globalLimit = getAiRequestConcurrencyLimit();
   if (aiActiveTasks.size >= globalLimit || aiQueue.length === 0) {
     emitQueuedStatuses();
@@ -213,8 +240,31 @@ function pumpAiQueue() {
     })
     .catch((err) => {
       aiActiveTasks.delete(task.requestId);
-      if (task.attempt + 1 < AI_MAX_ATTEMPTS) {
-        aiQueue.push({ ...task, attempt: task.attempt + 1 });
+      if (task.attempt + 1 < AI_MAX_ATTEMPTS && isRoomEligibleForAi(task.roomId)) {
+        const nextAttempt = task.attempt + 1;
+        const retryDelayMs = AI_RETRY_BACKOFF_MS[Math.min(task.attempt, AI_RETRY_BACKOFF_MS.length - 1)] || 5000;
+        const timer = setTimeout(() => {
+          aiPendingRetries.delete(task.requestId);
+          if (!isRoomEligibleForAi(task.roomId)) {
+            task.onStatus?.({ status: 'end', queuePosition: 0, pendingCount: 0 });
+            return;
+          }
+          if (aiQueue.length >= AI_MAX_GLOBAL_QUEUE) {
+            task.onStatus?.({
+              status: 'error',
+              queuePosition: 0,
+              pendingCount: 0,
+              attempt: nextAttempt,
+              maxAttempts: AI_MAX_ATTEMPTS,
+              error: '当前 AI 排队较忙，请稍后再试',
+            });
+            return;
+          }
+          aiQueue.push({ ...task, attempt: nextAttempt, queuedAt: Date.now() });
+          pumpAiQueue();
+        }, retryDelayMs);
+        timer.unref?.();
+        aiPendingRetries.set(task.requestId, { roomId: task.roomId, timer });
       } else {
         task.onStatus?.({
           status: 'error',
@@ -234,12 +284,37 @@ export function enqueueRoomAiChat(params = {}, onStatus) {
   const roomId = String(params.roomId || '').trim();
   const requestId = String(params.requestId || '').trim();
   if (!roomId || !requestId) return { queued: false };
+  if (!isRoomEligibleForAi(roomId)) return { queued: false, inactive: true };
   const now = Date.now();
   for (const [knownRequestId, seenAt] of aiRecentRequestIds) {
     if (now - seenAt > AI_REQUEST_DEDUPE_TTL_MS) aiRecentRequestIds.delete(knownRequestId);
   }
-  if (aiRecentRequestIds.has(requestId) || aiActiveTasks.has(requestId) || aiQueue.some((task) => task.requestId === requestId)) {
+  if (
+    aiRecentRequestIds.has(requestId)
+    || aiActiveTasks.has(requestId)
+    || aiPendingRetries.has(requestId)
+    || aiQueue.some((task) => task.requestId === requestId)
+  ) {
     return { queued: false, duplicate: true };
+  }
+  if (
+    aiQueue.length + aiPendingRetries.size >= AI_MAX_GLOBAL_QUEUE
+    || getRoomQueuedTaskCount(roomId) >= AI_MAX_ROOM_QUEUE
+  ) {
+    onStatus?.({
+      status: 'error',
+      queuePosition: 0,
+      pendingCount: getRoomQueuedTaskCount(roomId) + getRoomActiveTaskCount(roomId),
+      attempt: 0,
+      maxAttempts: AI_MAX_ATTEMPTS,
+      error: '当前 AI 排队较忙，请稍后再试',
+    });
+    return { queued: false, busy: true };
+  }
+  while (aiRecentRequestIds.size >= AI_RECENT_REQUEST_MAX) {
+    const oldestRequestId = aiRecentRequestIds.keys().next().value;
+    if (oldestRequestId === undefined) break;
+    aiRecentRequestIds.delete(oldestRequestId);
   }
   aiRecentRequestIds.set(requestId, now);
   aiQueue.push({

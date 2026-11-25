@@ -1192,7 +1192,7 @@ function shouldWarmReportedPlaybackMedia(rawUrl) {
       return /^https?:\/\//iu.test(nested) ? nested : '';
     }
     if (!/^https?:$/iu.test(parsed.protocol)) return '';
-    if (parsed.protocol === 'http:' || /.kugou.(?:com|net)$/iu.test(parsed.hostname)) {
+    if (parsed.protocol === 'http:' || /\.kugou\.(?:com|net)$/iu.test(parsed.hostname)) {
       return parsed.toString();
     }
     return '';
@@ -1348,6 +1348,19 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
           thumbPx,
           requireAllowlist: true,
         });
+      }
+      try {
+        const redirectTarget = new URL(location);
+        if (
+          !/^https?:$/iu.test(redirectTarget.protocol)
+          || redirectTarget.username
+          || redirectTarget.password
+          || isBlockedMediaHostname(redirectTarget.hostname)
+        ) {
+          return res.status(502).json({ error: '上游重定向地址无效', code: 'METING_UPSTREAM_REDIRECT_BLOCKED' });
+        }
+      } catch {
+        return res.status(502).json({ error: '上游重定向地址无效', code: 'METING_UPSTREAM_REDIRECT_BLOCKED' });
       }
       return res.redirect(response.status, location);
     }
@@ -4354,7 +4367,12 @@ app.get('/downloads/openmusic.apk', sendAndroidApk);
 app.get('/downloads/openmusic-desktop-setup.exe', sendWindowsDesktopClient);
 
 mountWechatFileHelperProxy(app, fetchWithTimeout, {
-  requireAuth: (req, res) => Boolean(requireSessionIdentity(req, res)),
+  requireAuth: (req, res) => {
+    const identity = requireSessionIdentity(req, res);
+    if (!identity) return false;
+    req.wxProxyTenantId = req.account?.id || identity.userId;
+    return true;
+  },
   secureCookies: IS_PRODUCTION,
 });
 

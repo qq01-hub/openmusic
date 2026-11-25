@@ -2,6 +2,20 @@ import https from 'node:https';
 import http from 'node:http';
 import { isBlockedMediaHostname } from './mediaProxy.js';
 
+const sharedHttpAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+});
+
+const sharedHttpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30_000,
+  maxSockets: 64,
+  maxFreeSockets: 16,
+});
+
 function isLoopbackHostname(hostname) {
   const value = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
   return value === 'localhost'
@@ -53,8 +67,7 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
       path: `${parsed.pathname}${parsed.search}`,
       method: options.method || 'GET',
       headers: options.headers || {},
-      // 使用 Node 系统 CA 校验证书，不允许关闭 TLS 校验。
-      agent: undefined,
+      agent: isHttps ? sharedHttpsAgent : sharedHttpAgent,
     }, (res) => {
       const chunks = [];
       let size = 0;

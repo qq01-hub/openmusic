@@ -1189,20 +1189,31 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
 
   let resolveImageInflight = null;
   let ownsImageInflight = false;
+  let imageFetchController = null;
+  let imageFetchTimeout = null;
   if (canCacheImage && !proxiedImageInflight.has(imageCacheKey)) {
     ownsImageInflight = true;
     const inflightPromise = new Promise((resolve) => {
       resolveImageInflight = resolve;
     });
     proxiedImageInflight.set(imageCacheKey, inflightPromise);
+    imageFetchController = new AbortController();
+    const imageTimeoutMs = Math.max(5000, Number(options.timeoutMs) || 20000);
+    imageFetchTimeout = setTimeout(() => imageFetchController?.abort(), imageTimeoutMs);
+    imageFetchTimeout.unref?.();
   }
   const settleImageInflight = (entry = null) => {
+    if (imageFetchTimeout) {
+      clearTimeout(imageFetchTimeout);
+      imageFetchTimeout = null;
+    }
     if (!ownsImageInflight) return;
     ownsImageInflight = false;
     proxiedImageInflight.delete(imageCacheKey);
     resolveImageInflight?.(entry);
     resolveImageInflight = null;
   };
+  const upstreamSignal = ownsImageInflight && imageFetchController ? imageFetchController.signal : options.signal;
 
   try {
   let prefetchedFallbackResponse = null;
@@ -1240,14 +1251,14 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
         extraAllowedHosts: options.extraAllowedHosts || [],
         requireAllowlist: options.requireAllowlist !== false,
         trustedInitialUrl: options.trustedInitialUrl,
-        signal: options.signal,
+        signal: upstreamSignal,
         method,
         nodeStream: true,
       },
       options.timeoutMs || 20000,
     );
   } catch (err) {
-    if (options.signal.aborted) return false;
+    if (options.signal.aborted || res.destroyed || res.writableEnded) return false;
     respondMediaProxyFailure(res, err);
     return false;
   }
@@ -1279,7 +1290,7 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
     }
   }
 
-  if (options.signal.aborted) {
+  if (upstreamSignal.aborted) {
     await cancelMediaBody(response);
     return false;
   }
@@ -1309,21 +1320,29 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
     if (!res.headersSent) res.status(415).json({ error: '上游未返回支持的媒体类型' });
     return false;
   }
-  res.set('X-Content-Type-Options', 'nosniff');
-  res.set('Content-Security-Policy', 'sandbox');
   const contentType = rawType;
   const useBuffer = shouldBufferResponse(rawType, options) && !isAudioStream(rawType, range);
-
-  // 允许浏览器本地缓存私有音频分片以支持预取和跳转复用，同时禁止公网 CDN 与 Nginx 缓冲阻塞
-  res.set('Cache-Control', useBuffer ? 'no-store, no-cache, must-revalidate, private, max-age=0' : 'private, max-age=600, no-transform');
-  if (useBuffer) res.set('Pragma', 'no-cache');
-  else res.removeHeader?.('Pragma');
-  res.set('CDN-Cache-Control', 'no-store');
-  res.set('Surrogate-Control', 'no-store');
-  if (!useBuffer) {
-    res.set('X-Accel-Buffering', 'no');
+  const clientStillConnected = () => !options.signal.aborted && !res.writableEnded && !res.destroyed;
+  const applyProxyBaseHeaders = () => {
+    if (!clientStillConnected() || res.headersSent) return;
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('Content-Security-Policy', 'sandbox');
+    // 允许浏览器本地缓存私有音频分片以支持预取和跳转复用，同时禁止公网 CDN 与 Nginx 缓冲阻塞
+    res.set('Cache-Control', useBuffer ? 'no-store, no-cache, must-revalidate, private, max-age=0' : 'private, max-age=600, no-transform');
+    if (useBuffer) res.set('Pragma', 'no-cache');
+    else res.removeHeader?.('Pragma');
+    res.set('CDN-Cache-Control', 'no-store');
+    res.set('Surrogate-Control', 'no-store');
+    if (!useBuffer) {
+      res.set('X-Accel-Buffering', 'no');
+    }
+    res.set('X-OpenMusic-Proxy', '1');
+  };
+  if (!ownsImageInflight && !clientStillConnected()) {
+    await cancelMediaBody(response);
+    return false;
   }
-  res.set('X-OpenMusic-Proxy', '1');
+  applyProxyBaseHeaders();
 
   if (method === 'HEAD') {
     applyStreamingMediaHeaders(response, res, contentType);
@@ -1335,23 +1354,22 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
   if (useBuffer) {
     try {
       const isImage = /^image\//i.test(rawType);
+      if (!isImage && !clientStillConnected()) {
+        await cancelMediaBody(response);
+        return false;
+      }
       const maxBufferedBytes = isImage ? MAX_BUFFERED_IMAGE_BYTES : MAX_BUFFERED_MEDIA_BYTES;
       const declaredLen = Number(response.headers.get('content-length') || 0);
       if (Number.isFinite(declaredLen) && declaredLen > maxBufferedBytes) {
         await cancelMediaBody(response);
-        if (!res.headersSent) res.status(413).json({ error: '媒体过大' });
+        if (clientStillConnected() && !res.headersSent) res.status(413).json({ error: '媒体过大' });
         return false;
       }
       const buffer = await readBoundedMediaResponse(response, maxBufferedBytes);
-      if (res.writableEnded || res.destroyed) return false;
-      if (contentType) res.set('Content-Type', contentType);
       const upstreamCacheControl = response.headers.get('cache-control') || '';
       const upstreamMaxAge = upstreamCacheControl.match(/\bmax-age\s*=\s*"?(\d+)/iu);
       const maxAge = upstreamMaxAge ? Math.min(3600, Math.max(300, Number(upstreamMaxAge[1]))) : 3600;
       if (isImage && response.status === 200 && maxAge > 0) {
-        // 仅复用浏览器内的封面，避免翻页/切歌重复拉图占用 2GB 服务器带宽
-        res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
-        res.removeHeader('Pragma');
         if (canCacheImage) {
           const cachedEntry = {
             buffer,
@@ -1362,16 +1380,28 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
           writeProxiedImageCache(imageCacheKey, cachedEntry);
           settleImageInflight(cachedEntry);
         }
+        if (!clientStillConnected()) return false;
+        if (contentType) res.set('Content-Type', contentType);
+        // 仅复用浏览器内的封面，避免翻页/切歌重复拉图占用 2GB 服务器带宽
+        res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
+        res.removeHeader('Pragma');
+      } else {
+        if (!clientStillConnected()) return false;
+        if (contentType) res.set('Content-Type', contentType);
       }
       res.status(200).send(buffer);
       return true;
     } catch (error) {
-      if (!res.headersSent && !options.signal.aborted) {
+      if (clientStillConnected() && !res.headersSent) {
         if (error?.statusCode === 413) res.status(413).json({ error: '媒体过大' });
         else res.status(502).json({ error: '媒体代理读取上游响应失败', code: 'MEDIA_STREAM_FAILED' });
       }
       return false;
     }
+  }
+  if (!clientStillConnected()) {
+    await cancelMediaBody(response);
+    return false;
   }
 
   if (!response.body) {

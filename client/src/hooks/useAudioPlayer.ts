@@ -61,7 +61,14 @@ import {
   shouldProxyQishuiTrack,
 } from '../lib/songPreloadCache';
 import { resolveQishuiLocalPlaybackUrl, retainQishuiPlaybackUrl } from '../lib/qishuiLocalPlayback';
-import { cacheSongAudio, getCachedSongAudio, releaseSongAudioSource, setSongAudioSource, songAudioCacheKey } from '../lib/songAudioCache';
+import {
+  cacheSongAudio,
+  getCachedSongAudio,
+  releaseSongAudioSource,
+  setSongAudioSource,
+  shouldAutoCacheSongAudio,
+  songAudioCacheKey,
+} from '../lib/songAudioCache';
 import { seekAudioTo, isExpectedAudioSeek, finishAudioSeek } from '../lib/audioSeek';
 import { refreshSignedApiUrl, resolveSignedApiUrl, stripApiSignParams } from '../lib/signedApiUrl';
 import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../lib/mediaProxyUrl';
@@ -1572,17 +1579,34 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }));
 
         // 仅缓存/同步服务端地址；blob: 只属于当前浏览器，不能发给房间内其他用户。
-        if (!cachedAudio && !crossSource) {
+        if (!cachedAudio && !crossSource && shouldAutoCacheSongAudio(qualityLabel, duration || current.duration)) {
           const audio = controller.audio;
-          const savePlayingTrack = () => {
-            if (isAudioBoundToQueue(audio, current.queueId)) {
-              void cacheSongAudio(audioCacheKey, playbackUrl, audioCacheAbort.signal);
+          let cacheDelayTimer: number | null = null;
+          const clearCacheDelay = () => {
+            if (cacheDelayTimer !== null) {
+              window.clearTimeout(cacheDelayTimer);
+              cacheDelayTimer = null;
             }
           };
+          audioCacheAbort.signal.addEventListener('abort', clearCacheDelay, { once: true });
+          const scheduleSavePlayingTrack = () => {
+            if (cacheDelayTimer !== null || audioCacheAbort.signal.aborted) return;
+            cacheDelayTimer = window.setTimeout(() => {
+              cacheDelayTimer = null;
+              if (
+                !audioCacheAbort.signal.aborted
+                && isAudioBoundToQueue(audio, current.queueId)
+                && !audio.paused
+                && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA
+              ) {
+                void cacheSongAudio(audioCacheKey, playbackUrl, audioCacheAbort.signal);
+              }
+            }, 4000);
+          };
           if (!audio.paused && audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) {
-            savePlayingTrack();
+            scheduleSavePlayingTrack();
           } else {
-            audio.addEventListener('playing', savePlayingTrack, { once: true, signal: audioCacheAbort.signal });
+            audio.addEventListener('playing', scheduleSavePlayingTrack, { once: true, signal: audioCacheAbort.signal });
           }
         }
         rememberSongUrl(trackKey, url, qualityLabel, crossSource, crossSourceFrom, loudness, duration);

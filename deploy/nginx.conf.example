@@ -9,6 +9,11 @@
 #
 # 完整宝塔版见 nginx.baota-optimized.conf.example
 
+upstream openmusic_backend {
+    server 127.0.0.1:4000;
+    keepalive 32;
+}
+
 server {
     listen 80;
     listen 443 ssl http2;
@@ -67,7 +72,7 @@ server {
     # 必须写在 /api/ 前面：音频 Range 流式转发
     location ^~ /api/media-proxy {
         proxy_cache off;
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -90,8 +95,9 @@ server {
 
     location ^~ /api/ {
         proxy_cache off;
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -105,8 +111,9 @@ server {
     }
 
     location ^~ /downloads/ {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;

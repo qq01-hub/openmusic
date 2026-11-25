@@ -1,4 +1,10 @@
-type FoliaStageModule = { mountFolia: (container: Element) => () => void; preloadFoliaAssets?: () => Promise<unknown> };
+export type FoliaStageMountOptions = {
+  registerReceiver?: (receiver: ((data: Record<string, unknown>) => void) | null) => void;
+};
+type FoliaStageModule = {
+  mountFolia: (container: Element, options?: FoliaStageMountOptions) => () => void;
+  preloadFoliaAssets?: () => Promise<unknown>;
+};
 type FoliaStageResources = { css: string[]; module: Promise<FoliaStageModule> };
 let pending: Promise<FoliaStageResources> | undefined;
 let importAttempt = 0;
