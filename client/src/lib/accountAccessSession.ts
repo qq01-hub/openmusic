@@ -1,16 +1,41 @@
 import { assertDeviceSession, createDeviceProof, setDeviceSession } from './deviceProof';
 import { assertAccountSessionResponse, isExplicitAccountDenial, isValidSessionMetadata } from './accountSessionRecovery';
-import { ACCOUNT_SESSION_REVISION_KEY, announceAccountTokenRefreshed, isAccountSessionRevisionEvent } from './accountSessionSignal';
+import { ACCOUNT_SESSION_REVISION_KEY, announceAccountTokenRefreshed, isAccountSessionRevisionEvent, notifyLocalAccountTokenRefreshed } from './accountSessionSignal';
 
 export type AccountSessionMetadata = { sessionId?: string; deviceKeyId?: string | null; deviceMigrationRequired?: boolean; expiresAt: number; refreshExpiresAt: number; serverTime: number };
 
+export const PROACTIVE_REFRESH_WINDOW_MS = 15 * 60_000;
+export const MIN_REFRESH_EXTEND_MS = 60_000;
+
 let accessDeadline = 0;
 let refreshDeadline = 0;
+let accessExpiresAt = 0;
 let refreshPromise: Promise<boolean> | null = null;
 let generation = 0;
 let refreshAllowed = true;
 let anonymousAccess = false;
 let sessionTask: Promise<unknown> = Promise.resolve();
+
+/** 仅当访问凭据已过期或临期且刷新凭据仍能有效延后截止时间时，才需要主动续期 */
+export function shouldProactivelyRefreshAccess(accessDeadlineMs: number, refreshDeadlineMs: number, now = Date.now()): boolean {
+  if (!Number.isFinite(accessDeadlineMs) || accessDeadlineMs <= 0) return false;
+  if (!Number.isFinite(refreshDeadlineMs) || refreshDeadlineMs <= now) return false;
+  if (accessDeadlineMs - now > PROACTIVE_REFRESH_WINDOW_MS) return false;
+  if (accessDeadlineMs <= now) return true;
+  return refreshDeadlineMs - accessDeadlineMs > MIN_REFRESH_EXTEND_MS;
+}
+
+export function isSessionMetadataRefreshNeeded(session: AccountSessionMetadata): boolean {
+  return shouldProactivelyRefreshAccess(session.expiresAt, session.refreshExpiresAt, session.serverTime);
+}
+
+export function canSkipSessionRefresh(session: AccountSessionMetadata): boolean {
+  return session.expiresAt > session.serverTime && !isSessionMetadataRefreshNeeded(session);
+}
+
+export function didSessionExpiryAdvance(previousExpiresAt: number, nextExpiresAt: number): boolean {
+  return Number.isFinite(nextExpiresAt) && nextExpiresAt > Math.max(0, previousExpiresAt);
+}
 
 export function hasAnonymousAccess(): boolean {
   return anonymousAccess;
@@ -43,6 +68,7 @@ export function updateAccountAccess(session: AccountSessionMetadata | null | und
   if (!session || !Number.isFinite(session.expiresAt) || !Number.isFinite(session.refreshExpiresAt) || !Number.isFinite(session.serverTime)) {
     accessDeadline = 0;
     refreshDeadline = 0;
+    accessExpiresAt = 0;
     refreshAllowed = refreshAvailable;
     return;
   }
@@ -50,6 +76,7 @@ export function updateAccountAccess(session: AccountSessionMetadata | null | und
   anonymousAccess = false;
   accessDeadline = Date.now() + session.expiresAt - session.serverTime;
   refreshDeadline = Date.now() + session.refreshExpiresAt - session.serverTime;
+  accessExpiresAt = session.expiresAt;
   refreshAllowed = true;
 }
 
@@ -89,6 +116,7 @@ export function refreshAccountAccess(): Promise<boolean> {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 8000);
     try {
+      const previousExpiresAt = accessExpiresAt;
       if (typeof navigator !== 'undefined' && navigator.locks) {
         const current = await fetch('/api/auth/session', {
           credentials: 'include', cache: 'no-store', signal: controller.signal,
@@ -100,10 +128,12 @@ export function refreshAccountAccess(): Promise<boolean> {
           state.session = await migrateAccountDevice(controller.signal);
           if (currentGeneration !== getAccountSessionGeneration()) return false;
         }
-        if (current.ok && state.authenticated && state.session && state.session.expiresAt - state.session.serverTime > 15 * 60_000) {
+        if (current.ok && state.authenticated && state.session && canSkipSessionRefresh(state.session)) {
           await assertDeviceSession(state.session.deviceKeyId);
           updateAccountAccess(state.session);
-          announceAccountTokenRefreshed();
+          if (didSessionExpiryAdvance(previousExpiresAt, state.session.expiresAt)) {
+            notifyLocalAccountTokenRefreshed();
+          }
           return true;
         }
         if (!current.ok && !(current.status === 401 && isExplicitAccountDenial(state))) throw new Error('账户状态读取失败，请稍后重试');
@@ -130,7 +160,9 @@ export function refreshAccountAccess(): Promise<boolean> {
       if (!response.ok || !data.ok || !isValidSessionMetadata(data.session)) throw new Error(data.error || '账户续期暂不可用，请稍后重试');
       await assertDeviceSession(data.session.deviceKeyId);
       updateAccountAccess(data.session);
-      announceAccountTokenRefreshed();
+      if (didSessionExpiryAdvance(previousExpiresAt, data.session.expiresAt)) {
+        announceAccountTokenRefreshed();
+      }
       return true;
     } finally { window.clearTimeout(timer); }
   };
@@ -141,9 +173,11 @@ export function refreshAccountAccess(): Promise<boolean> {
 export function ensureFreshAccountAccess(): Promise<boolean> {
   if (anonymousAccess) return Promise.resolve(true);
   if (!accessDeadline) return Promise.resolve(false);
-  if (accessDeadline - Date.now() > 15 * 60_000) return Promise.resolve(true);
-  if (refreshDeadline <= Date.now()) return Promise.resolve(false);
-  return refreshAccountAccess();
+  const now = Date.now();
+  if (shouldProactivelyRefreshAccess(accessDeadline, refreshDeadline, now)) {
+    return refreshAccountAccess();
+  }
+  return Promise.resolve(accessDeadline > now);
 }
 
 if (typeof window !== 'undefined') {

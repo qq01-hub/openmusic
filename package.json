@@ -20,7 +20,7 @@
     "electron:dist": "npm run desktop:build",
     "build:client": "npm run build --prefix client",
     "electron:package": "node scripts/build-electron-client.mjs",
-    "desktop:build": "npm run build:client && npm run electron:package"
+    "desktop:build": "npm run electron:package"
   },
   "devDependencies": {
     "concurrently": "^9.2.5",
@@ -38,7 +38,6 @@
     "asar": true,
     "files": [
       "electron/**/*",
-      "client/dist/**/*",
       "package.json"
     ],
     "win": {

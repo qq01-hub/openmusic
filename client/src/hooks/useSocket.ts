@@ -88,6 +88,10 @@ let accountSessionRecovery: Promise<void> | null = null;
 let accountSessionNeedsRecovery = false;
 let humanChallengeRequired = false;
 let socketHandshakeFailure: Error | null = null;
+let socketRefreshInFlight: Promise<void> | null = null;
+let socketRefreshQueued = false;
+let lastTokenRefreshSocketAt = 0;
+const TOKEN_REFRESH_SOCKET_COOLDOWN_MS = 5_000;
 
 function bindAccountSessionStorageListener() {
   if (accountSessionStorageListenerBound || typeof window === 'undefined') return;
@@ -108,7 +112,11 @@ function bindAccountSessionStorageListener() {
   const onTokenRefresh = () => {
     if (humanChallengeRequired) return;
     if (accountSessionRecovery || accountSessionNeedsRecovery) return;
-    if (socket?.connected || socket?.active || shouldMaintainRoomSession()) void refreshSocketSession();
+    if (!(socket?.connected || socket?.active || shouldMaintainRoomSession())) return;
+    const now = Date.now();
+    if (socketRefreshInFlight || now - lastTokenRefreshSocketAt < TOKEN_REFRESH_SOCKET_COOLDOWN_MS) return;
+    lastTokenRefreshSocketAt = now;
+    void refreshSocketSession({ coalesce: true });
   };
   window.addEventListener('openmusic:account-token-refreshed', onTokenRefresh);
   window.addEventListener('storage', (event) => {
@@ -668,8 +676,7 @@ async function attemptRoomRejoin(trigger: string) {
   }
 }
 
-/** 账户会话切换后刷新 Socket 握手身份；已在房间时复用原会话重新进房。 */
-export async function refreshSocketSession(): Promise<void> {
+async function runRefreshSocketSession(): Promise<void> {
   if (humanChallengeRequired) return;
   resetSessionBootstrap();
   const s = getSocket();
@@ -684,10 +691,28 @@ export async function refreshSocketSession(): Promise<void> {
       await requireSessionBootstrap(true);
     }
   } catch {
-    // 账户登录本身已完成，Socket 可在下一次进入房间时重试。
+    // 账户登录本身已完成，Socket 可在下一次进入房间时重试
     return;
   }
   if (plan.rejoinRoom) await attemptRoomRejoin('account_session_changed');
+}
+
+/** 账户会话切换后刷新 Socket 握手身份；已在房间时复用原会话重新进房 */
+export async function refreshSocketSession(options?: { coalesce?: boolean }): Promise<void> {
+  if (humanChallengeRequired) return;
+  if (socketRefreshInFlight) {
+    if (!options?.coalesce) socketRefreshQueued = true;
+    return socketRefreshInFlight;
+  }
+  socketRefreshInFlight = (async () => {
+    do {
+      socketRefreshQueued = false;
+      await runRefreshSocketSession();
+    } while (socketRefreshQueued && !humanChallengeRequired);
+  })().finally(() => {
+    socketRefreshInFlight = null;
+  });
+  return socketRefreshInFlight;
 }
 
 function handleSocketDisconnect(reason: string) {
@@ -1069,7 +1094,15 @@ export function useSocket() {
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
         return;
       }
-      if (['ACCOUNT_AUTH_REQUIRED', 'ACCOUNT_IDENTITY_MISMATCH', 'ACCOUNT_RISK_BLOCKED'].includes(code || '')) {
+      if (['ACCOUNT_AUTH_REQUIRED', 'ACCOUNT_RISK_BLOCKED'].includes(code || '')) {
+        s.disconnect();
+        clearReconnectSchedule();
+        const { mySocketId } = useRoomStore.getState();
+        useRoomStore.getState().setConnectionInfo(mySocketId, null);
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+        return;
+      }
+      if (code === 'ACCOUNT_IDENTITY_MISMATCH') {
         s.disconnect();
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
       }

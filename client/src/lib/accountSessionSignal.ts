@@ -5,9 +5,13 @@ export function isAccountTokenRevisionEvent(event: Pick<StorageEvent, 'key' | 'n
   return event.key === ACCOUNT_TOKEN_REVISION_KEY && Boolean(event.newValue);
 }
 
+export function notifyLocalAccountTokenRefreshed(): void {
+  window.dispatchEvent(new Event('openmusic:account-token-refreshed'));
+}
+
 export function announceAccountTokenRefreshed(): void {
   try { localStorage.setItem(ACCOUNT_TOKEN_REVISION_KEY, `${Date.now()}:${Math.random()}`); } catch {}
-  window.dispatchEvent(new Event('openmusic:account-token-refreshed'));
+  notifyLocalAccountTokenRefreshed();
 }
 
 export function isAccountSessionRevisionEvent(event: Pick<StorageEvent, 'key' | 'newValue'>): boolean {

@@ -28,10 +28,16 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
     let queued = false;
     let attempt = 0;
     let retryTimer: number | undefined;
+    let lastVerifiedAt = 0;
+    const PASSIVE_REFRESH_MIN_INTERVAL_MS = 5_000;
     const clearRetry = () => { if (retryTimer) window.clearTimeout(retryTimer); retryTimer = undefined; };
-    const refresh = async () => {
+    const refresh = async (force = true) => {
       if (!active) return;
-      if (inFlight) { queued = true; return; }
+      if (inFlight) {
+        if (force) queued = true;
+        return;
+      }
+      if (!force && lastVerifiedAt > 0 && Date.now() - lastVerifiedAt < PASSIVE_REFRESH_MIN_INTERVAL_MS) return;
       clearRetry();
       inFlight = true;
       const current = ++generation;
@@ -40,10 +46,12 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
         if (!active || current !== generation) return;
         const allowed = Boolean(account) || hasAnonymousAccess();
         setAuthenticated(allowed);
+        lastVerifiedAt = Date.now();
         setError(''); setRetrying(false); attempt = 0;
         if (!allowed) { stopSharedAudio(); onReady?.(); }
       } catch (reason) {
         if (!active || current !== generation) return;
+        lastVerifiedAt = 0;
         if (isExplicitAccountDenial(reason)) {
           setAuthenticated(false); setRetrying(false);
           setError(reason instanceof Error ? reason.message : '账户会话已失效');
@@ -61,31 +69,32 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
         if (active && queued) { queued = false; void refresh(); }
       }
     };
-    const onChange = () => { if (!retryTimer) void refresh(); };
+    const onChange = () => { if (!retryTimer) void refresh(true); };
+    const onPassiveChange = () => { if (!retryTimer) void refresh(false); };
     const onIdentityChange = () => {
-      generation++; attempt = 0; clearRetry();
+      generation++; attempt = 0; lastVerifiedAt = 0; clearRetry();
       setAuthenticated(null); setError(''); stopSharedAudio();
-      void refresh();
+      void refresh(true);
     };
     const onStorage = (event: StorageEvent) => { if (isAccountSessionRevisionEvent(event)) onIdentityChange(); };
     const onRestart = () => {
       generation++;
-      attempt = 0; clearRetry(); setError('服务正在更新，正在自动恢复连接'); setRetrying(true);
-      retryTimer = window.setTimeout(() => { retryTimer = undefined; void refresh(); }, 1500 + Math.floor(Math.random() * 1000));
+      attempt = 0; lastVerifiedAt = 0; clearRetry(); setError('服务正在更新，正在自动恢复连接'); setRetrying(true);
+      retryTimer = window.setTimeout(() => { retryTimer = undefined; void refresh(true); }, 1500 + Math.floor(Math.random() * 1000));
     };
-    void refresh();
+    void refresh(true);
     window.addEventListener('openmusic:account-session-changed', onIdentityChange);
     window.addEventListener('openmusic:account-auth-required', onChange);
     window.addEventListener('openmusic:server-restarting', onRestart);
     window.addEventListener('storage', onStorage);
-    window.addEventListener('focus', onChange);
+    window.addEventListener('focus', onPassiveChange);
     window.addEventListener('online', onChange);
     const onScheduledRefresh = () => {
       if (isHostPageHidden()) return;
-      onChange();
+      onPassiveChange();
     };
     const unsubscribeVisibility = subscribeHostVisibility(() => {
-      if (!isHostPageHidden()) onChange();
+      if (!isHostPageHidden()) onPassiveChange();
     });
     const timer = window.setInterval(onScheduledRefresh, 60_000);
     return () => {
@@ -96,7 +105,7 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
       window.removeEventListener('openmusic:account-auth-required', onChange);
       window.removeEventListener('openmusic:server-restarting', onRestart);
       window.removeEventListener('storage', onStorage);
-      window.removeEventListener('focus', onChange);
+      window.removeEventListener('focus', onPassiveChange);
       window.removeEventListener('online', onChange);
     };
   }, [onReady, revision]);

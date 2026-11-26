@@ -3,7 +3,7 @@ import { assertAccountSessionResponse, type AccountSessionResponse } from './acc
 import { fetchWithTimeout } from '../api/http';
 import { useRoomStore } from '../stores/roomStore';
 import { requireSessionBootstrap } from './sessionBootstrap';
-import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, migrateAccountDevice, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
+import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, isSessionMetadataRefreshNeeded, migrateAccountDevice, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 
 export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat';
 
@@ -114,6 +114,9 @@ async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
   if (data.authenticated) await assertDeviceSession(data.session?.deviceKeyId);
   assertCurrent();
   updateAccountAccess(data.session, Boolean(data.refreshAvailable));
+  const needsRefresh = data.authenticated
+    ? Boolean(data.session && isSessionMetadataRefreshNeeded(data.session))
+    : Boolean(data.refreshAvailable);
   if ((data.authenticated ? !await ensureFreshAccountAccess() : data.refreshAvailable && !await refreshAccountAccess())) {
     assertCurrent();
     setAnonymousAccess(data.anonymousAllowed === true);
@@ -122,7 +125,7 @@ async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
     assertCurrent();
     return null;
   }
-  if (data.refreshAvailable || (data.session && data.session.expiresAt - data.session.serverTime <= 15 * 60_000)) {
+  if (needsRefresh) {
     response = await read();
     if (!response.ok) {
       const error = await response.json().catch(() => ({})) as { error?: string; code?: string };
