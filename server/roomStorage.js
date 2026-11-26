@@ -300,7 +300,11 @@ if ARGV[1] == '0' then
 elseif not current or current ~= ARGV[2] then
   return 0
 end
-if current ~= ARGV[3] then redis.call('SET', KEYS[1], ARGV[3]) end
+if ARGV[3] == '[]' then
+  if current then redis.call('DEL', KEYS[1]) end
+elseif current ~= ARGV[3] then
+  redis.call('SET', KEYS[1], ARGV[3])
+end
 return 1
 `;
 const FAVORITE_COLLECTION_CAS_SCRIPT = `${FAVORITE_OWNER_ACTIVE_LUA}
@@ -315,7 +319,9 @@ for i = 1, #KEYS do
 end
 for i = 1, #KEYS do
   local offset = (i - 1) * 3
-  if ARGV[offset + 2] ~= ARGV[offset + 3] then
+  if ARGV[offset + 3] == '[]' then
+    if ARGV[offset + 1] ~= '0' then redis.call('DEL', KEYS[i]) end
+  elseif ARGV[offset + 2] ~= ARGV[offset + 3] then
     redis.call('SET', KEYS[i], ARGV[offset + 3])
   end
 end

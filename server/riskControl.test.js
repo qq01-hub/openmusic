@@ -310,3 +310,57 @@ test('media-proxy size=1 cover classification marks req.mediaProxyImageOnly and 
   assert.equal(capturedConsume.at(-1)?.legacyUnbound, true);
   assert.equal(capturedConsume.at(-1)?.sessionShared, true);
 });
+
+test('切分日之后 ensureDaily 不再写 seeded 冗余键，today-requests 改为 48h TTL 且仅索引正计数账户', async () => {
+  let ensureDailyCalls = 0;
+  let ensureDailyScript = '';
+  let consumeScript = '';
+  let todayIndexScript = '';
+  let statusIndexKeys = [];
+  let statusIndexScript = '';
+  const client = {
+    async get() { return null; },
+    async zCard() { return 0; },
+    async zRangeWithScores() { return []; },
+    async zCount() { return 0; },
+    async eval(script, options) {
+      if (script.includes('china-day-cutover') || options?.keys?.[3]?.endsWith('china-day-cutover')) {
+        ensureDailyCalls += 1;
+        ensureDailyScript = script;
+        return '2026-10-27';
+      }
+      if (script.includes('ACCOUNT_HUMAN_CHECK_REQUIRED')) {
+        consumeScript = script;
+        return ['', 1, 1, 0, 0, 0];
+      }
+      if (options?.keys?.[0]?.endsWith('status-index:v5')) {
+        statusIndexKeys = options.keys;
+        statusIndexScript = script;
+        return 1;
+      }
+      if (options?.keys?.[0]?.includes('today-index:') && script.includes('ZSCAN')) {
+        return JSON.stringify({ cursor: '0', ids: ['acct_1234567890abcdef'] });
+      }
+      if (options?.keys?.[0]?.includes('today-requests:')) {
+        todayIndexScript = script;
+        return 1;
+      }
+      return 1;
+    },
+  };
+  const control = createRiskControl({ getStore: () => client, now: () => Date.parse('2026-11-27T02:00:00Z') });
+  await control.consume({ id: 'acct_1234567890abcdef' }, { ip: '198.51.100.8', kind: 'api' });
+  await control.consume({ id: 'acct_fedcba0987654321' }, { ip: '198.51.100.9', kind: 'api' });
+  assert.equal(ensureDailyCalls, 1);
+  assert.equal(ensureDailyScript.includes("if cutover ~= ARGV[1] then return cutover end"), true);
+  assert.equal(ensureDailyScript.includes("'native'"), false);
+  assert.equal(consumeScript.includes("redis.call('EXPIRE', KEYS[25], 172800)"), true);
+  assert.equal(consumeScript.includes("redis.call('EXPIRE', KEYS[25], 3024000)"), false);
+
+  await control.list({ order: 'today' });
+  assert.equal(statusIndexKeys.includes('openmusic:risk:v1:status-index:v2'), true);
+  assert.equal(statusIndexScript.includes('KEYS[9]'), true);
+  assert.equal(todayIndexScript.includes('if requests > 0 then redis.call(\'ZADD\', KEYS[1], requests, id) end'), true);
+  assert.equal(todayIndexScript.includes("redis.call('EXPIRE', KEYS[1], 172800)"), true);
+  assert.equal(todayIndexScript.includes("redis.call('SET', KEYS[2], '1', 'EX', 172800)"), true);
+});

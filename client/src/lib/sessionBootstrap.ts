@@ -12,6 +12,7 @@ import {
 
 let bootstrapPromise: Promise<string | null> | null = null;
 let bootstrapReadyGeneration = -1;
+let bootstrapLoginRequiredGeneration = -1;
 let lastBootstrapError = '';
 let bootstrapGeneration = 0;
 
@@ -21,6 +22,17 @@ export function getLastBootstrapError(): string {
 
 export function hasSessionBootstrapReady(): boolean {
   return bootstrapReadyGeneration === bootstrapGeneration && !isSiteAccessBlocked();
+}
+
+export function isSessionBootstrapLoginRequired(): boolean {
+  return bootstrapLoginRequiredGeneration === bootstrapGeneration && !isSiteAccessBlocked();
+}
+
+function createAuthRequiredError(): Error & { code: string; status: number } {
+  return Object.assign(new Error('请先登录账户'), {
+    code: 'ACCOUNT_AUTH_REQUIRED',
+    status: 401,
+  });
 }
 
 async function requestSessionBootstrap(generation: number): Promise<string | null> {
@@ -56,6 +68,8 @@ async function requestSessionBootstrap(generation: number): Promise<string | nul
   }
   const data = (await res.json()) as {
     clientId?: string;
+    authenticated?: boolean;
+    loginRequired?: boolean;
     features?: {
       svipQualityEnabled?: boolean;
       neteaseSvip?: boolean;
@@ -67,9 +81,15 @@ async function requestSessionBootstrap(generation: number): Promise<string | nul
   };
   if (generation !== bootstrapGeneration) return null;
   applySiteFeatures(data.features);
+  if (data.loginRequired === true || (data.authenticated === false && !data.clientId)) {
+    bootstrapLoginRequiredGeneration = generation;
+    lastBootstrapError = '请先登录账户';
+    return null;
+  }
   if (data.clientId) {
     rememberClientId(data.clientId);
     bootstrapReadyGeneration = generation;
+    bootstrapLoginRequiredGeneration = -1;
   }
   lastBootstrapError = '';
   return data.clientId || null;
@@ -81,6 +101,7 @@ export function ensureSessionBootstrap(force = false): Promise<string | null> {
   if (force) {
     bootstrapPromise = null;
     bootstrapReadyGeneration = -1;
+    bootstrapLoginRequiredGeneration = -1;
   }
   if (!bootstrapPromise) {
     const generation = bootstrapGeneration;
@@ -91,7 +112,7 @@ export function ensureSessionBootstrap(force = false): Promise<string | null> {
         try {
           const clientId = await requestSessionBootstrap(generation);
           if (clientId) return clientId;
-          if (isSiteAccessBlocked()) return null;
+          if (isSiteAccessBlocked() || bootstrapLoginRequiredGeneration === generation) return null;
         } catch {
           // retry
         }
@@ -115,10 +136,16 @@ export async function requireSessionBootstrap(force = false): Promise<string> {
     if (isSiteAccessBlocked()) {
       throw new Error(softBlockMessage(SOFT_BLOCK_CODES.SITE_BAN));
     }
+    if (isSessionBootstrapLoginRequired()) {
+      throw createAuthRequiredError();
+    }
     resetSessionBootstrap();
     clientId = await ensureSessionBootstrap(true);
   }
   if (!clientId) {
+    if (isSessionBootstrapLoginRequired()) {
+      throw createAuthRequiredError();
+    }
     throw new Error(
       lastBootstrapError
         || (isSiteAccessBlocked()
@@ -133,5 +160,6 @@ export function resetSessionBootstrap(): void {
   if (isSiteAccessBlocked()) return;
   bootstrapGeneration += 1;
   bootstrapReadyGeneration = -1;
+  bootstrapLoginRequiredGeneration = -1;
   bootstrapPromise = null;
 }

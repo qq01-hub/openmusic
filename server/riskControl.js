@@ -287,7 +287,7 @@ if kind == 'image' then
   redis.call('HINCRBY', KEYS[4], 'imageRequests', 1)
   redis.call('EXPIRE', KEYS[4], 3024000)
   redis.call('ZADD', KEYS[25], daily, id)
-  redis.call('EXPIRE', KEYS[25], 3024000)
+  redis.call('EXPIRE', KEYS[25], 172800)
   local score = tonumber(redis.call('HGET', KEYS[1], 'score') or '0')
   local code = ''
   if ARGV[21] == '1' and status ~= 'blocked' and redis.call('HGET', KEYS[1], 'humanBypass') ~= '1' and redis.call('HEXISTS', KEYS[1], 'humanPending') == 1 then
@@ -301,7 +301,7 @@ end
 local minute = redis.call('HINCRBY', KEYS[3], 'requests', 1)
 local daily = redis.call('HINCRBY', KEYS[4], 'requests', 1)
 redis.call('ZADD', KEYS[25], daily, id)
-redis.call('EXPIRE', KEYS[25], 3024000)
+redis.call('EXPIRE', KEYS[25], 172800)
 local ipMinute = redis.call('INCR', KEYS[5])
 redis.call('EXPIRE', KEYS[3], 120)
 redis.call('EXPIRE', KEYS[4], 3024000)
@@ -558,6 +558,7 @@ const MUSIC_RESPONSE_SCRIPT = `
 export function createRiskControl({ getStore = getRedisClient, prefix = 'openmusic:risk:v1:', now = () => Date.now() } = {}) {
   let cachedPolicy = null;
   let cachedPolicyAt = 0;
+  let cachedCutoverDate = '';
   const ensuredDailyKeys = new Set();
   function store() {
     const client = getStore();
@@ -579,34 +580,37 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
 
   async function ensureDaily(id, timestamp) {
     const date = dateKey(timestamp);
+    if (cachedCutoverDate && cachedCutoverDate !== date) return;
     const cacheKey = `${id}:${date}`;
     if (ensuredDailyKeys.has(cacheKey)) return;
     const start = Math.floor((timestamp + CHINA_OFFSET) / DAY) * DAY - CHINA_OFFSET;
     const legacy = [start, start + DAY - 1].map(value => `${prefix}day:${id}:${new Date(value).toISOString().slice(0, 10)}`);
-    await run(client => evalRedisScript(client, `
+    const cutover = await run(client => evalRedisScript(client, `
       local cutover = redis.call('GET', KEYS[4])
       if not cutover then cutover = ARGV[1]; redis.call('SET', KEYS[4], cutover) end
-      if redis.call('EXISTS', KEYS[5]) == 1 then return 1 end
+      if cutover ~= ARGV[1] then return cutover end
+      if redis.call('EXISTS', KEYS[5]) == 1 then return cutover end
       local imported = false
-      if cutover == ARGV[1] then
-        for index = 2, 3 do
-          local fields = redis.call('HGETALL', KEYS[index])
-          for field = 1, #fields, 2 do
-            local count = tonumber(fields[field + 1])
-            if count and count >= 0 and count == math.floor(count) then
-              imported = true
-              if fields[field] == 'minutePeak' then
-                local current = tonumber(redis.call('HGET', KEYS[1], fields[field]) or '0')
-                redis.call('HSET', KEYS[1], fields[field], math.max(current, count))
-              else redis.call('HINCRBY', KEYS[1], fields[field], count) end
-            end
+      for index = 2, 3 do
+        local fields = redis.call('HGETALL', KEYS[index])
+        for field = 1, #fields, 2 do
+          local count = tonumber(fields[field + 1])
+          if count and count >= 0 and count == math.floor(count) then
+            imported = true
+            if fields[field] == 'minutePeak' then
+              local current = tonumber(redis.call('HGET', KEYS[1], fields[field]) or '0')
+              redis.call('HSET', KEYS[1], fields[field], math.max(current, count))
+            else redis.call('HINCRBY', KEYS[1], fields[field], count) end
           end
         end
       end
-      redis.call('SET', KEYS[5], imported and 'utc-conservative' or 'native', 'EX', 3024000)
-      redis.call('EXPIRE', KEYS[1], 3024000)
-      return 1
+      if imported then
+        redis.call('SET', KEYS[5], 'utc-conservative', 'EX', 3024000)
+        redis.call('EXPIRE', KEYS[1], 3024000)
+      end
+      return cutover
     `, { keys: [dailyKey(id, timestamp), ...legacy, `${prefix}china-day-cutover`, `${dailyKey(id, timestamp)}:seeded`], arguments: [date] }));
+    if (typeof cutover === 'string' && /^\d{4}-\d{2}-\d{2}$/u.test(cutover)) cachedCutoverDate = cutover;
     if (ensuredDailyKeys.size >= MAX_ENSURED_DAILY_KEYS) ensuredDailyKeys.clear();
     ensuredDailyKeys.add(cacheKey);
   }
@@ -1120,10 +1124,14 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
             end
           end
         end
-        if scan[1] == '0' then redis.call('SET', KEYS[1], '1'); redis.call('DEL', KEYS[2]); return 1 end
+        if scan[1] == '0' then
+          redis.call('SET', KEYS[1], '1')
+          redis.call('DEL', KEYS[2], KEYS[9], KEYS[10], KEYS[11], KEYS[12], KEYS[13], KEYS[14])
+          return 1
+        end
         redis.call('SET', KEYS[2], scan[1], 'EX', 604800)
         return 0
-      `, { keys: [`${prefix}status-index:v5`, `${prefix}status-index:cursor:v5`, `${prefix}accounts`, `${prefix}scores`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`], arguments: [`${prefix}account:`, `${prefix}status:`] }));
+      `, { keys: [`${prefix}status-index:v5`, `${prefix}status-index:cursor:v5`, `${prefix}accounts`, `${prefix}scores`, `${prefix}main-scores`, `${prefix}main-recent`, `${prefix}blocked-scores`, `${prefix}blocked-recent`, `${prefix}status-index:v2`, `${prefix}status-index:cursor:v2`, `${prefix}status-index:v3`, `${prefix}status-index:cursor:v3`, `${prefix}status-index:v4`, `${prefix}status-index:cursor:v4`], arguments: [`${prefix}account:`, `${prefix}status:`] }));
       if (ready === 1) return;
     }
     throw new RiskControlError('RISK_INDEX_BUILDING', '历史风控索引整理中，请稍后刷新');
@@ -1211,10 +1219,10 @@ export function createRiskControl({ getStore = getRedisClient, prefix = 'openmus
         local ids = cjson.decode(ARGV[1])
         for _, id in ipairs(ids) do
           local requests = tonumber(redis.call('HGET', ARGV[2] .. id .. ':' .. ARGV[3], 'requests') or '0')
-          redis.call('ZADD', KEYS[1], requests, id)
+          if requests > 0 then redis.call('ZADD', KEYS[1], requests, id) end
         end
-        redis.call('EXPIRE', KEYS[1], 3024000)
-        if ARGV[4] == '0' then redis.call('SET', KEYS[2], '1', 'EX', 3024000); redis.call('DEL', KEYS[3])
+        if redis.call('EXISTS', KEYS[1]) == 1 then redis.call('EXPIRE', KEYS[1], 172800) end
+        if ARGV[4] == '0' then redis.call('SET', KEYS[2], '1', 'EX', 172800); redis.call('DEL', KEYS[3])
         else redis.call('SET', KEYS[3], ARGV[4], 'EX', 86400) end
         return 1
       `, { keys: [`${prefix}today-requests:${date}`, readyKey, cursorKey], arguments: [JSON.stringify(ids), `${prefix}day-cn:`, date, cursor] }));

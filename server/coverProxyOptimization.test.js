@@ -178,3 +178,56 @@ test('Redis 维护任务完成全库 SCAN 一轮后在冷却期内不重复触�
   await maintenance.runOnce();
   assert.ok(scanCalls > firstRunScans);
 });
+
+test('Redis 维护任务支持清理 30 天前已解决错误上报、无 TTL 设备键与孤儿网络绑定', async () => {
+  const nowMs = 1_800_000_000_000;
+  const evalCalls = [];
+  const client = {
+    isReady: true,
+    async scan(_cursor, options) {
+      if (options.MATCH === 'openmusic:error_reports:*') {
+        return { cursor: '0', keys: ['openmusic:error_reports:abcdef12345678'] };
+      }
+      if (options.MATCH === 'openmusic:device:*') {
+        return { cursor: '0', keys: ['openmusic:device:guest_dev_1234'] };
+      }
+      if (options.MATCH === 'openmusic:user_devices:*') {
+        return { cursor: '0', keys: ['openmusic:user_devices:guest_uid_1234'] };
+      }
+      if (options.MATCH === 'openmusic:client_network_binding:*') {
+        return { cursor: '0', keys: ['openmusic:client_network_binding:guest_uid_1234:guest_dev_1234'] };
+      }
+      return { cursor: '0', keys: [] };
+    },
+    async hScan() { return { cursor: '0', entries: [] }; },
+    async sScan() { return { cursor: '0', members: [] }; },
+    async eval(script, options) {
+      evalCalls.push({ script, options });
+      return 1;
+    },
+    async zCard() { return 0; },
+    async zRange() { return []; },
+    async hKeys() { return []; },
+  };
+  const maintenance = createRedisMaintenance({ getClient: () => client, now: () => nowMs });
+  const stats = await maintenance.runOnce();
+  assert.equal(stats.reports, 1);
+  assert.equal(stats.devices, 1);
+  assert.equal(stats.userDevices, 1);
+  assert.equal(stats.networkBindings, 1);
+
+  const reportCall = evalCalls.find(call => call.options.keys[0] === 'openmusic:error_reports:ids');
+  assert.ok(reportCall);
+  assert.equal(reportCall.options.arguments.length, 2);
+  assert.equal(Number(reportCall.options.arguments[1]), nowMs - 30 * 24 * 60 * 60 * 1000);
+  assert.equal(reportCall.script.includes("report.status == 'resolved'"), true);
+  assert.equal(reportCall.script.includes("redis.call('LREM', KEYS[1], 0, id)"), true);
+
+  const deviceCall = evalCalls.find(call => call.options.keys[0] === 'openmusic:device:guest_dev_1234');
+  assert.ok(deviceCall);
+  assert.equal(deviceCall.script.includes("redis.call('TTL', key) == -1"), true);
+
+  const bindingCall = evalCalls.find(call => call.options.keys[0].startsWith('openmusic:client_network_binding:'));
+  assert.ok(bindingCall);
+  assert.equal(bindingCall.script.includes("redis.call('EXISTS', devicePrefix .. did) == 0"), true);
+});

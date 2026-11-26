@@ -22,7 +22,8 @@ void prefetchLoadingQuote();
 void fetchSiteSeo().then(() => applyPageSeo());
 applyPageSeo();
 void initialAccountSession.finally(() => {
-  void ensureSessionBootstrap().then(() => {
+  void ensureSessionBootstrap().then((clientId) => {
+    if (!clientId) return;
     const refresh = () => void refreshQualityCapabilities();
     if (typeof window.requestIdleCallback === 'function') {
       window.requestIdleCallback(refresh, { timeout: 5000 });

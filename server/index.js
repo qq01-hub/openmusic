@@ -87,14 +87,17 @@ import { fileURLToPath } from 'url';
 import { createHash, createHmac, randomBytes, timingSafeEqual, createCipheriv, createDecipheriv } from 'crypto';
 import { isIP } from 'net';
 import {
+  GUEST_ACTIVE_BINDING_TTL_SEC,
   GUEST_INITIAL_BINDING_TTL_SEC,
   collectDeviceIdsForUser,
   getUserIdForDevice,
   isAccessBanned,
   linkDeviceToUser,
   sanitizeDeviceId,
+  unlinkAllDevicesForUser,
+  unlinkDevice,
 } from './deviceIdentity.js';
-import { resolveBoundClientNetwork } from './clientIpBinding.js';
+import { GUEST_CLIENT_NETWORK_BINDING_TTL_SEC, resolveBoundClientNetwork } from './clientIpBinding.js';
 import { shouldIssueGuestHandoff, shouldMigrateFavorites, shouldRefreshRoomIdentity } from './sessionIdentity.js';
 import {
   createRoom,
@@ -360,6 +363,7 @@ const accountDeletion = createAccountDeletionService({
   },
   cleanup: async (id, roomUserId) => {
     await Promise.all(['netease', 'tencent', 'kugou', 'qishui'].map(platform => accountMusic.remove(id, platform)));
+    await unlinkAllDevicesForUser(roomUserId);
     removeMemberAiContext(roomUserId);
     removeMemberAiUserState(roomUserId);
     await flushAllPendingRoomPersists();
@@ -2312,6 +2316,13 @@ function setIdentityCookieHeaders(res, userId, token, deviceId = null) {
   appendSetCookieHeaders(res, cookies);
 }
 
+function clearIdentityCookieHeaders(res) {
+  const useSecureCookie = (IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure;
+  const secure = useSecureCookie ? '; Secure' : '';
+  appendSetCookieHeaders(res, [IDENTITY_UID_COOKIE, IDENTITY_TOKEN_COOKIE, DEVICE_ID_COOKIE].map(name =>
+    `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${secure}`));
+}
+
 function appendSetCookieHeaders(res, cookies) {
   const existing = res.getHeader('Set-Cookie');
   const current = Array.isArray(existing)
@@ -2706,10 +2717,10 @@ function requireSessionIdentity(req, res) {
 }
 
 function sendBootstrapResponse(res, userId, iat, token, deviceId = null) {
-  setIdentityCookieHeaders(res, userId, token, deviceId);
   res.setHeader('Cache-Control', 'no-store, private');
   const runtime = getRuntimeConfig();
   if (!res.req.account && !runtime.anonymousLoginEnabled) return res.json({ authenticated: false, loginRequired: true });
+  setIdentityCookieHeaders(res, userId, token, deviceId);
   const payload = {
     clientId: userId,
     features: {
@@ -2727,12 +2738,30 @@ function proxyLimitKey(kind, req) {
   return `${kind}:${getRequestIp(req)}:${identity?.userId || 'anon'}`;
 }
 
+const SESSION_BLOCK_AUDIT_COOLDOWN_MS = 5 * 60 * 1000;
+const sessionBlockAuditAt = new Map();
+function appendThrottledSessionBlockAudit(detail, requestIp) {
+  const nowMs = Date.now();
+  const key = `${requestIp || 'unknown'}:${detail?.reason || 'unknown'}`;
+  const lastAt = sessionBlockAuditAt.get(key) || 0;
+  if (nowMs - lastAt < SESSION_BLOCK_AUDIT_COOLDOWN_MS) return false;
+  if (sessionBlockAuditAt.size >= 4096) {
+    for (const [entryKey, entryAt] of sessionBlockAuditAt) {
+      if (nowMs - entryAt >= SESSION_BLOCK_AUDIT_COOLDOWN_MS) sessionBlockAuditAt.delete(entryKey);
+    }
+    if (sessionBlockAuditAt.size >= 4096) sessionBlockAuditAt.clear();
+  }
+  sessionBlockAuditAt.set(key, nowMs);
+  appendAdminAudit('session_blocked', detail, requestIp);
+  return true;
+}
+
 /** 建立 HttpOnly 会话：身份凭证仅通过 Cookie 传递，不经 WebSocket 明文下发 */
 app.post('/api/session/bootstrap', async (req, res) => {
   const requestIp = getRequestIp(req);
   if (!limitSessionBootstrap(`session:${requestIp}`)) {
     const code = SOFT_BLOCK_CODES.SESSION_BOOTSTRAP_LIMIT;
-    appendAdminAudit('session_blocked', {
+    appendThrottledSessionBlockAudit({
       reason: 'bootstrap_rate_limit',
       code,
     }, requestIp);
@@ -2752,6 +2781,10 @@ app.post('/api/session/bootstrap', async (req, res) => {
       const issuedAt = existing?.userId === roomUserId && existing.expiresAt - now > SESSION_RENEW_WITHIN_SEC ? existing.iat : now;
       return sendBootstrapResponse(res, roomUserId, issuedAt, signClientId(roomUserId, issuedAt), deviceId);
     }
+    if (!getRuntimeConfig().anonymousLoginEnabled) {
+      res.setHeader('Cache-Control', 'no-store, private');
+      return res.json({ authenticated: false, loginRequired: true });
+    }
     const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
     const bodyDeviceId = resolveBodyDeviceId(req);
     const now = Math.floor(Date.now() / 1000);
@@ -2760,7 +2793,7 @@ app.post('/api/session/bootstrap', async (req, res) => {
     if (existing && (!getRuntimeConfig().anonymousLoginEnabled || !await getRoomIdentityOwnerAccountId(existing.userId))) {
       // 已认证：可用 body deviceId 对齐绑定；恢复路径不依赖 body
       const deviceId = cookieDeviceId || bodyDeviceId || createServerClientId();
-      if (!await linkDeviceToUser(deviceId, existing.userId)) throw new Error('设备绑定未持久化');
+      if (!await linkDeviceToUser(deviceId, existing.userId, { ttlSec: GUEST_ACTIVE_BINDING_TTL_SEC })) throw new Error('设备绑定未持久化');
       const shouldRenew = existing.expiresAt - now <= SESSION_RENEW_WITHIN_SEC;
       const signIat = shouldRenew ? now : existing.iat;
       const token = signClientId(existing.userId, signIat);
@@ -2771,7 +2804,7 @@ app.post('/api/session/bootstrap', async (req, res) => {
     if (cookieDeviceId) {
       const boundUserId = await getUserIdForDevice(cookieDeviceId, { authoritative: getRuntimeConfig().anonymousLoginEnabled });
       if (boundUserId && (!getRuntimeConfig().anonymousLoginEnabled || !await getRoomIdentityOwnerAccountId(boundUserId))) {
-        if (!await linkDeviceToUser(cookieDeviceId, boundUserId)) throw new Error('设备绑定未持久化');
+        if (!await linkDeviceToUser(cookieDeviceId, boundUserId, { ttlSec: GUEST_ACTIVE_BINDING_TTL_SEC })) throw new Error('设备绑定未持久化');
         const signIat = now;
         return sendBootstrapResponse(
           res,
@@ -2785,7 +2818,7 @@ app.post('/api/session/bootstrap', async (req, res) => {
 
     if (!limitNewSessionBootstrap(`session-new:${requestIp}`)) {
       const code = SOFT_BLOCK_CODES.SESSION_NEW_LIMIT;
-      appendAdminAudit('session_blocked', {
+      appendThrottledSessionBlockAudit({
         reason: 'new_session_rate_limit',
         code,
       }, requestIp);
@@ -3237,13 +3270,17 @@ app.post('/api/auth/logout', async (req, res) => {
   clearAccountSessionCookie(res, true);
   appendSetCookieHeaders(res, [`${GUEST_HANDOFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure) ? '; Secure' : ''}`]);
   if (hadAccountSession) {
-    // 注销后切换到新的游客身份，避免同一设备在未登录状态继续读取账户数据。
     const cookieDeviceId = resolveDeviceIdFromCookieHeader(req.headers?.cookie || '');
-    const userId = createServerClientId();
-    const deviceId = cookieDeviceId || createServerClientId();
-    const now = Math.floor(Date.now() / 1000);
-    await linkDeviceToUser(deviceId, userId);
-    setIdentityCookieHeaders(res, userId, signClientId(userId, now), deviceId);
+    if (!getRuntimeConfig().anonymousLoginEnabled) {
+      if (cookieDeviceId) await unlinkDevice(cookieDeviceId);
+      clearIdentityCookieHeaders(res);
+    } else {
+      const userId = createServerClientId();
+      const deviceId = cookieDeviceId || createServerClientId();
+      const now = Math.floor(Date.now() / 1000);
+      await linkDeviceToUser(deviceId, userId, { ttlSec: GUEST_INITIAL_BINDING_TTL_SEC });
+      setIdentityCookieHeaders(res, userId, signClientId(userId, now), deviceId);
+    }
   }
   recordAccountAuthMetric('logout', 'success');
   return res.json({ ok: true });
@@ -3275,20 +3312,23 @@ app.post('/api/auth/delete', async (req, res) => {
     const result = await accountDeletion.remove(account.id);
     clearAccountSessionCookie(res, true);
     appendSetCookieHeaders(res, [`${GUEST_HANDOFF_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure) ? '; Secure' : ''}`]);
-    const userId = createServerClientId();
-    const deviceId = createServerClientId();
-    let guestBound = false;
-    try {
-      guestBound = await linkDeviceToUser(deviceId, userId);
-    } catch {
-      guestBound = false;
-    }
-    if (guestBound) {
-      setIdentityCookieHeaders(res, userId, signClientId(userId, Math.floor(Date.now() / 1000)), deviceId);
+    if (!getRuntimeConfig().anonymousLoginEnabled) {
+      clearIdentityCookieHeaders(res);
     } else {
-      incrementMetric('account_deletion_total', { outcome: 'guest_binding_failed' });
-      appendSetCookieHeaders(res, [IDENTITY_UID_COOKIE, IDENTITY_TOKEN_COOKIE, DEVICE_ID_COOKIE].map(name =>
-        `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax${((IS_PRODUCTION && !ALLOW_INSECURE_COOKIES) || res.req?.secure) ? '; Secure' : ''}`));
+      const userId = createServerClientId();
+      const deviceId = createServerClientId();
+      let guestBound = false;
+      try {
+        guestBound = await linkDeviceToUser(deviceId, userId, { ttlSec: GUEST_INITIAL_BINDING_TTL_SEC });
+      } catch {
+        guestBound = false;
+      }
+      if (guestBound) {
+        setIdentityCookieHeaders(res, userId, signClientId(userId, Math.floor(Date.now() / 1000)), deviceId);
+      } else {
+        incrementMetric('account_deletion_total', { outcome: 'guest_binding_failed' });
+        clearIdentityCookieHeaders(res);
+      }
     }
     appendAdminAudit('account_self_delete', { accountId: account.id, pending: result.pending }, ip);
     recordAccountAuthMetric('delete', result.pending ? 'pending' : 'success');
@@ -5499,8 +5539,9 @@ io.on('connection', (socket) => {
       return;
     }
 
+    const isAnonymousSocket = Boolean(socket.data.anonymous || !socket.data.accountId);
     if (deviceId && !Boolean(readOnly)) {
-      void linkDeviceToUser(deviceId, userId);
+      void linkDeviceToUser(deviceId, userId, isAnonymousSocket ? { ttlSec: GUEST_ACTIVE_BINDING_TTL_SEC } : {});
     }
 
     const prevRoomId = socketToRoom.get(socket.id);
@@ -5541,7 +5582,7 @@ io.on('connection', (socket) => {
     const boundClientNetwork = await resolveBoundClientNetwork({ userId, deviceId }, {
       ip: reportedClientIp,
       location: clientLocation,
-    });
+    }, isAnonymousSocket ? { ttlSec: GUEST_CLIENT_NETWORK_BINDING_TTL_SEC } : {});
     const clientIp = boundClientNetwork.ip || getClientIp(socket);
     const location = boundClientNetwork.location || fallbackLocationForIp(clientIp);
     let accountNickname = '';

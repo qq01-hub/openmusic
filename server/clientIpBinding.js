@@ -3,7 +3,8 @@ import { getRedisClient } from './roomStorage.js';
 import { sanitizeDeviceId } from './deviceIdentity.js';
 
 const KEY_PREFIX = 'openmusic:client_network_binding:';
-const TTL_SEC = 180 * 24 * 60 * 60;
+export const CLIENT_NETWORK_BINDING_TTL_SEC = 30 * 24 * 60 * 60;
+export const GUEST_CLIENT_NETWORK_BINDING_TTL_SEC = 3 * 24 * 60 * 60;
 
 function normalizeIp(raw) {
   let ip = String(raw || '').replace(/^::ffff:/, '').trim();
@@ -37,7 +38,7 @@ function parseBinding(raw) {
 
 export function createClientNetworkBindingStore({ getRedisClient: getClient = getRedisClient } = {}) {
   return {
-    async resolve(identity, reported = {}) {
+    async resolve(identity, reported = {}, options = {}) {
       const candidate = {
         ip: normalizeIp(reported.ip),
         location: normalizeLocation(reported.location),
@@ -47,13 +48,17 @@ export function createClientNetworkBindingStore({ getRedisClient: getClient = ge
 
       const client = getClient();
       if (!client) return candidate;
+      const rawTtl = options && typeof options === 'object' ? Number(options.ttlSec) : NaN;
+      const ttlSec = Number.isFinite(rawTtl) && rawTtl > 0
+        ? Math.max(60, Math.min(CLIENT_NETWORK_BINDING_TTL_SEC, Math.floor(rawTtl)))
+        : CLIENT_NETWORK_BINDING_TTL_SEC;
 
       try {
         const existing = parseBinding(await client.get(key));
         if (existing) return existing;
         if (!candidate.ip) return { ip: '', location: '' };
 
-        await client.set(key, JSON.stringify(candidate), { NX: true, EX: TTL_SEC });
+        await client.set(key, JSON.stringify(candidate), { NX: true, EX: ttlSec });
         return parseBinding(await client.get(key)) || candidate;
       } catch (err) {
         console.error('客户端展示网络信息绑定读写失败:', err?.message || err);

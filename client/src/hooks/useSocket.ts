@@ -33,7 +33,7 @@ import {
   resetPlaybackScheduling,
 } from '../lib/playbackSchedule';
 import { rememberClientIdentity } from '../lib/clientId';
-import { requireSessionBootstrap, resetSessionBootstrap } from '../lib/sessionBootstrap';
+import { isSessionBootstrapLoginRequired, requireSessionBootstrap, resetSessionBootstrap } from '../lib/sessionBootstrap';
 import { mergeRoomState } from '../lib/mergeRoomState';
 import { debugLine, debugLog, resetDriftHistogram, setDebugSocketProvider } from '../lib/debugTools';
 import { bindReportTrackDurationSocket } from '../lib/reportTrackDuration';
@@ -618,6 +618,7 @@ async function attemptRoomRejoin(trigger: string) {
       accountSessionNeedsRecovery = false;
       if (!account && !hasAnonymousAccess()) {
         useRoomStore.getState().resetSession();
+        useRoomStore.getState().setReconnecting(false);
         clearReconnectSchedule();
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
         return;
@@ -666,6 +667,14 @@ async function attemptRoomRejoin(trigger: string) {
 
     scheduleRoomRejoin('join_failed');
   } catch (err) {
+    const errorCode = err && typeof err === 'object' ? (err as { code?: string }).code : '';
+    if (errorCode === 'ACCOUNT_AUTH_REQUIRED' || isSessionBootstrapLoginRequired()) {
+      useRoomStore.getState().resetSession();
+      useRoomStore.getState().setReconnecting(false);
+      clearReconnectSchedule();
+      window.dispatchEvent(new Event('openmusic:account-auth-required'));
+      return;
+    }
     debugLog('room_rejoin_error', debugLine({
       trigger,
       message: err instanceof Error ? err.message : String(err),

@@ -102,3 +102,12 @@ test('Redis 收藏不可读时不得返回成功空列表或用空列表覆盖�
   raw = null;
   assert.equal((await context.readFavorites('guest_user_123')).length, 0);
 });
+
+test('清空最后一首收藏或分类时 CAS 脚本执行 DEL 而非持久化空数组', () => {
+  const source = readFileSync(new URL('./roomStorage.js', import.meta.url), 'utf8');
+  const casBlock = source.slice(source.indexOf('const FAVORITES_CAS_SCRIPT ='), source.indexOf('function favoriteKey('));
+  assert.equal(casBlock.includes("if ARGV[3] == '[]' then"), true);
+  assert.equal(casBlock.includes("if current then redis.call('DEL', KEYS[1]) end"), true);
+  assert.equal(casBlock.includes("if ARGV[offset + 3] == '[]' then"), true);
+  assert.equal(casBlock.includes("if ARGV[offset + 1] ~= '0' then redis.call('DEL', KEYS[i]) end"), true);
+});

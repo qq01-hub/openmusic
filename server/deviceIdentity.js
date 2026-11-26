@@ -3,7 +3,9 @@ import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 
 const DEVICE_USER_PREFIX = 'openmusic:device:';
 const USER_DEVICES_PREFIX = 'openmusic:user_devices:';
+const NETWORK_BINDING_PREFIX = 'openmusic:client_network_binding:';
 export const DEVICE_BINDING_TTL_SEC = 180 * 24 * 60 * 60;
+export const GUEST_ACTIVE_BINDING_TTL_SEC = 30 * 24 * 60 * 60;
 export const GUEST_INITIAL_BINDING_TTL_SEC = 3 * 24 * 60 * 60;
 const MAX_DEVICES_PER_USER = 20;
 const MAX_MEMORY_DEVICE_BINDINGS = 10_000;
@@ -96,7 +98,10 @@ async function persistDeviceBinding(deviceId, userId, ttlSec = DEVICE_BINDING_TT
         end
       end
       redis.call('SADD', KEYS[2], ARGV[1])
-      redis.call('EXPIRE', KEYS[2], ARGV[3])
+      local currentSetTtl = redis.call('TTL', KEYS[2])
+      local targetTtl = tonumber(ARGV[3])
+      if currentSetTtl > targetTtl then targetTtl = currentSetTtl end
+      redis.call('EXPIRE', KEYS[2], targetTtl)
       return 1
     `, { keys: [`${DEVICE_USER_PREFIX}${did}`, `${USER_DEVICES_PREFIX}${uid}`], arguments: [did, uid, String(normalizedTtlSec), USER_DEVICES_PREFIX, DEVICE_USER_PREFIX] });
     return true;
@@ -120,7 +125,7 @@ export async function linkDeviceToUser(deviceId, userId, options = {}) {
   return true;
 }
 
-export async function getUserIdForDevice(deviceId, { authoritative = false } = {}) {
+export async function getUserIdForDevice(deviceId, { authoritative = false, renewTtlSec = 0 } = {}) {
   const did = sanitizeDeviceId(deviceId);
   if (!did) return null;
 
@@ -129,16 +134,29 @@ export async function getUserIdForDevice(deviceId, { authoritative = false } = {
 
   const client = getRedisClient();
   if (!isRedisEnabled() || !client) throw new Error('设备身份存储暂不可用');
+  const normalizedRenew = Number.isFinite(Number(renewTtlSec)) && Number(renewTtlSec) > 0
+    ? Math.max(60, Math.min(DEVICE_BINDING_TTL_SEC, Math.floor(Number(renewTtlSec))))
+    : 0;
 
   try {
     const uid = await evalRedisScript(client, `
       local owner = redis.call('GET', KEYS[1])
       if owner then
-        redis.call('EXPIRE', KEYS[1], ARGV[1])
-        redis.call('EXPIRE', ARGV[2] .. owner, ARGV[1])
+        local renew = tonumber(ARGV[1])
+        local fallbackTtl = tonumber(ARGV[3])
+        local setKey = ARGV[2] .. owner
+        if renew > 0 then
+          local devTtl = redis.call('TTL', KEYS[1])
+          if devTtl < 0 or devTtl < renew then redis.call('EXPIRE', KEYS[1], renew) end
+          local setTtl = redis.call('TTL', setKey)
+          if setTtl < 0 or setTtl < renew then redis.call('EXPIRE', setKey, renew) end
+        else
+          if redis.call('TTL', KEYS[1]) == -1 then redis.call('EXPIRE', KEYS[1], fallbackTtl) end
+          if redis.call('TTL', setKey) == -1 then redis.call('EXPIRE', setKey, fallbackTtl) end
+        end
       end
       return owner
-    `, { keys: [`${DEVICE_USER_PREFIX}${did}`], arguments: [String(DEVICE_BINDING_TTL_SEC), USER_DEVICES_PREFIX] });
+    `, { keys: [`${DEVICE_USER_PREFIX}${did}`], arguments: [String(normalizedRenew), USER_DEVICES_PREFIX, String(GUEST_ACTIVE_BINDING_TTL_SEC)] });
     const normalized = sanitizeDeviceId(uid);
     if (normalized) {
       rememberDeviceBinding(did, normalized);
@@ -149,6 +167,75 @@ export async function getUserIdForDevice(deviceId, { authoritative = false } = {
     throw new Error('设备身份存储暂不可用');
   }
   return null;
+}
+
+export async function unlinkDevice(deviceId) {
+  const did = sanitizeDeviceId(deviceId);
+  if (!did) return false;
+
+  const previousUser = deviceToUser.get(did);
+  if (previousUser) {
+    deviceToUser.delete(did);
+    const prevSet = userToDevices.get(previousUser);
+    if (prevSet) {
+      prevSet.delete(did);
+      if (prevSet.size === 0) userToDevices.delete(previousUser);
+    }
+  }
+
+  const client = getRedisClient();
+  if (!isRedisEnabled() || !client) return false;
+  try {
+    await evalRedisScript(client, `
+      local owner = redis.call('GET', KEYS[1])
+      redis.call('DEL', KEYS[1])
+      if owner and owner ~= '' then
+        local setKey = ARGV[2] .. owner
+        redis.call('SREM', setKey, ARGV[1])
+        if redis.call('SCARD', setKey) == 0 then redis.call('DEL', setKey) end
+        redis.call('DEL', ARGV[3] .. owner .. ':' .. ARGV[1])
+      end
+      return 1
+    `, { keys: [`${DEVICE_USER_PREFIX}${did}`], arguments: [did, USER_DEVICES_PREFIX, NETWORK_BINDING_PREFIX] });
+    return true;
+  } catch (err) {
+    console.error('Redis: 解绑设备身份失败:', err.message);
+    return false;
+  }
+}
+
+export async function unlinkAllDevicesForUser(userId) {
+  const uid = sanitizeDeviceId(userId);
+  if (!uid) return 0;
+
+  const localSet = userToDevices.get(uid);
+  if (localSet) {
+    for (const did of localSet) {
+      if (deviceToUser.get(did) === uid) deviceToUser.delete(did);
+    }
+    userToDevices.delete(uid);
+  }
+
+  const client = getRedisClient();
+  if (!isRedisEnabled() || !client) return 0;
+  try {
+    return Number(await evalRedisScript(client, `
+      local members = redis.call('SMEMBERS', KEYS[1])
+      local removed = 0
+      for _, did in ipairs(members) do
+        local devKey = ARGV[2] .. did
+        if redis.call('GET', devKey) == ARGV[1] then
+          removed = removed + redis.call('DEL', devKey)
+        end
+        redis.call('DEL', ARGV[3] .. ARGV[1] .. ':' .. did)
+      end
+      redis.call('DEL', KEYS[1])
+      return removed
+    `, { keys: [`${USER_DEVICES_PREFIX}${uid}`], arguments: [uid, DEVICE_USER_PREFIX, NETWORK_BINDING_PREFIX] }));
+  } catch (err) {
+    console.error('Redis: 清理用户全部设备绑定失败:', err.message);
+    return 0;
+  }
 }
 
 export function getDeviceIdsForUser(userId) {

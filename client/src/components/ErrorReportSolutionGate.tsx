@@ -55,8 +55,8 @@ export default function ErrorReportSolutionGate() {
     let cancelled = false;
     (async () => {
       try {
-        await ensureSessionBootstrap();
-        if (cancelled) return;
+        const clientId = await ensureSessionBootstrap();
+        if (cancelled || !clientId) return;
         const res = await fetchWithTimeout('/api/error-reports/pending-solutions', {}, 8000);
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { solutions?: ErrorReportSolutionNoticePayload[] };
