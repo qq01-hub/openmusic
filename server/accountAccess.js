@@ -17,6 +17,7 @@ const PUBLIC_POST = new Set([
 ]);
 
 export function isAccountPublicPath(path, method) {
+  if (method === 'GET' && /^\/api\/rooms\/[a-z0-9_-]{4,64}\/cover$/iu.test(path)) return true;
   return (method === 'GET' && PUBLIC_GET.has(path)) || (method === 'POST' && PUBLIC_POST.has(path));
 }
 

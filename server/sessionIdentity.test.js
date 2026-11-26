@@ -4,6 +4,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
+import { DEVICE_BINDING_TTL_SEC, GUEST_INITIAL_BINDING_TTL_SEC } from './deviceIdentity.js';
 import { shouldIssueGuestHandoff, shouldMigrateFavorites } from './sessionIdentity.js';
 
 test('同一稳定房间身份重新登录时仍需签发游客收藏迁移凭证', () => {
@@ -33,6 +34,7 @@ function guestBootstrapFixture() {
   const deviceId = 'guest_device_123';
   const originalUserId = 'guest_original_123';
   const records = new Map([[`openmusic:device:${deviceId}`, originalUserId]]);
+  const recordedTtls = [];
   let unavailable = false;
   let writeFailed = false;
   let issued = 0;
@@ -52,6 +54,7 @@ function guestBootstrapFixture() {
       if (keys.length === 1) return redis.get(keys[0]);
       assert.equal(keys.length, 2, '设备换绑脚本应包含正向与反向键');
       await redis.set(keys[0], args[1]);
+      recordedTtls.push({ key: keys[0], ttlSec: Number(args[2]) });
       return 1;
     },
     sAdd: async () => {}, sRem: async () => {}, expire: async () => {},
@@ -81,7 +84,7 @@ function guestBootstrapFixture() {
   const start = source.indexOf("app.post('/api/session/bootstrap'");
   vm.runInContext(source.slice(start, source.indexOf('// ---------- 普通用户账户', start)), context);
   return {
-    context, records, deviceId, originalUserId,
+    context, records, recordedTtls, deviceId, originalUserId,
     setUnavailable: (value) => { unavailable = value; },
     setWriteFailed: (value) => { writeFailed = value; },
     issued: () => issued, created: () => created,
@@ -127,4 +130,18 @@ test('无可信设备 Cookie 时不能使用 body 中的设备标识找回他人
   assert.equal(result.statusCode, 200);
   assert.notEqual(result.body.clientId, fixture.originalUserId);
   assert.equal(fixture.records.get(`openmusic:device:${fixture.deviceId}`), fixture.originalUserId);
+  assert.equal(fixture.recordedTtls.at(-1)?.ttlSec, GUEST_INITIAL_BINDING_TTL_SEC);
+});
+
+test('首次陌生游客使用短期设备绑定 TTL，回访恢复后自动续期为完整 180 天', async () => {
+  const fixture = guestBootstrapFixture();
+  const returning = await fixture.request({ headers: { cookie: 'present' } });
+  assert.equal(returning.statusCode, 200);
+  assert.equal(fixture.recordedTtls.at(-1)?.ttlSec, DEVICE_BINDING_TTL_SEC);
+
+  fixture.records.clear();
+  const fresh = await fixture.request({ headers: {} });
+  assert.equal(fresh.statusCode, 200);
+  assert.equal(fixture.recordedTtls.at(-1)?.ttlSec, GUEST_INITIAL_BINDING_TTL_SEC);
+  assert.ok(GUEST_INITIAL_BINDING_TTL_SEC < DEVICE_BINDING_TTL_SEC);
 });

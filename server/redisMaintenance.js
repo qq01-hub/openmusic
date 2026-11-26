@@ -5,6 +5,7 @@ import { pruneHotRankMetadata } from './songHotRank.js';
 const INTERVAL_MS = 60_000;
 const BATCH_SIZE = 50;
 const ORPHAN_REPORT_GRACE_MS = 24 * 60 * 60 * 1000;
+const FULL_KEYSPACE_SCAN_COOLDOWN_MS = 30 * 60 * 1000;
 const REPORT_IDS = 'openmusic:error_reports:ids';
 const REPORT_SUMMARIES = 'openmusic:error_reports:summaries';
 const REPORT_PREFIX = 'openmusic:error_reports:';
@@ -68,14 +69,22 @@ return removed
 `;
 
 function scanState() {
-  return { cursor: '0', pending: [] };
+  return { cursor: '0', pending: [], nextCycleAt: 0 };
 }
 
-async function readBatch(state, read, limit = BATCH_SIZE) {
+async function readBatch(state, read, limit = BATCH_SIZE, options = {}) {
+  const cooldownMs = Math.max(0, Number(options.cooldownMs) || 0);
+  const nowMs = typeof options.now === 'function' ? options.now() : Date.now();
   if (!state.pending.length) {
+    if (cooldownMs > 0 && state.cursor === '0' && state.nextCycleAt > nowMs) {
+      return [];
+    }
     const page = await read(state.cursor);
     state.cursor = String(page.cursor);
     state.pending = page.items;
+    if (cooldownMs > 0 && state.cursor === '0') {
+      state.nextCycleAt = nowMs + cooldownMs;
+    }
   }
   // COUNT 仅是扫描提示，超量页留到后续轮次处理，单次删除仍有硬上限
   return state.pending.splice(0, limit);
@@ -108,7 +117,7 @@ export function createRedisMaintenance({ getClient, isRoomKnown = () => false, n
     const reportKeys = await readBatch(reportScan, async cursor => {
       const page = await client.scan(cursor, { MATCH: `${REPORT_PREFIX}*`, TYPE: 'string', COUNT: BATCH_SIZE });
       return { cursor: page.cursor, items: page.keys };
-    });
+    }, BATCH_SIZE, { cooldownMs: FULL_KEYSPACE_SCAN_COOLDOWN_MS, now });
     const candidates = reportKeys.filter(key => /^[a-z0-9]{14}$/.test(key.slice(REPORT_PREFIX.length)));
     stats.reports = Number(await evalRedisScript(client, PRUNE_REPORTS, {
       keys: [REPORT_IDS, REPORT_SUMMARIES, ...candidates],
@@ -129,7 +138,7 @@ export function createRedisMaintenance({ getClient, isRoomKnown = () => false, n
         const [key] = await readBatch(accountScan, async cursor => {
           const page = await client.scan(cursor, { MATCH: `${ACCOUNT_ROOMS_PREFIX}*`, TYPE: 'set', COUNT: BATCH_SIZE });
           return { cursor: page.cursor, items: page.keys };
-        }, 1);
+        }, 1, { cooldownMs: FULL_KEYSPACE_SCAN_COOLDOWN_MS, now });
         if (!key) break;
         accountMembers = { key, ...scanState() };
       }

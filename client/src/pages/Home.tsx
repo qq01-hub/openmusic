@@ -55,7 +55,9 @@ import MusicLoading from '../components/MusicLoading';
 /** 大厅优先使用 CDN 直链，未解析的封面通过公开图片接口加载 */
 function lobbyDirectCoverUrl(pic?: string): string | null {
   const raw = String(pic || '').trim();
-  if (!raw || (!/^https?:\/\//i.test(raw) && !raw.startsWith('/api/meting?'))) return null;
+  if (!raw) return null;
+  if (/^\/api\/rooms\/[A-Za-z0-9_-]{4,64}\/cover(?:\?v=[a-f0-9]{8,32})?$/u.test(raw)) return raw;
+  if (!/^https?:\/\//i.test(raw) && !raw.startsWith('/api/meting?')) return null;
   try {
     const parsed = new URL(raw, window.location.origin);
     if (parsed.searchParams.get('type') === 'pic') {

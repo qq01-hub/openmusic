@@ -8,7 +8,7 @@ import { createProxyTrust, observeProxyHeaders } from './trustedProxy.js';
 import { createTurnstileVerifier } from './turnstile.js';
 import { publicHumanChallengeState } from './riskHumanChallenge.js';
 import './loadEnv.js';
-import { resizeCoverForThumb } from './coverUrl.js';
+import { resizeCoverForThumb, resizeNeteaseCoverForProxy, stripNeteaseParam } from './coverUrl.js';
 import {
   isAllowedMediaHostname,
   isBlockedMediaHostname,
@@ -87,6 +87,7 @@ import { fileURLToPath } from 'url';
 import { createHash, createHmac, randomBytes, timingSafeEqual, createCipheriv, createDecipheriv } from 'crypto';
 import { isIP } from 'net';
 import {
+  GUEST_INITIAL_BINDING_TTL_SEC,
   collectDeviceIdsForUser,
   getUserIdForDevice,
   isAccessBanned,
@@ -98,6 +99,7 @@ import { shouldIssueGuestHandoff, shouldMigrateFavorites, shouldRefreshRoomIdent
 import {
   createRoom,
   getRoomPublic,
+  getRoomCustomCoverAsset,
   getRoom,
   listRooms,
   findRandomMatchRoom,
@@ -1096,11 +1098,13 @@ async function resolveMetingMediaUrl(query, depth = 0) {
 
 const metingCoverCache = new Map();
 const metingCoverInflight = new Map();
-const METING_COVER_CACHE_TTL_MS = 10 * 60 * 1000;
-const METING_COVER_CACHE_MAX = 512;
+const METING_COVER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const METING_QISHUI_COVER_CACHE_TTL_MS = 10 * 60 * 1000;
+const METING_COVER_CACHE_MAX = 2048;
 
 async function resolveCachedMetingCover(query) {
-  const key = `${String(query.server || 'netease')}:${String(query.id || '')}`;
+  const server = String(query.server || 'netease').trim().toLowerCase();
+  const key = `${server}:${String(query.id || '')}`;
   const now = Date.now();
   const cached = metingCoverCache.get(key);
   if (cached && cached.expiresAt > now) return cached.url;
@@ -1109,11 +1113,12 @@ async function resolveCachedMetingCover(query) {
   const pending = metingCoverInflight.get(key);
   if (pending) return pending;
 
+  const ttlMs = server === 'qishui' ? METING_QISHUI_COVER_CACHE_TTL_MS : METING_COVER_CACHE_TTL_MS;
   const request = resolveMetingMediaUrl(query)
     .then((url) => {
       const value = String(url || '').trim();
       if (!/^https?:\/\//i.test(value)) throw new Error('Meting 未返回有效封面地址');
-      metingCoverCache.set(key, { url: value, expiresAt: Date.now() + METING_COVER_CACHE_TTL_MS });
+      metingCoverCache.set(key, { url: value, expiresAt: Date.now() + ttlMs });
       while (metingCoverCache.size > METING_COVER_CACHE_MAX) {
         const oldest = metingCoverCache.keys().next().value;
         if (!oldest) break;
@@ -1302,11 +1307,24 @@ async function proxyMetingResponse(metingQuery, res, thumbPx = 0, metingType = '
   if (metingType === 'pic') {
     try {
       const resolved = await resolveCachedMetingCover(metingQuery);
+      const isNeteaseCover = /music\.126\.net|126\.net/i.test(resolved);
+      const coverTargetUrl = thumbPx > 0
+        ? (isNeteaseCover ? resizeNeteaseCoverForProxy(resolved, thumbPx) : resizeCoverForThumb(resolved, thumbPx))
+        : resolved;
+      const fallbackUrl = isNeteaseCover ? stripNeteaseParam(resolved) : '';
+      const server = String(metingQuery?.server || '').trim().toLowerCase();
       return serveUpstreamMedia(
-        thumbPx > 0 ? resizeCoverForThumb(resolved, thumbPx) : resolved,
+        coverTargetUrl,
         res,
         fetchWithTimeout,
-        { thumbPx: 0, requireAllowlist: true, imageOnly: true },
+        {
+          thumbPx: 0,
+          requireAllowlist: true,
+          imageOnly: true,
+          fallbackUrl,
+          publicCache: Boolean(req?.publicMetingCover),
+          publicCacheMaxAgeSec: server === 'qishui' ? 3600 : 86400,
+        },
       );
     } catch (err) {
       console.error('Meting pic resolve error:', err?.message || err);
@@ -2039,13 +2057,29 @@ app.get('/api/media-proxy', async (req, res) => {
       return res.status(403).json({ error: '请通过歌曲播放接口获取音频地址', code: 'MEDIA_PROXY_METING_URL_DENIED' });
     }
     const enforceImageOnly = imageOnly || metingQuery?.type === 'pic';
+    let mediaFallbackUrl = '';
     if (metingQuery?.type === 'pic') {
-      fetchUrl = await runWithMetingRequestContext(
+      const resolvedUrl = await runWithMetingRequestContext(
         metingCtx,
-        () => resolveMediaProxyFetchUrl(raw, thumbPx),
+        () => resolveMediaProxyFetchUrl(raw, 0),
       );
+      if (thumbPx > 0) {
+        if (/music\.126\.net|126\.net/i.test(resolvedUrl)) {
+          fetchUrl = resizeNeteaseCoverForProxy(resolvedUrl, thumbPx);
+          mediaFallbackUrl = stripNeteaseParam(resolvedUrl);
+        } else {
+          fetchUrl = resizeCoverForThumb(resolvedUrl, thumbPx);
+        }
+      } else {
+        fetchUrl = resolvedUrl;
+      }
     } else if (thumbPx > 0) {
-      fetchUrl = resizeCoverForThumb(raw, thumbPx);
+      if (/music\.126\.net|126\.net/i.test(raw)) {
+        fetchUrl = resizeNeteaseCoverForProxy(raw, thumbPx);
+        mediaFallbackUrl = stripNeteaseParam(raw);
+      } else {
+        fetchUrl = resizeCoverForThumb(raw, thumbPx);
+      }
     } else {
       fetchUrl = raw;
     }
@@ -2072,6 +2106,7 @@ app.get('/api/media-proxy', async (req, res) => {
       thumbPx,
       imageOnly: enforceImageOnly,
       requireAllowlist: true,
+      fallbackUrl: mediaFallbackUrl,
     });
   } catch (err) {
     console.error('Media proxy error:', err.message);
@@ -2759,7 +2794,7 @@ app.post('/api/session/bootstrap', async (req, res) => {
     }
     const userId = createServerClientId();
     const deviceId = cookieDeviceId || createServerClientId();
-    if (!await linkDeviceToUser(deviceId, userId)) throw new Error('设备绑定未持久化');
+    if (!await linkDeviceToUser(deviceId, userId, { ttlSec: GUEST_INITIAL_BINDING_TTL_SEC })) throw new Error('设备绑定未持久化');
     const signIat = now;
     return sendBootstrapResponse(res, userId, signIat, signClientId(userId, signIat), deviceId);
   } catch (error) {
@@ -4234,6 +4269,57 @@ app.post('/api/account/favorites/sync', async (req, res) => {
     maxFavorites: result.maxFavorites,
     categories: categoryResult.categories,
   });
+});
+
+app.get('/api/rooms/:id/cover', async (req, res) => {
+  const rate = await distributedSocketRateLimiter.consume({
+    scope: 'http:public-cover',
+    principal: `ip:${getRequestIp(req)}`,
+    windowMs: 60_000,
+    max: 240,
+  });
+  if (!rate.allowed) {
+    res.setHeader('Retry-After', String(Math.max(1, Math.ceil(rate.retryAfterMs / 1000))));
+    return res.status(rate.unavailable ? 503 : 429).json({
+      error: '封面请求暂时繁忙，请稍后重试',
+      code: rate.unavailable ? 'COVER_UNAVAILABLE' : 'COVER_RATE_LIMITED',
+    });
+  }
+  const roomId = String(req.params.id || '').trim().toUpperCase();
+  if (!/^[A-Z0-9_-]{4,64}$/u.test(roomId)) {
+    return res.status(404).end();
+  }
+  const asset = getRoomCustomCoverAsset(roomId);
+  if (!asset) {
+    return res.status(404).end();
+  }
+  const etag = `"${asset.hash}"`;
+  const existingVary = res.getHeader('Vary');
+  if (existingVary) {
+    const filteredVary = (Array.isArray(existingVary) ? existingVary.join(',') : String(existingVary))
+      .split(',')
+      .map((item) => item.trim())
+      .filter((item) => item && item.toLowerCase() !== 'cookie');
+    if (filteredVary.length) res.setHeader('Vary', filteredVary.join(', '));
+    else res.removeHeader('Vary');
+  }
+  const versionMatches = String(req.query.v || '').trim() === asset.hash;
+  const maxAge = versionMatches ? 86400 : 300;
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Security-Policy', 'sandbox');
+  res.setHeader('ETag', etag);
+  res.setHeader('Cache-Control', versionMatches
+    ? `public, max-age=${maxAge}, immutable, no-transform`
+    : `public, max-age=${maxAge}, must-revalidate, no-transform`);
+  res.setHeader('CDN-Cache-Control', `public, max-age=${maxAge}`);
+  res.removeHeader('Surrogate-Control');
+  res.removeHeader('Pragma');
+  const ifNoneMatch = String(req.headers['if-none-match'] || '').trim();
+  if (ifNoneMatch === etag || ifNoneMatch === `W/${etag}`) {
+    return res.status(304).end();
+  }
+  res.setHeader('Content-Type', asset.contentType);
+  return res.status(200).send(asset.buffer);
 });
 
 app.get('/api/rooms/:id', (req, res) => {

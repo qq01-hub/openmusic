@@ -15,4 +15,7 @@ test('普通用户账户认证接口绕过匿名会话签名门槛', () => {
   assert.equal(isPublicApiPath({ path: '/api/auth/session', method: 'GET' }), true);
   assert.equal(isPublicApiPath({ path: '/api/auth/providers', method: 'GET' }), true);
   assert.equal(isPublicApiPath({ path: '/api/auth/email/login', method: 'GET' }), false);
+  assert.equal(isPublicApiPath({ path: '/api/rooms/VCKA7K/cover', method: 'GET' }), true);
+  assert.equal(isPublicApiPath({ path: '/api/rooms/VCKA7K/cover', method: 'POST' }), false);
+  assert.equal(isPublicApiPath({ path: '/api/rooms/a/cover', method: 'GET' }), false);
 });

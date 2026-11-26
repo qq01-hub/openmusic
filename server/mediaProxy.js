@@ -52,8 +52,8 @@ const MAX_BUFFERED_MEDIA_BYTES = 8 * 1024 * 1024;
 const MAX_BUFFERED_IMAGE_BYTES = 32 * 1024 * 1024;
 const MAX_CACHED_IMAGE_ENTRY_BYTES = 2 * 1024 * 1024;
 const MAX_IMAGE_CACHE_TOTAL_BYTES = 24 * 1024 * 1024;
-const MAX_IMAGE_CACHE_ENTRIES = 192;
-const MAX_IMAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const MAX_IMAGE_CACHE_ENTRIES = 512;
+const MAX_IMAGE_CACHE_TTL_MS = 60 * 60 * 1000;
 const proxiedImageCache = new Map();
 const proxiedImageInflight = new Map();
 let proxiedImageTotalBytes = 0;
@@ -107,16 +107,40 @@ function writeProxiedImageCache(key, entry) {
   proxiedImageTotalBytes += entry.buffer.length;
 }
 
-function sendCachedProxiedImage(res, cached) {
+function stripVaryCookie(res) {
+  const existing = res.getHeader?.('Vary');
+  if (!existing) return;
+  const values = (Array.isArray(existing) ? existing.join(',') : String(existing))
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item && item.toLowerCase() !== 'cookie');
+  if (values.length) res.set('Vary', values.join(', '));
+  else res.removeHeader?.('Vary');
+}
+
+function applyImageCacheHeaders(res, maxAge, options = {}) {
+  if (options.publicCache === true) {
+    const publicMaxAge = Math.max(60, Math.min(86400, Number(options.publicCacheMaxAgeSec) || maxAge || 3600));
+    res.set('Cache-Control', `public, max-age=${publicMaxAge}, stale-while-revalidate=604800, no-transform`);
+    res.set('CDN-Cache-Control', `public, max-age=${publicMaxAge}`);
+    res.removeHeader?.('Surrogate-Control');
+    res.removeHeader?.('Pragma');
+    stripVaryCookie(res);
+    return;
+  }
+  res.set('CDN-Cache-Control', 'no-store');
+  res.set('Surrogate-Control', 'no-store');
+  res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
+  res.removeHeader?.('Pragma');
+}
+
+function sendCachedProxiedImage(res, cached, options = {}) {
   if (res.writableEnded || res.destroyed) return false;
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Content-Security-Policy', 'sandbox');
-  res.set('CDN-Cache-Control', 'no-store');
-  res.set('Surrogate-Control', 'no-store');
   res.set('X-OpenMusic-Proxy', '1');
   if (cached.contentType) res.set('Content-Type', cached.contentType);
-  res.set('Cache-Control', `private, max-age=${cached.maxAge}, stale-while-revalidate=86400, no-transform`);
-  res.removeHeader?.('Pragma');
+  applyImageCacheHeaders(res, cached.maxAge, options);
   res.status(200).send(cached.buffer);
   return true;
 }
@@ -1178,12 +1202,12 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
   const imageCacheKey = canCacheImage ? buildProxiedImageCacheKey(fetchUrl, options, headers.Referer || '') : '';
   if (canCacheImage) {
     const cachedImage = readProxiedImageCache(imageCacheKey);
-    if (cachedImage) return sendCachedProxiedImage(res, cachedImage);
+    if (cachedImage) return sendCachedProxiedImage(res, cachedImage, options);
     const pendingImage = proxiedImageInflight.get(imageCacheKey);
     if (pendingImage) {
       const resolved = await pendingImage;
       if (options.signal.aborted) return false;
-      if (resolved) return sendCachedProxiedImage(res, resolved);
+      if (resolved) return sendCachedProxiedImage(res, resolved, options);
     }
   }
 
@@ -1241,26 +1265,63 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
     }
   }
 
+  const fallbackUrl = method === 'GET' && !range && options.fallbackUrl
+    ? preferHttpsMediaUrl(options.fallbackUrl)
+    : '';
+  const canFallbackUrl = Boolean(fallbackUrl && fallbackUrl !== fetchUrl);
+  const fetchTargetUrl = (targetUrl) => fetchMediaWithSafeRedirects(
+    fetchWithTimeout,
+    targetUrl,
+    {
+      headers: targetUrl === fetchUrl ? headers : { ...headers, Referer: options.referer || refererForMediaUrl(targetUrl) },
+      extraAllowedHosts: options.extraAllowedHosts || [],
+      requireAllowlist: options.requireAllowlist !== false,
+      trustedInitialUrl: options.trustedInitialUrl,
+      signal: upstreamSignal,
+      method,
+      nodeStream: true,
+    },
+    options.timeoutMs || 20000,
+  );
+
   let response = prefetchedFallbackResponse;
-  if (!response) try {
-    response = await fetchMediaWithSafeRedirects(
-      fetchWithTimeout,
-      fetchUrl,
-      {
-        headers,
-        extraAllowedHosts: options.extraAllowedHosts || [],
-        requireAllowlist: options.requireAllowlist !== false,
-        trustedInitialUrl: options.trustedInitialUrl,
-        signal: upstreamSignal,
-        method,
-        nodeStream: true,
-      },
-      options.timeoutMs || 20000,
-    );
-  } catch (err) {
-    if (options.signal.aborted || res.destroyed || res.writableEnded) return false;
-    respondMediaProxyFailure(res, err);
-    return false;
+  let usedFallbackUrl = false;
+  if (!response) {
+    try {
+      response = await fetchTargetUrl(fetchUrl);
+    } catch (err) {
+      if (options.signal.aborted || res.destroyed || res.writableEnded) return false;
+      if (canFallbackUrl && !upstreamSignal.aborted) {
+        usedFallbackUrl = true;
+        try {
+          response = await fetchTargetUrl(fallbackUrl);
+        } catch (fallbackErr) {
+          if (options.signal.aborted || res.destroyed || res.writableEnded) return false;
+          respondMediaProxyFailure(res, fallbackErr);
+          return false;
+        }
+      } else {
+        respondMediaProxyFailure(res, err);
+        return false;
+      }
+    }
+  }
+
+  if (!usedFallbackUrl && canFallbackUrl && !upstreamSignal.aborted) {
+    const initialType = normalizeAudioContentType(response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const primaryInvalid = (!response.ok && response.status !== 206)
+      || (options.imageOnly && !initialType.startsWith('image/'));
+    if (primaryInvalid) {
+      await cancelMediaBody(response);
+      usedFallbackUrl = true;
+      try {
+        response = await fetchTargetUrl(fallbackUrl);
+      } catch (fallbackErr) {
+        if (options.signal.aborted || res.destroyed || res.writableEnded) return false;
+        respondMediaProxyFailure(res, fallbackErr);
+        return false;
+      }
+    }
   }
 
   // 部分 CDN 拒绝 Range 但允许完整 GET，保留一次兼容重试
@@ -1382,9 +1443,7 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
         }
         if (!clientStillConnected()) return false;
         if (contentType) res.set('Content-Type', contentType);
-        // 仅复用浏览器内的封面，避免翻页/切歌重复拉图占用 2GB 服务器带宽
-        res.set('Cache-Control', `private, max-age=${maxAge}, stale-while-revalidate=86400, no-transform`);
-        res.removeHeader('Pragma');
+        applyImageCacheHeaders(res, maxAge, options);
       } else {
         if (!clientStillConnected()) return false;
         if (contentType) res.set('Content-Type', contentType);

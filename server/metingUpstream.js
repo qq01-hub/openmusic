@@ -14,25 +14,34 @@ import { isMetingBusinessFailure, normalizeMetingFailure } from './metingError.j
 const FAIL_COOLDOWN_MS = 60_000;
 const UPSTREAM_ATTEMPTS = 2;
 const MAX_RECENT_ERRORS = 20;
-const METING_RESPONSE_CACHE_MAX = 2048;
+const METING_RESPONSE_CACHE_MAX = 4096;
 const METING_RESPONSE_CACHE = createMetingResponseCache({
   maxEntries: METING_RESPONSE_CACHE_MAX,
   shouldCache: (snapshot) => snapshot.status >= 200 && snapshot.status < 400 && snapshot.cacheable !== false,
 });
 
 const METING_CACHE_TTLS = {
-  search: 30_000,
+  search: 3 * 60_000,
   url: 10 * 60_000,
-  lrc: 10 * 60_000,
-  pic: 10 * 60_000,
-  song: 60_000,
-  playlist: 60_000,
-  search_playlist: 30_000,
-  dj_hot: 10 * 60_000,
-  dj_detail: 10 * 60_000,
-  dj: 2 * 60_000,
-  search_dj: 60_000,
+  lrc: 60 * 60_000,
+  pic: 60 * 60_000,
+  song: 10 * 60_000,
+  playlist: 3 * 60_000,
+  search_playlist: 3 * 60_000,
+  dj_hot: 30 * 60_000,
+  dj_detail: 30 * 60_000,
+  dj: 5 * 60_000,
+  search_dj: 3 * 60_000,
 };
+const QISHUI_PIC_CACHE_TTL_MS = 10 * 60_000;
+
+function resolveMetingCacheTtlMs(query, type) {
+  if (type === 'fm') return 0;
+  if (type === 'pic' && String(query?.server || '').trim().toLowerCase() === 'qishui') {
+    return QISHUI_PIC_CACHE_TTL_MS;
+  }
+  return METING_CACHE_TTLS[type] || 15_000;
+}
 
 /** HTTP/Socket 请求上下文：失败日志归因到用户与房间 */
 const metingRequestContext = new AsyncLocalStorage();
@@ -322,6 +331,7 @@ export const __test = {
   roomNeedsScopedProxy,
   buildUpstreamRequest,
   buildMetingCacheKey,
+  resolveMetingCacheTtlMs,
   extractUrlCandidateFromPayload,
   isNeteaseFakeOuterUrl,
   isCacheableMetingSnapshot,
@@ -708,7 +718,7 @@ export async function fetchMetingApi(query, options = {}, timeoutMs = 10000) {
   syncUpstreams();
   const type = String(query?.type || '').trim().toLowerCase();
   // 漫游每批推荐需要重新请求，仅合并并发请求，避免缓存同一批导致已播去重后持续为空
-  const ttlMs = type === 'fm' ? 0 : (METING_CACHE_TTLS[type] || 15_000);
+  const ttlMs = resolveMetingCacheTtlMs(query, type);
   const rawOptions = options && typeof options === 'object' ? options : {};
   const { bypassCache = false, ...fetchOptions } = rawOptions;
   let snapshot;

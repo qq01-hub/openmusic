@@ -241,3 +241,9 @@ test('缓存支持按条件淘汰单曲 URL，不影响同曲歌词及其他歌�
   assert.equal(cache.size(), 2);
   cache.clear();
 });
+
+test('Meting 封面解析缓存按平台区分 TTL，汽水短缓存而标准平台长缓存', () => {
+  assert.equal(metingUpstreamTest.resolveMetingCacheTtlMs({ server: 'qishui' }, 'pic'), 10 * 60_000);
+  assert.equal(metingUpstreamTest.resolveMetingCacheTtlMs({ server: 'netease' }, 'pic'), 60 * 60_000);
+  assert.equal(metingUpstreamTest.resolveMetingCacheTtlMs({ server: 'netease' }, 'fm'), 0);
+});

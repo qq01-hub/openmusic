@@ -3,7 +3,8 @@ import { getRedisClient, isRedisEnabled } from './roomStorage.js';
 
 const DEVICE_USER_PREFIX = 'openmusic:device:';
 const USER_DEVICES_PREFIX = 'openmusic:user_devices:';
-const DEVICE_BINDING_TTL_SEC = 180 * 24 * 60 * 60;
+export const DEVICE_BINDING_TTL_SEC = 180 * 24 * 60 * 60;
+export const GUEST_INITIAL_BINDING_TTL_SEC = 3 * 24 * 60 * 60;
 const MAX_DEVICES_PER_USER = 20;
 const MAX_MEMORY_DEVICE_BINDINGS = 10_000;
 
@@ -68,7 +69,7 @@ function rememberDeviceBinding(deviceId, userId) {
   }
 }
 
-async function persistDeviceBinding(deviceId, userId) {
+async function persistDeviceBinding(deviceId, userId, ttlSec = DEVICE_BINDING_TTL_SEC) {
   const client = getRedisClient();
   if (!client) {
     console.error('Redis: 不可用，设备身份绑定未持久化');
@@ -78,6 +79,7 @@ async function persistDeviceBinding(deviceId, userId) {
   const did = sanitizeDeviceId(deviceId);
   const uid = sanitizeDeviceId(userId);
   if (!did || !uid) return false;
+  const normalizedTtlSec = Math.max(60, Math.min(DEVICE_BINDING_TTL_SEC, Math.floor(Number(ttlSec) || DEVICE_BINDING_TTL_SEC)));
 
   try {
     await evalRedisScript(client, `
@@ -96,7 +98,7 @@ async function persistDeviceBinding(deviceId, userId) {
       redis.call('SADD', KEYS[2], ARGV[1])
       redis.call('EXPIRE', KEYS[2], ARGV[3])
       return 1
-    `, { keys: [`${DEVICE_USER_PREFIX}${did}`, `${USER_DEVICES_PREFIX}${uid}`], arguments: [did, uid, String(DEVICE_BINDING_TTL_SEC), USER_DEVICES_PREFIX, DEVICE_USER_PREFIX] });
+    `, { keys: [`${DEVICE_USER_PREFIX}${did}`, `${USER_DEVICES_PREFIX}${uid}`], arguments: [did, uid, String(normalizedTtlSec), USER_DEVICES_PREFIX, DEVICE_USER_PREFIX] });
     return true;
   } catch (err) {
     console.error('Redis: 保存设备身份绑定失败:', err.message);
@@ -105,12 +107,15 @@ async function persistDeviceBinding(deviceId, userId) {
 }
 
 /** 绑定设备与账号；同一设备始终映射到同一 userId（直至被新账号覆盖绑定） */
-export async function linkDeviceToUser(deviceId, userId) {
+export async function linkDeviceToUser(deviceId, userId, options = {}) {
   const did = sanitizeDeviceId(deviceId);
   const uid = sanitizeDeviceId(userId);
   if (!did || !uid) return false;
 
-  if (!await persistDeviceBinding(did, uid)) return false;
+  const ttlSec = options && typeof options === 'object' && Number.isFinite(Number(options.ttlSec))
+    ? Number(options.ttlSec)
+    : DEVICE_BINDING_TTL_SEC;
+  if (!await persistDeviceBinding(did, uid, ttlSec)) return false;
   rememberDeviceBinding(did, uid);
   return true;
 }

@@ -82,6 +82,7 @@ export function isPublicApiPath(req) {
   if (path === '/api/music/sources' && req.method === 'GET') return true;
   // 大厅房间列表仅公开摘要，无敏感字段；公开后首屏可与会话并行加载
   if (path === '/api/rooms' && req.method === 'GET') return true;
+  if (/^\/api\/rooms\/[A-Za-z0-9_-]{4,64}\/cover$/u.test(path) && req.method === 'GET') return true;
   if (path === '/api/rooms/random-match' && req.method === 'GET') return true;
   if (path === '/api/session/bootstrap' && req.method === 'POST') return true;
   // 汽水官方二次验证组件运行在 iframe 中，只能通过原生 fetch 回调，

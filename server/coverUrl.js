@@ -1,5 +1,5 @@
-/** 去掉 NetEase 风格 ?param=NyN（该参数会导致封面加载失败） */
-function stripNeteaseParam(url) {
+/** 去掉 NetEase 风格 ?param=NyN */
+export function stripNeteaseParam(url) {
   if (!/param=\d+y\d+/i.test(url)) return url;
   try {
     const parsed = new URL(url);
@@ -11,6 +11,26 @@ function stripNeteaseParam(url) {
       .replace(/\?&/, '?')
       .replace(/[?&]$/, '')
       .replace(/\?$/, '');
+  }
+}
+
+/** 仅用于服务端代理抓图（配合失败自动回退原图），对标准网易云封面按档位请求缩略图 */
+export function resizeNeteaseCoverForProxy(url, px) {
+  const raw = String(url || '').trim();
+  const size = Math.round(Number(px) || 0);
+  if (!raw || size <= 0) return stripNeteaseParam(raw);
+  try {
+    const parsed = new URL(raw);
+    if (!/^p\d+\.music\.126\.net$/iu.test(parsed.hostname)) return stripNeteaseParam(raw);
+    if (!/\.(?:jpe?g|png|webp)$/iu.test(parsed.pathname)) return stripNeteaseParam(raw);
+    for (const key of parsed.searchParams.keys()) {
+      if (key.toLowerCase() !== 'param') return stripNeteaseParam(raw);
+    }
+    const bucket = size <= 96 ? 96 : size <= 180 ? 180 : size <= 320 ? 320 : size <= 500 ? 500 : size <= 800 ? 800 : 1000;
+    parsed.searchParams.set('param', `${bucket}y${bucket}`);
+    return parsed.toString();
+  } catch {
+    return stripNeteaseParam(raw);
   }
 }
 

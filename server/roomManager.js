@@ -1,5 +1,5 @@
 import { customAlphabet } from "nanoid";
-import { scrypt, randomBytes, timingSafeEqual } from "crypto";
+import { createHash, scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { claimAccountRooms } from "./accountRooms.js";
 import { fetchMetingFmSongs, normalizeFmMode, DEFAULT_FM_MODE, FM_MODE_OFF } from "./metingFm.js";
 import { importNeteasePlaylist, importQqPlaylist, importKugouPlaylist, importQishuiPlaylist } from "./playlistImport.js";
@@ -1682,6 +1682,40 @@ function normalizeCustomCoverUrl(coverUrl) {
   }
   if (!/^https?:\/\//i.test(raw)) return "";
   return raw.slice(0, 500);
+}
+
+function decodeCustomCoverAsset(raw) {
+  const normalized = normalizeCustomCoverUrl(raw);
+  if (!normalized || !normalized.startsWith("data:")) return null;
+  const match = normalized.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/u);
+  if (!match) return null;
+  const buffer = Buffer.from(match[2], "base64");
+  if (!buffer.length) return null;
+  const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 16);
+  return { raw: normalized, contentType: match[1], buffer, hash };
+}
+
+function getRoomCustomCoverAssetFromRoom(room) {
+  if (!room) return null;
+  const normalized = normalizeCustomCoverUrl(room.customCoverUrl);
+  if (!normalized || !normalized.startsWith("data:")) {
+    if (room._customCoverAsset) room._customCoverAsset = null;
+    return null;
+  }
+  if (room._customCoverAsset?.raw === normalized) return room._customCoverAsset;
+  const decoded = decodeCustomCoverAsset(normalized);
+  room._customCoverAsset = decoded;
+  return decoded;
+}
+
+/** 导出房间自定义上传封面的解码二进制与版本哈希，供大厅外链图片接口缓存下发 */
+export function getRoomCustomCoverAsset(roomId) {
+  const id = String(roomId || "").trim().toUpperCase();
+  if (!id) return null;
+  const room = rooms.get(id);
+  const asset = getRoomCustomCoverAssetFromRoom(room);
+  if (!asset) return null;
+  return { contentType: asset.contentType, buffer: asset.buffer, hash: asset.hash };
 }
 
 function rememberUserAvatar(room, userId, avatarUrl) {
@@ -6685,16 +6719,20 @@ function serializeLobbyCoverPic(pic) {
   return resizeCoverForThumb(raw, 96) || raw;
 }
 
-function serializeLobbyCustomCover(coverUrl) {
-  const raw = normalizeCustomCoverUrl(coverUrl);
+function serializeLobbyCustomCover(room) {
+  const raw = normalizeCustomCoverUrl(room?.customCoverUrl);
   if (!raw) return undefined;
-  if (raw.startsWith("data:")) return raw;
+  if (raw.startsWith("data:")) {
+    const asset = getRoomCustomCoverAssetFromRoom(room);
+    if (!asset) return undefined;
+    return `/api/rooms/${encodeURIComponent(room.id)}/cover?v=${asset.hash}`;
+  }
   if (!isDirectCoverUrl(raw)) return undefined;
   return resizeCoverForThumb(raw, 96) || raw;
 }
 
 function serializeRoomSummary(room) {
-  const customCoverUrl = serializeLobbyCustomCover(room.customCoverUrl);
+  const customCoverUrl = serializeLobbyCustomCover(room);
   return {
     id: room.id,
     name: room.name,
