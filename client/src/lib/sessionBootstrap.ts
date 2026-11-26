@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from '../api/http';
+import { isAccountSessionRevisionEvent } from './accountSessionSignal';
 import { rememberClientId } from './clientId';
 import { getDeviceId } from './deviceId';
 import { applySiteFeatures } from '../stores/siteFeaturesStore';
@@ -162,4 +163,11 @@ export function resetSessionBootstrap(): void {
   bootstrapReadyGeneration = -1;
   bootstrapLoginRequiredGeneration = -1;
   bootstrapPromise = null;
+}
+
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('openmusic:account-session-changed', resetSessionBootstrap);
+  window.addEventListener('storage', (event) => {
+    if (isAccountSessionRevisionEvent(event)) resetSessionBootstrap();
+  });
 }

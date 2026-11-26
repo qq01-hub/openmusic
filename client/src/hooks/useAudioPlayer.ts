@@ -75,11 +75,13 @@ import { isProxiedMediaUrl, isSameOriginMediaUrl, toProxiedMediaUrl } from '../l
 import { shouldProxySongPlaybackUrl } from '../lib/roomVisualPreset';
 import {
   classifyMediaPlaybackError,
+  isAuthPlaybackError,
   isSourceUnavailableMessage,
   MAX_TEMP_PLAYBACK_RETRIES,
   SourceUnavailableError,
 } from '../lib/audioPlaybackError';
 import { isHumanCheckPending } from '../lib/humanCheckState';
+import { isSessionBootstrapLoginRequired } from '../lib/sessionBootstrap';
 import {
   recordSongPlaybackFailure,
   recordSongPlaybackSuccess,
@@ -209,14 +211,23 @@ function notifyLocalRecoveryToast(
 
 /** 播放出错/卡顿时换发新签名并续播，避免 om_ts 过期后 Range 请求 403 */
 async function reloadAudioWithFreshSign(audio: HTMLAudioElement): Promise<void> {
-  if (isHumanCheckPending()) return;
+  if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return;
   const prevSrc = audio.currentSrc || audio.src;
   if (!prevSrc) {
     audio.load();
     await audio.play().catch(() => {});
     return;
   }
-  const fresh = (await refreshSignedApiUrl(prevSrc)) || prevSrc;
+  let fresh: string;
+  try {
+    fresh = (await refreshSignedApiUrl(prevSrc)) || prevSrc;
+  } catch (error) {
+    if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) {
+      audio.pause();
+      return;
+    }
+    throw error;
+  }
   const resumeAt = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
   // 若代理流仍在正常加载且地址未变，勿调 load() 清空已有缓冲重头拉取
   if (fresh === prevSrc && !audio.error && audio.networkState === HTMLMediaElement.NETWORK_LOADING) {
@@ -603,7 +614,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
    * 本机加载或播放失败时按指数退避与上限做本地恢复，避免看门狗与定时器互抢穿透后端取链
    */
   const scheduleLocalRecovery = useCallback((song: QueueItem, reason: string) => {
-    if (isHumanCheckPending()) return;
+    if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return;
     const queueId = song.queueId;
     if (hasPendingLocalRecovery(queueId)) return;
 
@@ -861,7 +872,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
 
         const song = live.room.current;
 
-        if (isHumanCheckPending()) return;
+        if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return;
 
         recordSongPlaybackFailure();
 
@@ -877,7 +888,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           if (proxied && proxied !== failedSrc) {
             runtime.tempRetries.current += 1;
             controller.enqueue(async () => {
-              const freshProxied = (await refreshSignedApiUrl(proxied)) || proxied;
+              let freshProxied: string;
+              try {
+                freshProxied = (await refreshSignedApiUrl(proxied)) || proxied;
+              } catch (error) {
+                if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) {
+                  controller.audio.pause();
+                  return;
+                }
+                throw error;
+              }
               const resumeAt = Number.isFinite(controller.audio.currentTime) ? controller.audio.currentTime : 0;
               controller.audio.pause();
               controller.audio.src = freshProxied;
@@ -896,6 +916,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         // 汽水严禁回退到 media-proxy（那是服务端拉密文/解密路径）；只走本地解密或恢复逻辑。
         if ((song.source || 'netease') === 'qishui') {
           void classifyMediaPlaybackError(audio).then((errorClass) => {
+            if (errorClass === 'auth') {
+              controller.audio.pause();
+              return;
+            }
             if (errorClass === 'temporary' && runtime.tempRetries.current < MAX_TEMP_PLAYBACK_RETRIES) {
               runtime.tempRetries.current += 1;
               invalidateTrackUrlCache(song);
@@ -908,6 +932,10 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         }
 
         void classifyMediaPlaybackError(audio).then((errorClass) => {
+          if (errorClass === 'auth') {
+            controller.audio.pause();
+            return;
+          }
           if (errorClass === 'temporary') {
             if (runtime.tempRetries.current < MAX_TEMP_PLAYBACK_RETRIES) {
               runtime.tempRetries.current += 1;
@@ -953,7 +981,16 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
               if (isCachedUrlCrossSource(song) || isTrackCrossSource(song)) {
                 markTrackCrossSource(song, getCachedUrlCrossSourceFrom(song));
               }
-              const freshFallback = (await resolveSignedApiUrl(fallbackUrl)) || fallbackUrl;
+              let freshFallback: string;
+              try {
+                freshFallback = (await resolveSignedApiUrl(fallbackUrl)) || fallbackUrl;
+              } catch (error) {
+                if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) {
+                  controller.audio.pause();
+                  return;
+                }
+                throw error;
+              }
               controller.enqueue(async () => {
                 const a = controller.audio;
                 a.pause();
@@ -1128,7 +1165,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   const retryPlayback = useCallback(async (fromUserGesture = false) => {
     const liveRoom = useRoomStore.getState().room;
     if (!liveRoom?.current) return;
-    if (isHumanCheckPending() && !fromUserGesture) return;
+    if ((isHumanCheckPending() || isSessionBootstrapLoginRequired()) && !fromUserGesture) return;
 
     if (!liveRoom.isPlaying && !fromUserGesture) {
       setNeedsAudioUnlock(false);
@@ -1321,7 +1358,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
         let cachedAudio: Blob | null = null;
         let audioCacheKey = '';
         try {
-          if (isHumanCheckPending()) return;
+          if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return;
           let timeoutId = 0;
           const resolved = await Promise.race([
             resolveSongUrl(current),
@@ -1675,6 +1712,11 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
           }));
           return;
         }
+        if (isAuthPlaybackError(err) || isSessionBootstrapLoginRequired()) {
+          controller.audio.pause();
+          clearAudioQueueBinding(controller.audio);
+          return;
+        }
         console.error('Failed to load song:', err);
         debugLog('track_load_failed', debugLine({
           queueId: current.queueId,
@@ -1849,6 +1891,7 @@ export function useAudioPlayer(options: UseAudioPlayerOptions = {}) {
   useEffect(() => {
     let lastWatchdogAt = 0;
     const runLoadWatchdog = () => {
+      if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return;
       const now = Date.now();
       if (now - lastWatchdogAt < LOAD_WATCHDOG_INTERVAL_MS) return;
       lastWatchdogAt = now;

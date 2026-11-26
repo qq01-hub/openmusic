@@ -13,6 +13,7 @@ import {
 import {
   classifySongUrlFetchError,
   classifySongUrlFetchFailure,
+  isAuthPlaybackError,
   isBlockedPlaybackUrl,
   SourceUnavailableError,
   type PlaybackErrorClass,
@@ -28,6 +29,7 @@ import type { MusicSource, QueueItem, RoomState, SearchResult } from '../types';
 import { isMobileDevice } from './audioUnlock';
 import { normalizeDurationMs } from './duration';
 import { isHumanCheckPending } from './humanCheckState';
+import { isSessionBootstrapLoginRequired } from './sessionBootstrap';
 
 const MAX_URL_CACHE = 24;
 const DEFAULT_PREFETCH_COUNT = 2;
@@ -318,6 +320,7 @@ async function getEnabledCrossSourceIds(): Promise<Set<MusicSource>> {
 }
 
 async function fetchCrossSourceFallback(song: QueueItem): Promise<CachedUrlEntry | null> {
+  if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return null;
   const key = trackKeyOf(song);
   const pending = pendingCrossSourceFallbacks.get(key);
   if (pending) return pending;
@@ -326,6 +329,7 @@ async function fetchCrossSourceFallback(song: QueueItem): Promise<CachedUrlEntry
     const candidates = await findCrossSourceCandidates(song);
     const seen = new Set<string>();
     for (const candidate of candidates) {
+      if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return null;
       const candidateKey = `${candidate.source}:${candidate.id}`;
       if (seen.has(candidateKey)) continue;
       seen.add(candidateKey);
@@ -349,8 +353,9 @@ async function fetchCrossSourceFallback(song: QueueItem): Promise<CachedUrlEntry
         markTrackCrossSource(song, from);
         publishActualQuality(song, info.qualityLabel, from);
         return entry;
-      } catch {
-        // 当前候选不可播放时继续尝试下一平台/版本。
+      } catch (error) {
+        if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) return null;
+        // 当前候选不可播放时继续尝试下一平台/版本
       }
     }
     return null;
@@ -473,6 +478,7 @@ async function fetchSongUrlOnce(
   options: { refresh?: boolean } = {},
 ): Promise<FetchUrlResult> {
   if (isHumanCheckPending()) return { ok: false, errorClass: 'service' };
+  if (isSessionBootstrapLoginRequired()) return { ok: false, errorClass: 'auth' };
   const key = urlCacheKey(song, quality);
   const identityKey = identityUrlCacheKey(song, quality);
   if (options.refresh) {
@@ -591,7 +597,7 @@ async function fetchSongUrl(
   song: Pick<QueueItem, 'queueId' | 'id' | 'source' | 'url'>,
   options: { refresh?: boolean; allowQualityDowngrade?: boolean } = {},
 ): Promise<CachedUrlEntry | null> {
-  if (isHumanCheckPending()) return null;
+  if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return null;
   const source = songSourceOf(song);
   const quality = getEffectivePlaybackQuality(song);
   const lowest = getLowestQuality(source);
@@ -628,13 +634,14 @@ async function fetchSongUrl(
     };
   }
 
-  if (first.errorClass === 'temporary') {
+  if (first.errorClass === 'auth' || first.errorClass === 'temporary') {
     return null;
   }
 
   // 播放取链可降档；预取不做降档（避免 lockPlaybackQualityToLowest 影响全屋）
   if (allowQualityDowngrade && source !== 'qishui' && !alreadyAtLowest) {
     const fallback = await tryLowestQualityFetch(song);
+    if (!fallback.ok && fallback.errorClass === 'auth') return null;
     if (fallback.ok) {
       clearTrackSourceError(song);
       if (fallback.crossSource) markTrackCrossSource(song, fallback.crossSourceFrom);
@@ -663,7 +670,7 @@ export async function fetchServiceFallbackUrl(
   song: QueueItem,
   options: { lockGlobalLowest?: boolean } = {},
 ): Promise<string | null> {
-  if (isHumanCheckPending()) return null;
+  if (isHumanCheckPending() || isSessionBootstrapLoginRequired()) return null;
   const source = songSourceOf(song);
   const quality = getEffectivePlaybackQuality(song);
   const lowest = getLowestQuality(source);
@@ -681,6 +688,7 @@ export async function fetchServiceFallbackUrl(
 
   if (options.lockGlobalLowest) {
     const fallback = await tryLowestQualityFetch(song);
+    if (!fallback.ok && fallback.errorClass === 'auth') return null;
     if (fallback.ok) {
       publishActualQuality(song, fallback.qualityLabel, fallback.crossSource ? fallback.crossSourceFrom : songSourceOf(song));
       return fallback.url;
@@ -691,6 +699,7 @@ export async function fetchServiceFallbackUrl(
   let candidateQuality = quality ? getDowngradedQuality(source, quality) : lowest;
   while (candidateQuality) {
     const step = await fetchSongUrlOnce(song, candidateQuality, { refresh: true });
+    if (!step.ok && step.errorClass === 'auth') return null;
     if (step.ok && step.url) {
       const entry = {
         url: step.url,
@@ -856,8 +865,14 @@ export async function resolveSongUrl(
   song: QueueItem,
   options: { refresh?: boolean } = {},
 ): Promise<CachedUrlEntry> {
+  if (isSessionBootstrapLoginRequired()) {
+    throw Object.assign(new Error('请先登录账户'), { code: 'ACCOUNT_AUTH_REQUIRED', status: 401 });
+  }
   const result = await fetchSongUrl(song, options);
   if (result?.url) return result;
+  if (isSessionBootstrapLoginRequired()) {
+    throw Object.assign(new Error('请先登录账户'), { code: 'ACCOUNT_AUTH_REQUIRED', status: 401 });
+  }
   // service 失败会 markTrackSourceError；temporary 不会
   if (isTrackSourceError(song)) {
     throw new SourceUnavailableError('no url');
@@ -867,7 +882,7 @@ export async function resolveSongUrl(
 
 /** 加入房间后立即预取当前歌曲 URL，缩短刷新后的加载等待 */
 export function prefetchCurrentSong(song: QueueItem | null | undefined) {
-  if (!song) return;
+  if (!song || isSessionBootstrapLoginRequired()) return;
   // 汽水整曲解密占内存大：当前曲交给播放路径解密，这里只预取签名 URL
   void fetchSongUrl(song, { allowQualityDowngrade: false });
 }
@@ -879,7 +894,7 @@ export function prefetchUpcomingFromRoom(
   room: Pick<RoomState, 'current' | 'queue' | 'nextRandom' | 'isPlaying'> | null | undefined,
   options: { count?: number; includeCurrent?: boolean } = {},
 ) {
-  if (!room) return;
+  if (!room || isSessionBootstrapLoginRequired()) return;
   // 切换音质时勿重拉当前曲：否则会按新音质取链并覆盖「实际音质」标签，尽管仍在播旧档
   if (options.includeCurrent !== false && room.current && shouldPrefetchCurrentSong(room)) {
     prefetchCurrentSong(room.current);
@@ -927,6 +942,7 @@ export function prefetchQueueSongs(
   pruneSourceErrors(retain);
 
   // 仅预取即将播放的第一首歌曲音频数据（汽水或同源代理），避免多首并发预取占用服务器带宽
+  if (isSessionBootstrapLoginRequired()) return;
   const nextUp = targets[0] || null;
   for (const song of targets) {
     void fetchSongUrl(song, { allowQualityDowngrade: false }).then((result) => {
@@ -956,7 +972,7 @@ const proxiedPrefetchedSet = new Set<string>();
 
 /** 预取下一首同源代理音频首包（256KB），带随机错峰抖动，避免同房多人同时切歌时突发请求洪峰 */
 export function prefetchProxiedAudioPlayback(url: string | null | undefined): void {
-  if (!url || !isProxiedMediaUrl(url) || typeof window === 'undefined') return;
+  if (!url || !isProxiedMediaUrl(url) || typeof window === 'undefined' || isSessionBootstrapLoginRequired()) return;
   const canonical = stripApiSignParams(url);
   if (!canonical || proxiedPrefetchedSet.has(canonical) || proxiedPrefetchUrl === canonical) return;
 

@@ -1,9 +1,24 @@
 import { useEffect, useState } from 'react';
 import { needsApiSign } from './apiSign';
-import { ensureSessionBootstrap, hasSessionBootstrapReady } from './sessionBootstrap';
-import { ensureFreshAccountAccess, hasVerifiedAccountSession } from './accountAccessSession';
+import { ensureSessionBootstrap, hasSessionBootstrapReady, isSessionBootstrapLoginRequired } from './sessionBootstrap';
+import { ensureFreshAccountAccess, hasVerifiedAccountSession, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 
 const SIGN_QUERY_KEYS = ['om_ts', 'om_nonce', 'om_sign'] as const;
+
+function createAuthExpiredError(): Error & { code: string; status: number } {
+  return Object.assign(new Error('登录已过期，请重新登录'), {
+    code: 'ACCOUNT_AUTH_REQUIRED',
+    status: 401,
+  });
+}
+
+function notifyAuthRequired(): void {
+  setAnonymousAccess(false);
+  updateAccountAccess(null);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event('openmusic:account-auth-required'));
+  }
+}
 
 export function stripApiSignParams(url: string): string {
   if (!url) return url;
@@ -27,8 +42,19 @@ export function stripApiSignParams(url: string): string {
 
 export async function signApiUrl(relativeUrl: string, options?: { force?: boolean }): Promise<string> {
   if (!needsApiSign(relativeUrl)) return relativeUrl;
-  if (!await ensureFreshAccountAccess()) throw new Error('登录已过期，请重新登录');
-  await ensureSessionBootstrap(Boolean(options?.force));
+  if (!options?.force && isSessionBootstrapLoginRequired()) {
+    notifyAuthRequired();
+    throw createAuthExpiredError();
+  }
+  if (!await ensureFreshAccountAccess()) {
+    notifyAuthRequired();
+    throw createAuthExpiredError();
+  }
+  const clientId = await ensureSessionBootstrap(Boolean(options?.force));
+  if (!clientId && isSessionBootstrapLoginRequired()) {
+    notifyAuthRequired();
+    throw createAuthExpiredError();
+  }
   return stripApiSignParams(relativeUrl);
 }
 

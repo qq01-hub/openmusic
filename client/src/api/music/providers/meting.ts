@@ -2,6 +2,7 @@ import type { MusicProvider, SearchResult } from '../types';
 import type { MusicSource } from '../../../types';
 import { fetchWithTimeout } from '../../http';
 import { isSourceUnavailableMessage, SourceUnavailableError } from '../../../lib/audioPlaybackError';
+import { isExplicitAccountDenial } from '../../../lib/accountSessionRecovery';
 import { normalizeDurationMs } from '../../../lib/duration';
 
 const API_BASE = '/api/meting';
@@ -77,6 +78,36 @@ function parseMetingErrorMessage(text: string): string {
   return trimmed;
 }
 
+function parseMetingErrorInfo(text: string): { message: string; code: string } {
+  const trimmed = text.trim();
+  if (!trimmed) return { message: '', code: '' };
+  if (trimmed.startsWith('{')) {
+    try {
+      const data = JSON.parse(trimmed) as { error?: unknown; code?: unknown };
+      return {
+        message: typeof data.error === 'string' ? data.error.trim() : '',
+        code: typeof data.code === 'string' ? data.code.trim() : '',
+      };
+    } catch {
+      // fall through
+    }
+  }
+  return { message: trimmed, code: '' };
+}
+
+async function createMetingHttpError(res: Response, bodyText?: string): Promise<Error> {
+  const rawText = bodyText !== undefined ? bodyText : await res.text().catch(() => '');
+  const info = parseMetingErrorInfo(rawText);
+  const authDenied = res.status === 401 || isExplicitAccountDenial({ code: info.code, status: res.status });
+  if (authDenied) {
+    return Object.assign(new Error(info.message || '请先登录账户'), {
+      code: info.code || 'ACCOUNT_AUTH_REQUIRED',
+      status: res.status,
+    });
+  }
+  return new Error(info.message || 'API 请求失败');
+}
+
 function throwIfSourceUnavailable(message: string): void {
   if (isSourceUnavailableMessage(message)) {
     throw new SourceUnavailableError(message);
@@ -86,7 +117,7 @@ function throwIfSourceUnavailable(message: string): void {
 async function metingFetch<T>(server: MusicSource, params: Record<string, string>, signal?: AbortSignal, onResponse?: (response: Response) => void): Promise<T> {
   const query = new URLSearchParams({ server, ...params });
   const res = await fetchWithTimeout(`${API_BASE}?${query}`, { signal });
-  if (!res.ok) throw new Error('API 请求失败');
+  if (!res.ok) throw await createMetingHttpError(res);
   onResponse?.(res);
   return res.json();
 }
@@ -98,7 +129,7 @@ async function metingText(server: MusicSource, params: Record<string, string>): 
     const location = res.headers.get('Location') || res.headers.get('location') || '';
     if (location) return location;
   }
-  if (!res.ok) throw new Error('API 请求失败');
+  if (!res.ok) throw await createMetingHttpError(res);
   return res.text();
 }
 
@@ -216,9 +247,11 @@ function createMetingProvider(
       }
       const text = (await res.text()).trim();
       if (!res.ok) {
+        const httpError = await createMetingHttpError(res, text);
+        if (res.status === 401 || isExplicitAccountDenial(httpError)) throw httpError;
         const errMsg = parseMetingErrorMessage(text);
         throwIfSourceUnavailable(errMsg);
-        throw new Error(errMsg || 'API 请求失败');
+        throw httpError;
       }
       if (text.startsWith('{')) {
         try {

@@ -2,7 +2,7 @@ import { assertDeviceSession } from './deviceProof';
 import { assertAccountSessionResponse, type AccountSessionResponse } from './accountSessionRecovery';
 import { fetchWithTimeout } from '../api/http';
 import { useRoomStore } from '../stores/roomStore';
-import { requireSessionBootstrap } from './sessionBootstrap';
+import { isSessionBootstrapLoginRequired, requireSessionBootstrap, resetSessionBootstrap } from './sessionBootstrap';
 import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, isSessionMetadataRefreshNeeded, migrateAccountDevice, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 
 export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat';
@@ -121,7 +121,10 @@ async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
     assertCurrent();
     setAnonymousAccess(data.anonymousAllowed === true);
     useRoomStore.getState().bindAccountNickname(null, '');
-    if (data.anonymousAllowed === true) await requireSessionBootstrap();
+    if (data.anonymousAllowed === true) {
+      if (isSessionBootstrapLoginRequired()) resetSessionBootstrap();
+      await requireSessionBootstrap();
+    }
     assertCurrent();
     return null;
   }
@@ -142,9 +145,16 @@ async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
   if (account) await assertDeviceSession(data.session?.deviceKeyId);
   assertCurrent();
   setAnonymousAccess(!account && data.anonymousAllowed === true);
-  if (account) useRoomStore.getState().bindAccountNickname(account.id, homepageNickname(account));
-  else useRoomStore.getState().bindAccountNickname(null, '');
-  if (!account && data.anonymousAllowed === true) await requireSessionBootstrap();
+  if (account) {
+    if (isSessionBootstrapLoginRequired()) resetSessionBootstrap();
+    useRoomStore.getState().bindAccountNickname(account.id, homepageNickname(account));
+  } else {
+    useRoomStore.getState().bindAccountNickname(null, '');
+  }
+  if (!account && data.anonymousAllowed === true) {
+    if (isSessionBootstrapLoginRequired()) resetSessionBootstrap();
+    await requireSessionBootstrap();
+  }
   assertCurrent();
   if (account && useRoomStore.getState().nicknameMigration) {
     // 昵称写入失败保留脏标记，不能把已核验的账户误判为未登录

@@ -1,11 +1,22 @@
 import { resolveSignedApiUrl } from './signedApiUrl';
+import { isExplicitAccountDenial } from './accountSessionRecovery';
+import { isSessionBootstrapLoginRequired } from './sessionBootstrap';
+import { setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 import {
   isProxiedMediaUrl,
   isSameOriginMediaUrl,
   toProxiedMediaUrl,
 } from './mediaProxyUrl';
 
-export type PlaybackErrorClass = 'temporary' | 'service';
+export type PlaybackErrorClass = 'temporary' | 'service' | 'auth';
+
+export function isAuthPlaybackError(error: unknown): boolean {
+  if (isExplicitAccountDenial(error)) return true;
+  if (error && typeof error === 'object' && 'status' in error && (error as { status?: unknown }).status === 401) {
+    return true;
+  }
+  return false;
+}
 
 // 媒体 CDN 的 403 通常表示签名过期/鉴权失效，不能按网络抖动无限重试旧地址。
 const SERVICE_HTTP_STATUSES = new Set([403, 404, 502]);
@@ -88,19 +99,29 @@ function isKnownNonAudioContentType(contentType: string): boolean {
 }
 
 async function probeMediaUrl(url: string): Promise<MediaProbeResult | null> {
-  const signForProbe = async (rawUrl: string) => {
+  if (isSessionBootstrapLoginRequired()) {
+    return { status: 401, contentType: 'application/json' };
+  }
+  const signForProbe = async (rawUrl: string): Promise<{ url: string; authFailed: boolean }> => {
     try {
-      return (await resolveSignedApiUrl(rawUrl)) || rawUrl;
-    } catch {
-      return rawUrl;
+      return { url: (await resolveSignedApiUrl(rawUrl)) || rawUrl, authFailed: false };
+    } catch (error) {
+      if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) {
+        return { url: '', authFailed: true };
+      }
+      return { url: rawUrl, authFailed: false };
     }
   };
-  const candidates = [await signForProbe(url)];
+  const primary = await signForProbe(url);
+  if (primary.authFailed) return { status: 401, contentType: 'application/json' };
+  const candidates = [primary.url];
   // 外链通常禁止 CORS，失败时改探测同源媒体代理；代理会透传上游 Content-Type。
   if (!isSameOriginMediaUrl(url) && !isProxiedMediaUrl(url)) {
     const proxied = toProxiedMediaUrl(url);
     if (proxied && proxied !== url) {
-      candidates.push(await signForProbe(proxied));
+      const secondary = await signForProbe(proxied);
+      if (secondary.authFailed) return { status: 401, contentType: 'application/json' };
+      candidates.push(secondary.url);
     }
   }
 
@@ -149,6 +170,7 @@ export function classifySongUrlFetchFailure(url: string | null | undefined): Pla
 }
 
 export function classifySongUrlFetchError(error: unknown): PlaybackErrorClass {
+  if (isAuthPlaybackError(error) || isSessionBootstrapLoginRequired()) return 'auth';
   if (error instanceof SourceUnavailableError) return 'service';
   if (error instanceof Error && isSourceUnavailableMessage(error.message)) return 'service';
   if (error instanceof TypeError) return 'temporary';
@@ -176,6 +198,7 @@ export function classifySongUrlFetchError(error: unknown): PlaybackErrorClass {
 
 /** `<audio>` 播放错误分类 */
 export async function classifyMediaPlaybackError(audio: HTMLAudioElement): Promise<PlaybackErrorClass> {
+  if (isSessionBootstrapLoginRequired()) return 'auth';
   const url = audio.currentSrc || audio.src;
   if (isInvalidPlaybackUrl(url)) return 'service';
 
@@ -194,6 +217,14 @@ export async function classifyMediaPlaybackError(audio: HTMLAudioElement): Promi
     || mediaError?.code === MediaError.MEDIA_ERR_DECODE
   ) {
     const probe = await probeMediaUrl(url);
+    if (probe?.status === 401) {
+      setAnonymousAccess(false);
+      updateAccountAccess(null);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+      }
+      return 'auth';
+    }
     const hasNonAudioResponse = Boolean(
       probe
       && probe.status >= 200

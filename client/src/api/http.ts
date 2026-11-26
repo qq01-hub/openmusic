@@ -1,7 +1,7 @@
 import { createDeviceProof, setDeviceSession } from '../lib/deviceProof';
 import { isPublicCoverUrl, needsApiSign } from '../lib/apiSign';
-import { ensureSessionBootstrap, resetSessionBootstrap } from '../lib/sessionBootstrap';
-import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, hasAnonymousAccess, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, waitForAccountRefresh } from '../lib/accountAccessSession';
+import { ensureSessionBootstrap, isSessionBootstrapLoginRequired, resetSessionBootstrap } from '../lib/sessionBootstrap';
+import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, hasAnonymousAccess, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess, waitForAccountRefresh } from '../lib/accountAccessSession';
 import { detectSiteAccessBlockResponse, isSiteAccessBlocked, markSiteAccessBlocked, getSiteAccessBlockCode } from '../lib/siteAccessGate';
 import { readSoftBlockCodeFromResponse, softBlockMessage, SOFT_BLOCK_CODES } from '../lib/softBlock';
 import { markHumanCheckPending } from '../lib/humanCheckState';
@@ -107,7 +107,15 @@ export async function fetchWithTimeout(
         return new Response(JSON.stringify({ code: 'ACCOUNT_AUTH_REQUIRED', error: '请先登录账户' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
       }
     }
-    if (needsApiSign(url, method) && sameOriginApi) await ensureSessionBootstrap();
+    if (needsApiSign(url, method) && sameOriginApi) {
+      await ensureSessionBootstrap();
+      if (isSessionBootstrapLoginRequired()) {
+        setAnonymousAccess(false);
+        updateAccountAccess(null);
+        window.dispatchEvent(new Event('openmusic:account-auth-required'));
+        return new Response(JSON.stringify({ code: 'ACCOUNT_AUTH_REQUIRED', error: '请先登录账户' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
     if (isSiteAccessBlocked()) return blockedSyntheticResponse();
     controller.signal.throwIfAborted();
     if (businessRequest || pathname === '/api/auth/session') assertCurrent();
@@ -149,6 +157,8 @@ export async function fetchWithTimeout(
     if (businessRequest && (res.status === 401 || res.status === 403)) {
       const data = await res.clone().json().catch(() => ({})) as { code?: string };
       if (['ACCOUNT_AUTH_REQUIRED', 'ACCOUNT_SESSION_INVALID', 'ACCOUNT_IDENTITY_MISMATCH', 'ACCOUNT_RISK_BLOCKED', 'ACCOUNT_DEVICE_PROOF_REQUIRED', 'ACCOUNT_DEVICE_PROOF_REPLAY'].includes(data.code || '')) {
+        setAnonymousAccess(false);
+        updateAccountAccess(null);
         window.dispatchEvent(new Event('openmusic:account-auth-required'));
       }
     }
