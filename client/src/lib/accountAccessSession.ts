@@ -1,5 +1,5 @@
 import { assertDeviceSession, createDeviceProof, setDeviceSession } from './deviceProof';
-import { assertAccountSessionResponse, isExplicitAccountDenial, isValidSessionMetadata } from './accountSessionRecovery';
+import { assertAccountSessionResponse, createAccountSessionSupersededError, isExplicitAccountDenial, isValidSessionMetadata } from './accountSessionRecovery';
 import { ACCOUNT_SESSION_REVISION_KEY, announceAccountTokenRefreshed, isAccountSessionRevisionEvent, notifyLocalAccountTokenRefreshed } from './accountSessionSignal';
 
 export type AccountSessionMetadata = { sessionId?: string; deviceKeyId?: string | null; deviceMigrationRequired?: boolean; expiresAt: number; refreshExpiresAt: number; serverTime: number };
@@ -98,12 +98,12 @@ export async function migrateAccountDevice(signal?: AbortSignal): Promise<Accoun
     headers: { 'X-OpenMusic-Request': '1', 'X-OpenMusic-Device': await createDeviceProof('POST', '/api/auth/device-migrate', '', true, signal) },
   });
   const data = await response.json().catch(() => ({})) as { ok?: boolean; session?: AccountSessionMetadata; code?: string; error?: string };
-  if (revision !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
+  if (revision !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新操作');
   if (!response.ok || !data.ok || !isValidSessionMetadata(data.session)) {
     throw Object.assign(new Error(data.error || '账户设备升级暂不可用，请稍后重试'), { code: data.code, status: response.status });
   }
   await assertDeviceSession(data.session.deviceKeyId);
-  if (revision !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
+  if (revision !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新操作');
   return data.session;
 }
 

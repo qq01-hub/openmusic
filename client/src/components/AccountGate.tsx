@@ -1,5 +1,5 @@
 import RiskHumanVerificationGate from './RiskHumanVerificationGate';
-import { accountSessionRetryDelay, isExplicitAccountDenial } from '../lib/accountSessionRecovery';
+import { accountSessionRetryDelay, isAccountSessionSupersededError, isExplicitAccountDenial } from '../lib/accountSessionRecovery';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ArrowLeft, Disc3 } from 'lucide-react';
 import { Link } from 'react-router-dom';
@@ -51,6 +51,10 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
         if (!allowed) { stopSharedAudio(); onReady?.(); }
       } catch (reason) {
         if (!active || current !== generation) return;
+        if (isAccountSessionSupersededError(reason)) {
+          queued = true;
+          return;
+        }
         lastVerifiedAt = 0;
         if (isExplicitAccountDenial(reason)) {
           setAuthenticated(false); setRetrying(false);
@@ -119,7 +123,7 @@ export default function AccountGate({ children, onReady, allowPreview = false }:
   if (authenticated || allowPreview) return <>
     {authenticated && <ErrorReportSolutionGate />}
     {authenticated && <PermanentDecisionGate />}
-    <RiskHumanVerificationGate />
+    {authenticated && <RiskHumanVerificationGate />}
     {children}
     {authenticated && connectionNotice}
   </>;

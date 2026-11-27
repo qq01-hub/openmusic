@@ -1,9 +1,26 @@
 import { assertDeviceSession } from './deviceProof';
-import { assertAccountSessionResponse, type AccountSessionResponse } from './accountSessionRecovery';
+import {
+  assertAccountSessionResponse,
+  createAccountSessionSupersededError,
+  isAccountSessionSupersededError,
+  isValidSessionMetadata,
+  type AccountSessionResponse,
+} from './accountSessionRecovery';
 import { fetchWithTimeout } from '../api/http';
 import { useRoomStore } from '../stores/roomStore';
 import { isSessionBootstrapLoginRequired, requireSessionBootstrap, resetSessionBootstrap } from './sessionBootstrap';
-import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, isSessionMetadataRefreshNeeded, migrateAccountDevice, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
+import {
+  ensureFreshAccountAccess,
+  forgetAccountAccess,
+  getAccountSessionGeneration,
+  isSessionMetadataRefreshNeeded,
+  migrateAccountDevice,
+  refreshAccountAccess,
+  runAccountSessionTask,
+  setAnonymousAccess,
+  updateAccountAccess,
+  type AccountSessionMetadata,
+} from './accountAccessSession';
 
 export type AccountIdentityProvider = 'email' | 'linuxdo' | 'github' | 'wechat';
 
@@ -32,7 +49,7 @@ export interface AccountProviderStatus {
   wechat: boolean;
 }
 
-type AccountResponse = { ok?: boolean; account?: AccountProfile; error?: string; code?: string };
+type AccountResponse = { ok?: boolean; account?: AccountProfile; session?: AccountSessionMetadata; error?: string; code?: string };
 
 function homepageNickname(account: AccountProfile): string {
   const saved = String(account.nickname || '').trim();
@@ -49,12 +66,16 @@ export function acceptAccountProfile(account: AccountProfile): AccountProfile {
 async function readAccountResponse(response: Response): Promise<AccountProfile> {
   const generation = getAccountSessionGeneration();
   const data = await response.json().catch(() => ({})) as AccountResponse;
-  if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
+  if (generation !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新操作');
   if (!response.ok || !data.account) {
     const error = new Error(data.error || '账户操作失败') as Error & { code?: string; status?: number };
     error.code = data.code;
     error.status = response.status;
     throw error;
+  }
+  if (data.session && !data.session.deviceMigrationRequired && isValidSessionMetadata(data.session)) {
+    updateAccountAccess(data.session);
+    if (isSessionBootstrapLoginRequired()) resetSessionBootstrap();
   }
   return acceptAccountProfile(data.account);
 }
@@ -64,7 +85,7 @@ let inflightSessionFetch: { generation: string; promise: Promise<AccountProfile 
 async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
   const generation = getAccountSessionGeneration();
   const assertCurrent = () => {
-    if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新验证');
+    if (generation !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新验证');
   };
   const read = async () => {
     let result = await fetchWithTimeout('/api/auth/session', { cache: 'no-store' }, 8000);
@@ -165,12 +186,21 @@ async function fetchAccountSessionInternal(): Promise<AccountProfile | null> {
   return account;
 }
 
-export function fetchAccountSession(): Promise<AccountProfile | null> {
+export function fetchAccountSession(maxSupersededRetries = 3): Promise<AccountProfile | null> {
   const generation = getAccountSessionGeneration();
   if (inflightSessionFetch && inflightSessionFetch.generation === generation) {
     return inflightSessionFetch.promise;
   }
-  const promise = fetchAccountSessionInternal().finally(() => {
+  const promise = fetchAccountSessionInternal().catch((reason) => {
+    if (
+      maxSupersededRetries > 0
+      && isAccountSessionSupersededError(reason)
+      && getAccountSessionGeneration() !== generation
+    ) {
+      return fetchAccountSession(maxSupersededRetries - 1);
+    }
+    throw reason;
+  }).finally(() => {
     if (inflightSessionFetch?.promise === promise) {
       inflightSessionFetch = null;
     }
@@ -195,7 +225,7 @@ export function persistAccountNickname(): Promise<void> {
       body: JSON.stringify({ nickname, initializeOnly: nicknameMigration }),
     }, 10000);
     const data = await response.json().catch(() => ({})) as AccountResponse;
-    if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
+    if (generation !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新操作');
     if (!response.ok || !data.account) throw new Error(data.error || '昵称保存失败，请稍后重试');
     const current = useRoomStore.getState();
     if (current.nicknameAccountId === nicknameAccountId && current.nickname === nickname) {

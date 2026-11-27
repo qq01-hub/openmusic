@@ -48,7 +48,8 @@ import { headerPillCls } from '../lib/homeHeaderActions';
 import { getAccountAccessBackView } from '../lib/accountAccessNavigation';
 import { refreshSocketSession } from '../hooks/useSocket';
 import { announceAccountSessionChanged } from '../lib/accountSessionSignal';
-import { hasAnonymousAccess } from '../lib/accountAccessSession';
+import { hasAnonymousAccess, hasVerifiedAccountSession } from '../lib/accountAccessSession';
+import { isAccountSessionSupersededError } from '../lib/accountSessionRecovery';
 import { fetchAccountMusicAccounts, setAccountMusicShared, deleteAccountMusicAccount } from '../api/accountMusic';
 import { listAccountRooms } from '../api/accountRooms';
 import type { AccountRoomSummary, RoomMusicAccounts } from '../types';
@@ -78,7 +79,7 @@ function WechatAccountScan({
   onComplete,
 }: {
   action: 'login' | 'bind';
-  onComplete: (account: AccountProfile) => void;
+  onComplete: (account: AccountProfile) => void | Promise<void>;
 }) {
   const [qrUrl, setQrUrl] = useState<string | null>(null);
   const [status, setStatus] = useState('正在准备安全二维码…');
@@ -115,7 +116,7 @@ function WechatAccountScan({
           setQrUrl(null);
           setStatus('正在完成账户验证…');
           const account = await completeWechatAccount(action, controller.signal, flowId);
-          if (!cancelled) onComplete(account);
+          if (!cancelled) await onComplete(account);
           return;
         }
         if (result.status === 'scanned') setStatus('已扫码，请在手机上确认');
@@ -190,6 +191,7 @@ export default function AccountAccess({
   const [view, setView] = useState<View>('welcome');
   const dialogRef = useRef<HTMLDivElement>(null);
   const authRecheckPending = useRef(false);
+  const refreshSeq = useRef(0);
   const [account, setAccount] = useState<AccountProfile | null>(null);
   const [providers, setProviders] = useState<AccountProviderStatus>(EMPTY_PROVIDERS);
   const [providerError, setProviderError] = useState('');
@@ -220,7 +222,10 @@ export default function AccountAccess({
     if (!providerRequest.current) {
       providerRequest.current = fetchAccountProviders()
         .then(status => { setProviders(status); setProviderError(''); return status; })
-        .catch(reason => { setProviderError('登录方式加载失败，请重试'); throw reason; })
+        .catch(reason => {
+          if (!isAccountSessionSupersededError(reason)) setProviderError('登录方式加载失败，请重试');
+          throw reason;
+        })
         .finally(() => { providerRequest.current = null; });
     }
     return providerRequest.current;
@@ -238,12 +243,14 @@ export default function AccountAccess({
   }, []);
 
   const refresh = useCallback(async () => {
+    const seq = ++refreshSeq.current;
     const shouldLoadModalData = openRef.current;
     const [session, status] = await Promise.allSettled([
       fetchAccountSession(),
       shouldLoadModalData ? refreshProviders() : Promise.resolve(null),
     ]);
     if (session.status === 'rejected') throw session.reason;
+    if (seq !== refreshSeq.current) return session.value;
     setAccount(session.value);
     if (session.value) {
       if (shouldLoadModalData) {
@@ -261,7 +268,7 @@ export default function AccountAccess({
     if (!open) return;
     const refreshModalProviders = () => { void refreshProviders().catch(() => undefined); };
     refreshModalProviders();
-    if (account) {
+    if (account && hasVerifiedAccountSession()) {
       refreshAccountDetails();
     }
     window.addEventListener('focus', refreshModalProviders);
@@ -273,20 +280,29 @@ export default function AccountAccess({
   }, [account?.id, open, refreshAccountDetails, refreshProviders]);
 
   useEffect(() => {
+    let active = true;
     const oauthResult = consumeAccountAuthReturn();
     if (oauthResult) {
       setToast(oauthResult);
       announceAccountSessionChanged();
     }
-    void refresh()
+    const pending = refresh();
+    const seq = refreshSeq.current;
+    void pending
       .then((session) => {
+        if (!active) return;
         if (oauthResult) {
+          if (session) void refreshSocketSession();
           setView(session ? 'manage' : 'methods');
           setPanelOpen(true);
         }
       })
-      .catch((reason) => { setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试'); })
-      .finally(() => setLoading(false));
+      .catch((reason) => {
+        if (!active || isAccountSessionSupersededError(reason) || seq !== refreshSeq.current) return;
+        setError(reason instanceof Error ? reason.message : '账户状态暂不可用，请重试');
+      })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [refresh, setPanelOpen]);
 
   useEffect(() => {
@@ -300,14 +316,26 @@ export default function AccountAccess({
     const showLogin = () => {
       if (authRecheckPending.current) return;
       authRecheckPending.current = true;
+      const pending = refresh();
+      const seq = refreshSeq.current;
       // 先确认真实账户状态，身份 Cookie 重签或服务重启不直接弹出登录
-      void refresh().then(current => {
+      void pending.then(current => {
         if (!active || current || hasAnonymousAccess()) return;
         setAccount(null); setError(''); setView('welcome'); setPanelOpen(true);
-      }).catch(() => { if (active) setError('服务连接暂不可用，请等待恢复后重试'); })
+      }).catch((reason) => {
+        if (!active || isAccountSessionSupersededError(reason) || seq !== refreshSeq.current) return;
+        setError('服务连接暂不可用，请等待恢复后重试');
+      })
         .finally(() => { authRecheckPending.current = false; });
     };
-    const update = () => { void refresh().catch(() => setError('账户状态暂不可用，请重试')); };
+    const update = () => {
+      const pending = refresh();
+      const seq = refreshSeq.current;
+      void pending.catch((reason) => {
+        if (!active || isAccountSessionSupersededError(reason) || seq !== refreshSeq.current) return;
+        setError('账户状态暂不可用，请重试');
+      });
+    };
     const onNicknameSaveFailed = () => { setToast({ message: '已恢复登录，昵称尚未保存，请稍后重新保存', type: 'error' }); };
     window.addEventListener('openmusic:account-auth-required', showLogin);
     window.addEventListener('openmusic:account-session-changed', update);
@@ -356,6 +384,20 @@ export default function AccountAccess({
     setPanelOpen(false);
   };
 
+  const completeAccountSessionChange = useCallback(async (
+    fallbackAccount: AccountProfile,
+    toastMessage: string,
+  ) => {
+    // 先广播身份变更，再等待统一会话核验与连接引导完成，避免未就绪时触发业务请求回弹鉴权提示
+    announceAccountSessionChanged();
+    const verified = await fetchAccountSession().catch(() => null);
+    await refreshSocketSession().catch(() => undefined);
+    setError('');
+    setAccount(verified || fallbackAccount);
+    setView('manage');
+    setToast({ message: toastMessage, type: 'success' });
+  }, []);
+
   const submitEmail = async (register: boolean) => {
     if (!email.trim() || password.length < 8 || (register && !/^\d{6}$/.test(code))) {
       setError(register ? '请填写邮箱、至少 8 位密码和 6 位验证码' : '请填写邮箱和至少 8 位密码');
@@ -368,11 +410,7 @@ export default function AccountAccess({
       const next = register
         ? await registerAccountWithEmail(email, password, code, turnstileToken)
         : await loginAccountWithEmail(email, password, turnstileToken);
-      await refreshSocketSession();
-      announceAccountSessionChanged();
-      setAccount(next);
-      setView('manage');
-      setToast({ message: register ? '账户创建完成' : '欢迎回来', type: 'success' });
+      await completeAccountSessionChange(next, register ? '账户创建完成' : '欢迎回来');
     } catch (reason) {
       const message = reason instanceof Error ? reason.message : '登录失败';
       if (!register && reason instanceof Error && 'code' in reason && reason.code === 'AUTH_INVALID') {
@@ -408,12 +446,9 @@ export default function AccountAccess({
     setError('');
     try {
       const next = await bindAccountWithEmail(email, password, code, turnstileToken);
-      announceAccountSessionChanged();
-      setAccount(next);
+      await completeAccountSessionChange(next, '邮箱与密码已绑定');
       setPassword('');
       setCode('');
-      setView('manage');
-      setToast({ message: '邮箱与密码已绑定', type: 'success' });
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '邮箱绑定失败，请稍后重试');
     } finally {
@@ -469,14 +504,9 @@ export default function AccountAccess({
     }
   };
 
-  const finishWechat = useCallback((next: AccountProfile) => {
-    void refreshSocketSession().finally(() => {
-      announceAccountSessionChanged();
-    });
-    setAccount(next);
-    setView('manage');
-    setToast({ message: '微信身份验证成功', type: 'success' });
-  }, []);
+  const finishWechat = useCallback(async (next: AccountProfile) => {
+    await completeAccountSessionChange(next, '微信身份验证成功');
+  }, [completeAccountSessionChange]);
 
   const unbind = async (provider: Exclude<AccountIdentityProvider, 'email'>) => {
     setSubmitting(true);

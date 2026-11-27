@@ -1,4 +1,5 @@
 import { isAccountSessionRevisionEvent } from './accountSessionSignal';
+import { createAccountSessionSupersededError } from './accountSessionRecovery';
 
 type DeviceKeys = { privateKey: CryptoKey; publicKey: CryptoKey };
 let keyPromise: Promise<DeviceKeys> | undefined;
@@ -79,7 +80,7 @@ async function currentSession(): Promise<string> {
     const response = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store', signal: AbortSignal.timeout(8000) });
     const data = await response.json();
     if (!response.ok) throw Object.assign(new Error(data.error || '请重新登录以验证设备'), { code: data.code, status: response.status });
-    if (revision !== sessionRevision) throw new Error('账户已变化，请重新操作');
+    if (revision !== sessionRevision) throw createAccountSessionSupersededError('账户已变化，请重新操作');
     setDeviceSession(data.session?.sessionId || data.deviceSessionId || '', data.session?.serverTime);
     if (!sessionId) throw Object.assign(new Error('请先登录账户'), { code: 'ACCOUNT_AUTH_REQUIRED', status: 401 });
     return sessionId;

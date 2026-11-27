@@ -3004,7 +3004,7 @@ app.post('/api/auth/email/register', async (req, res) => {
     await syncAccountRoomIdentity(req, res, account);
     await replaceAccountSession(req, res, token);
     recordAccountAuthMetric('email_register', 'success');
-    return res.status(201).json({ ok: true, account: publicAccount(account) });
+    return res.status(201).json({ ok: true, account: publicAccount(account), session: accountSessionMetadata(token) });
   } catch (error) {
     const outcome = error instanceof AccountAuthError ? error.code : 'error';
     appendAdminAudit('account_email_register_attempt', {
@@ -3112,7 +3112,7 @@ app.post('/api/auth/email/login', async (req, res) => {
     await syncAccountRoomIdentity(req, res, account);
     await replaceAccountSession(req, res, token);
     recordAccountAuthMetric('email_login', 'success');
-    return res.json({ ok: true, account: publicAccount(account) });
+    return res.json({ ok: true, account: publicAccount(account), session: accountSessionMetadata(token) });
   } catch (error) {
     if (error instanceof AccountAuthError && error.code === 'AUTH_INVALID') {
       recordAccountLoginFailure(email);
@@ -3442,6 +3442,7 @@ app.post('/api/auth/wechat/account', async (req, res) => {
     const current = action === 'bind' ? await requireAccountSession(req, res) : null;
     if (action === 'bind' && !current) return;
     if (action === 'bind') await verifyAccountDeviceRequest(resolveAccountSessionToken(req), req, { ip: getRequestIp(req) });
+    let sessionToken = null;
     const account = await wechatAccountLogin.complete(readWechatAccountLoginCookie(req), async ({ uin, nickname: wechatNickname }) => {
       const nickname = String(wechatNickname || '').trim();
       const profile = { username: nickname || `微信用户 ${uin.slice(-4)}` };
@@ -3462,12 +3463,17 @@ app.post('/api/auth/wechat/account', async (req, res) => {
         const token = await createTrackedAccountSession(req, account, 'wechat', result.created);
         await syncAccountRoomIdentity(req, res, account);
         await replaceAccountSession(req, res, token);
+        sessionToken = token;
       }
       return account;
     }, req.body?.flowId);
     setWechatAccountLoginCookie(res, '');
     recordAccountAuthMetric(`wechat_${action}`, 'success');
-    return res.json({ ok: true, account: publicAccount(account) });
+    return res.json({
+      ok: true,
+      account: publicAccount(account),
+      ...(sessionToken ? { session: accountSessionMetadata(sessionToken) } : {}),
+    });
   } catch (error) {
     recordAccountAuthMetric('wechat', error.code || 'error');
     logWechatAccountFailure(error, 'account');

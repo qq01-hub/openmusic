@@ -13,6 +13,9 @@ import {
   updateAccountAccess,
 } from './accountAccessSession';
 import { ACCOUNT_TOKEN_REVISION_KEY } from './accountSessionSignal';
+import { createAccountSessionSupersededError, isAccountSessionSupersededError, isExplicitAccountDenial } from './accountSessionRecovery';
+import { fetchAccountSession } from './accountAuth';
+import { fetchWithTimeout } from '../api/http';
 
 const SESSION_ID = 'abcdefghijklmnopqrstuvwx';
 const sharedKeyPairPromise = crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
@@ -218,6 +221,72 @@ test('30 天会话最后 15 分钟内反复调用 ensureFreshAccountAccess 与 r
     assert.deepEqual(requestedUrls, ['/api/auth/session']);
     assert.deepEqual(env.dispatchedEvents, []);
     assert.deepEqual(env.storageWrites, []);
+  } finally {
+    env.restore();
+  }
+});
+
+test('会话代际切换错误不会被误判为明确拒绝，且 fetchAccountSession 在途切换后自动衔接最新代际', async () => {
+  const superseded = createAccountSessionSupersededError('账户已变化，请重新验证');
+  assert.equal(isAccountSessionSupersededError(superseded), true);
+  assert.equal(isExplicitAccountDenial(superseded), false);
+
+  const env = await setupBrowserEnv();
+  try {
+    const now = Date.now();
+    let sessionCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/api/auth/providers')) {
+        // 模拟登录切换在 providers 请求在途发生，不应抛会话切换异常
+        forgetAccountAccess();
+        return new Response(JSON.stringify({ linuxdo: true, github: true, wechat: true, serverTime: now }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url.includes('/api/auth/session')) {
+        sessionCalls += 1;
+        if (sessionCalls === 1) {
+          // 首次读取在途时模拟登录完成导致会话代际推进
+          forgetAccountAccess();
+          return new Response(JSON.stringify({
+            authenticated: false,
+            account: null,
+            anonymousAllowed: false,
+            refreshAvailable: false,
+          }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({
+          authenticated: true,
+          account: {
+            id: 'acc_after_login',
+            email: 'user@example.com',
+            emailVerifiedAt: now,
+            hasPassword: true,
+            nickname: '测试用户',
+            identities: [],
+            createdAt: now,
+          },
+          session: {
+            sessionId: SESSION_ID,
+            deviceKeyId: env.deviceKeyId,
+            expiresAt: now + 3 * 86_400_000,
+            refreshExpiresAt: now + 30 * 86_400_000,
+            serverTime: now,
+          },
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const providersRes = await fetchWithTimeout('/api/auth/providers');
+    assert.equal(providersRes.status, 200);
+
+    const account = await fetchAccountSession();
+    assert.equal(account?.id, 'acc_after_login');
+    assert.equal(sessionCalls, 2);
+    assert.equal(await ensureFreshAccountAccess(), true);
   } finally {
     env.restore();
   }

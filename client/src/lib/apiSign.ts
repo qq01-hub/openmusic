@@ -1,11 +1,17 @@
 const PUBLIC_API_PATHS = new Set([
   '/api/health', '/api/app-version', '/api/site-announcement', '/api/site-seo',
-  '/api/session/bootstrap', '/api/auth/email/code', '/api/auth/email/register',
+  '/api/donations', '/api/session/bootstrap', '/api/auth/email/code', '/api/auth/email/register',
   '/api/auth/email/login', '/api/auth/logout', '/api/auth/delete', '/api/auth/session',
   '/api/auth/email/password-reset/code', '/api/auth/email/password-reset',
-  '/api/auth/providers', '/api/auth/wechat/account', '/api/auth/refresh',
+  '/api/auth/providers', '/api/auth/human-challenge', '/api/auth/wechat/account', '/api/auth/refresh',
   '/api/auth/device-login', '/api/auth/device-migrate', '/api/auth/wechat/start', '/api/auth/wechat/qr', '/api/auth/wechat/poll',
+  '/api/auth/github/start', '/api/auth/github/callback', '/api/auth/github/status',
+  '/api/auth/linuxdo/start', '/api/auth/linuxdo/callback', '/api/auth/linuxdo/status',
 ]);
+
+export function isPublicRoomCoverPath(pathname: string, method = 'GET'): boolean {
+  return method.toUpperCase() === 'GET' && /^\/api\/rooms\/[a-z0-9_-]{4,64}\/cover$/iu.test(pathname);
+}
 
 function isPublicCoverParsedUrl(parsed: URL, origin: string, method = 'GET'): boolean {
   return method.toUpperCase() === 'GET' && parsed.origin === origin && parsed.pathname === '/api/meting'
@@ -35,6 +41,7 @@ export function needsApiSign(url: string, method = 'GET'): boolean {
     if (isPublicCoverParsedUrl(parsed, origin, method)) return false;
     if (pathname.startsWith('/api/admin/') || pathname.startsWith('/api/setup/')) return false;
     if (pathname === '/api/rooms' && method.toUpperCase() === 'GET') return false;
+    if (isPublicRoomCoverPath(pathname, method)) return false;
     return true;
   } catch { return false; }
 }

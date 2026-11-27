@@ -122,8 +122,9 @@ function bindAccountSessionStorageListener() {
   window.addEventListener('storage', (event) => {
     if (isAccountTokenRevisionEvent(event)) { onTokenRefresh(); return; }
     if (!isAccountSessionRevisionEvent(event)) return;
-    void refreshSocketSession().finally(() => {
-      window.dispatchEvent(new Event('openmusic:account-session-changed'));
+    window.dispatchEvent(new Event('openmusic:account-session-changed'));
+    void fetchAccountSession().catch(() => null).finally(() => {
+      void refreshSocketSession();
     });
   });
 }

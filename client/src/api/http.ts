@@ -1,5 +1,6 @@
 import { createDeviceProof, setDeviceSession } from '../lib/deviceProof';
-import { isPublicCoverUrl, needsApiSign } from '../lib/apiSign';
+import { isPublicCoverUrl, isPublicRoomCoverPath, needsApiSign } from '../lib/apiSign';
+import { createAccountSessionSupersededError } from '../lib/accountSessionRecovery';
 import { ensureSessionBootstrap, isSessionBootstrapLoginRequired, resetSessionBootstrap } from '../lib/sessionBootstrap';
 import { ensureFreshAccountAccess, forgetAccountAccess, getAccountSessionGeneration, hasAnonymousAccess, refreshAccountAccess, runAccountSessionTask, setAnonymousAccess, updateAccountAccess, waitForAccountRefresh } from '../lib/accountAccessSession';
 import { detectSiteAccessBlockResponse, isSiteAccessBlocked, markSiteAccessBlocked, getSiteAccessBlockCode } from '../lib/siteAccessGate';
@@ -94,11 +95,12 @@ export async function fetchWithTimeout(
     if (['/api/auth/email/login', '/api/auth/email/register', '/api/auth/wechat/account'].includes(pathname) && method === 'POST' && !wechatBinding) { forgetAccountAccess(); setDeviceSession(''); }
     const generation = getAccountSessionGeneration();
     const assertCurrent = () => {
-      if (generation !== getAccountSessionGeneration()) throw new Error('账户已变化，请重新操作');
+      if (generation !== getAccountSessionGeneration()) throw createAccountSessionSupersededError('账户已变化，请重新操作');
       controller.signal.throwIfAborted();
     };
     if (pathname.startsWith('/api/auth/') && pathname !== '/api/auth/refresh' && !['GET', 'HEAD', 'OPTIONS'].includes(method)) await waitForAccountRefresh();
-    const businessRequest = sameOriginApi && !pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/admin/') && !pathname.startsWith('/api/setup/') && pathname !== '/api/session/bootstrap' && !(method === 'GET' && PUBLIC_GET_PATHS.has(pathname)) && !isPublicCoverUrl(url, method);
+    const sessionBoundAuthPath = pathname.startsWith('/api/auth/') && pathname !== '/api/auth/providers';
+    const businessRequest = sameOriginApi && !pathname.startsWith('/api/auth/') && !pathname.startsWith('/api/admin/') && !pathname.startsWith('/api/setup/') && pathname !== '/api/session/bootstrap' && !(method === 'GET' && PUBLIC_GET_PATHS.has(pathname)) && !isPublicRoomCoverPath(pathname, method) && !isPublicCoverUrl(url, method);
     if (businessRequest) {
       const fresh = await ensureFreshAccountAccess();
       assertCurrent();
@@ -134,14 +136,14 @@ export async function fetchWithTimeout(
       return headers;
     };
     const send = async () => {
-      if (businessRequest || pathname === '/api/auth/session' || pathname.startsWith('/api/auth/')) assertCurrent();
+      if (businessRequest || sessionBoundAuthPath) assertCurrent();
       const headers = await signedHeaders();
-      assertCurrent();
+      if (businessRequest || sessionBoundAuthPath) assertCurrent();
       return fetch(input, { ...initFinal, headers, signal: controller.signal });
     };
     const serializedAuth = pathname === '/api/auth/session' || (pathname.startsWith('/api/auth/') && pathname !== '/api/auth/refresh' && !['GET', 'HEAD', 'OPTIONS'].includes(method));
     let res = await (serializedAuth ? runAccountSessionTask(send) : send());
-    if (businessRequest || pathname.startsWith('/api/auth/')) assertCurrent();
+    if (businessRequest || sessionBoundAuthPath) assertCurrent();
     if (businessRequest && res.status === 401) {
       const data = await res.clone().json().catch(() => ({})) as { code?: string };
       assertCurrent();
