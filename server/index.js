@@ -415,6 +415,7 @@ async function clearRoomOwnerBindings(roomId) {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.join(__dirname, '../client/dist');
 const PORT = process.env.PORT || 4000;
+const HOST = (process.env.HOST || '').trim();
 const DISCONNECT_GRACE_MS = 30_000;
 const AUTO_ADVANCE_INTERVAL_MS = 500;
 const CLIENT_URL = (process.env.CLIENT_URL || '').replace(/\/$/, '');
@@ -452,11 +453,14 @@ if (IS_PRODUCTION && !(process.env.CLIENT_ID_SECRET || '').trim()) {
 }
 
 const app = express();
+app.disable('x-powered-by');
 // Forwarded IP headers are only trustworthy when the deployment explicitly
 // declares that a reverse proxy is in front of this process.
 const isTrustedProxyPeer = createProxyTrust({ enabled: TRUST_PROXY, trustedIps: TRUSTED_PROXY_IPS, normalizeIp: normalizeClientIp });
 app.set('trust proxy', isTrustedProxyPeer);
 const httpServer = createServer(app);
+httpServer.keepAliveTimeout = 65_000;
+httpServer.headersTimeout = 66_000;
 
 /** 本地调试 Origin（Flutter Web / Vite 等任意端口） */
 function isLocalDevOrigin(origin) {
@@ -4508,6 +4512,7 @@ app.get('/robots.txt', (req, res) => {
   const origin = resolveSiteOrigin(req, ALLOWED_ORIGINS, {
     canonicalEnv: runtime.seoCanonicalUrl || SITE_CANONICAL_URL,
   });
+  res.setHeader('Cache-Control', 'public, max-age=3600');
   res.type('text/plain; charset=utf-8').send(buildRobotsTxt(origin));
 });
 
@@ -4516,6 +4521,7 @@ app.get('/sitemap.xml', (req, res) => {
   const origin = resolveSiteOrigin(req, ALLOWED_ORIGINS, {
     canonicalEnv: runtime.seoCanonicalUrl || SITE_CANONICAL_URL,
   });
+  res.setHeader('Cache-Control', 'public, max-age=3600');
   res.type('application/xml; charset=utf-8').send(buildSitemapXml(origin));
 });
 
@@ -7997,15 +8003,21 @@ if (!isRedisEnabled()) {
   }
 }
 
-httpServer.listen(PORT, () => {
-  console.log(`🎵 OpenMusic 服务运行在 http://localhost:${PORT}`);
+const onServerListening = () => {
+  const bindHost = HOST || 'localhost';
+  console.log(`🎵 OpenMusic 服务运行在 http://${bindHost}:${PORT}`);
   console.log(`📡 Meting API: ${getMetingUpstreamBases().join(', ') || '未配置'}`);
   const customMusic = getCustomMusicApiStatus();
   console.log(`🔌 自定义音源接口: ${customMusic.configured ? `${customMusic.routes.length} 条路由` : '未配置'}`);
   console.log(`💾 持久化存储: ${isRedisEnabled() ? 'Redis' : '未连接（仅安装向导）'}`);
   startMetingHealthProbe();
   void accountDeletion.resumePending();
-});
+};
+if (HOST) {
+  httpServer.listen(PORT, HOST, onServerListening);
+} else {
+  httpServer.listen(PORT, onServerListening);
+}
 
 const accountDeletionRetryTimer = setInterval(() => { void accountDeletion.resumePending(); }, 60_000);
 accountDeletionRetryTimer.unref();

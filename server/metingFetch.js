@@ -1,5 +1,6 @@
 import https from 'node:https';
 import http from 'node:http';
+import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
 import { isBlockedMediaHostname } from './mediaProxy.js';
 
 const sharedHttpAgent = new http.Agent({
@@ -41,6 +42,38 @@ export function isAllowedMetingUrl(url) {
   }
 }
 
+function buildRequestHeaders(inputHeaders, method) {
+  const headers = { ...(inputHeaders || {}) };
+  if (String(method || 'GET').toUpperCase() === 'HEAD') return headers;
+  const hasAcceptEncoding = Object.keys(headers).some((name) => name.toLowerCase() === 'accept-encoding');
+  if (!hasAcceptEncoding) {
+    headers['Accept-Encoding'] = 'br, gzip, deflate';
+  }
+  return headers;
+}
+
+function parseContentEncodings(headerValue) {
+  const normalized = String(headerValue || '').trim().toLowerCase();
+  if (!normalized || normalized === 'identity') return [];
+  const tokens = normalized.split(',').map((item) => item.trim()).filter(Boolean).reverse();
+  const encodings = [];
+  for (const token of tokens) {
+    if (token === 'identity') continue;
+    if (token === 'gzip' || token === 'x-gzip' || token === 'br' || token === 'deflate') {
+      encodings.push(token);
+      continue;
+    }
+    return null;
+  }
+  return encodings;
+}
+
+function createDecompressStream(encoding) {
+  if (encoding === 'br') return createBrotliDecompress();
+  if (encoding === 'deflate') return createInflate();
+  return createGunzip();
+}
+
 function requestOnce(url, options = {}, timeoutMs = 10000) {
   const configuredLimit = Number(options.maxResponseBytes);
   const maxResponseBytes = Number.isSafeInteger(configuredLimit) && configuredLimit > 0 ? Math.min(configuredLimit, 16 * 1024 * 1024) : 16 * 1024 * 1024;
@@ -51,6 +84,8 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
     throw new Error('非本机 Meting 地址禁止使用 HTTP，请配置 HTTPS');
   }
   const transport = isHttps ? https : http;
+  const method = options.method || 'GET';
+  const requestHeaders = buildRequestHeaders(options.headers, method);
 
   return new Promise((resolve, reject) => {
     const signal = options.signal;
@@ -60,45 +95,128 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
       reject(error);
       return;
     }
+    let settled = false;
+    const settleReject = (error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const settleResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
     const req = transport.request({
       protocol: parsed.protocol,
       hostname: parsed.hostname,
       port: parsed.port || (isHttps ? 443 : 80),
       path: `${parsed.pathname}${parsed.search}`,
-      method: options.method || 'GET',
-      headers: options.headers || {},
+      method,
+      headers: requestHeaders,
       agent: isHttps ? sharedHttpsAgent : sharedHttpAgent,
     }, (res) => {
+      const statusCode = res.statusCode || 0;
+      const skipDecompress = statusCode === 204 || statusCode === 304 || String(method).toUpperCase() === 'HEAD';
+      const encodings = skipDecompress ? [] : parseContentEncodings(res.headers['content-encoding']);
+      const shouldDecompress = Array.isArray(encodings) && encodings.length > 0;
       const chunks = [];
-      let size = 0;
-      res.on('data', (chunk) => {
-        size += chunk.length;
-        if (size > maxResponseBytes) {
-          reject(new Error('Meting 响应过大'));
-          res.destroy();
-          req.destroy();
-          return;
+      let rawSize = 0;
+      let decodedSize = 0;
+      let decompressors = null;
+      let entryStream = null;
+
+      const failResponse = (error) => {
+        if (decompressors) {
+          for (const stream of decompressors) {
+            stream.destroy();
+          }
         }
-        chunks.push(chunk);
-      });
-      res.on('error', reject);
-      res.on('end', () => {
-        const body = Buffer.concat(chunks);
+        res.destroy();
+        req.destroy();
+        settleReject(error);
+      };
+
+      const finishResponse = (body, decompressed) => {
         const text = () => body.toString('utf8');
-        resolve({
-          ok: (res.statusCode || 0) >= 200 && (res.statusCode || 0) < 300,
-          status: res.statusCode || 0,
+        settleResolve({
+          ok: statusCode >= 200 && statusCode < 300,
+          status: statusCode,
           headers: {
-            get: (name) => res.headers[String(name).toLowerCase()] ?? null,
+            get: (name) => {
+              const lower = String(name).toLowerCase();
+              if (decompressed && lower === 'content-encoding') return null;
+              if (decompressed && lower === 'content-length') return String(body.length);
+              return res.headers[lower] ?? null;
+            },
           },
           text: async () => text(),
           json: async () => JSON.parse(text()),
           arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
         });
+      };
+
+      const ensureDecompressPipeline = () => {
+        if (entryStream) return entryStream;
+        decompressors = encodings.map((encoding) => createDecompressStream(encoding));
+        for (let index = 0; index < decompressors.length; index += 1) {
+          decompressors[index].on('error', failResponse);
+          if (index > 0) {
+            decompressors[index - 1].pipe(decompressors[index]);
+          }
+        }
+        const outputStream = decompressors[decompressors.length - 1];
+        outputStream.on('data', (decodedChunk) => {
+          decodedSize += decodedChunk.length;
+          if (decodedSize > maxResponseBytes) {
+            failResponse(new Error('Meting 响应过大'));
+            return;
+          }
+          chunks.push(decodedChunk);
+        });
+        outputStream.on('end', () => {
+          finishResponse(Buffer.concat(chunks), true);
+        });
+        entryStream = decompressors[0];
+        return entryStream;
+      };
+
+      res.on('data', (chunk) => {
+        if (settled) return;
+        rawSize += chunk.length;
+        if (rawSize > maxResponseBytes) {
+          failResponse(new Error('Meting 响应过大'));
+          return;
+        }
+        if (!shouldDecompress) {
+          chunks.push(chunk);
+          return;
+        }
+        if (chunk.length === 0) return;
+        const inputStream = ensureDecompressPipeline();
+        if (!inputStream.write(chunk)) {
+          res.pause();
+          inputStream.once('drain', () => {
+            if (!settled) res.resume();
+          });
+        }
+      });
+      res.on('error', failResponse);
+      res.on('end', () => {
+        if (settled) return;
+        if (!shouldDecompress || !entryStream) {
+          finishResponse(Buffer.concat(chunks), false);
+          return;
+        }
+        entryStream.end();
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (error) => {
+      if (error && typeof error === 'object' && req.reusedSocket) {
+        error.reusedSocket = true;
+      }
+      settleReject(error);
+    });
     const abortRequest = () => {
       const error = new Error('请求已取消');
       error.name = 'AbortError';
@@ -122,7 +240,17 @@ function requestOnce(url, options = {}, timeoutMs = 10000) {
 }
 
 export async function fetchMeting(url, options = {}, timeoutMs = 10000) {
-  return requestOnce(url, options, timeoutMs);
+  const method = String(options.method || 'GET').toUpperCase();
+  const canRetryStaleSocket = (method === 'GET' || method === 'HEAD') && !options.signal?.aborted;
+  try {
+    return await requestOnce(url, options, timeoutMs);
+  } catch (error) {
+    const isStaleSocketReset = Boolean(error?.reusedSocket) && (error?.code === 'ECONNRESET' || error?.code === 'EPIPE');
+    if (!canRetryStaleSocket || !isStaleSocketReset || options.signal?.aborted) {
+      throw error;
+    }
+    return requestOnce(url, options, timeoutMs);
+  }
 }
 
 export function formatMetingFetchError(err) {
