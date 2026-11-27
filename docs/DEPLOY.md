@@ -33,7 +33,7 @@
 
 ### 方式一：Docker 一键脚本（推荐）
 
-在 Linux 服务器执行，安装器负责生成配置、等待容器健康并配对 Meting Token
+在 Linux 服务器执行，全程只需按 `Y/N` 确认，安装器自动完成 Docker 安装/启动、空闲端口与子网避让、随机密钥生成、容器健康等待、Meting Token 配对与 Nginx 配置模板生成
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh -o install.sh && bash install.sh
@@ -41,10 +41,11 @@ curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh 
 
 - 新部署默认位于 `/opt/openmusic`，可用 `OPENMUSIC_DEPLOY_DIR=/srv/openmusic bash install.sh` 指定目录
 - 已有部署在原目录运行并保留原项目名、端口、Compose 文件、密钥和数据，更新前先备份
-- Docker 已就绪时，可用 `OPENMUSIC_AUTO_YES=1 bash install.sh` 按默认选项运行，组合 `OPENMUSIC_ENABLE_LOUDNESS=y` 可启用响度均衡
-- 在本地电脑按输出建立 SSH 隧道，打开 `http://localhost:4000/setup` 并确认预填配置，端口以实际输出为准
-- 有正式域名时先配好 HTTPS，再通过该域名打开向导，可直接使用预填的站点地址
-- Docker 缺失时可按 `Y/N` 选择安装，Docker 官方提供了正式环境的软件源安装步骤：[Docker Engine 安装指南](https://docs.docker.com/engine/install/)
+- 支持全无人值守：`OPENMUSIC_AUTO_YES=1 bash install.sh` 按安全默认选项自动运行，组合 `OPENMUSIC_ENABLE_LOUDNESS=y` 可启用响度均衡
+- 首次部署可按 `Y/N` 选择是否直接监听公网端口（无域名快速用 IP 体验选 `y`，有域名配 Nginx 反代选默认 `N` 仅监听本机回环；Meting 管理后台始终锁定 `127.0.0.1`）
+- 部署完成后会自动生成已填入实际端口的反代模板 `nginx-openmusic-docker.conf`，上线 HTTPS 时直接复用，并按脚本末尾给出的一行命令切换 `ALLOW_INSECURE_COOKIES=0`
+- 默认回环模式下在本地电脑执行脚本给出的 SSH 隧道命令，打开 `http://localhost:4000/setup` 并确认预填配置（端口以实际输出为准）
+- Docker 缺失或未启动时直接回车即可自动安装并拉起服务，手动安装可参考：[Docker Engine 安装指南](https://docs.docker.com/engine/install/)
 
 ### 方式二：Docker 手动 Compose
 
@@ -112,9 +113,11 @@ Meting 管理后台仅绑定服务器的 `127.0.0.1:${METING_PORT:-3000}`，路�
 
 ```bash
 git clone https://github.com/qq01-hub/openmusic.git && cd openmusic
-# 自动构建并用 PM2 托管主服务与升级服务
+# 自动检测/安装 Node.js 与可选本机 Redis、构建前端、PM2 托管并等待健康检查通过
 bash deploy/deploy.sh source
 ```
+
+完成后会自动在项目根目录生成填入当前路径与端口的 `nginx-openmusic-source.conf`，替换域名并配置证书即可直接上线
 
 手动构建时，在仓库目录执行
 
@@ -313,7 +316,7 @@ done
 ### Docker 镜像上线 HTTPS
 
 1. 将域名解析到你的入口，在 Nginx 或宝塔申请证书并启用 HTTPS
-2. 在 HTTPS 站点转发到安装器打印的宿主机端口，按以下示例填写 `server` 块内的反向代理
+2. 直接复用安装器自动生成的 `nginx-openmusic-docker.conf`（已填入实际端口），或按以下示例在 HTTPS 站点 `server` 块内配置反向代理
 3. 已通过隧道完成向导时核对 `data/.env` 的 `CLIENT_URL` 为正式 HTTPS 域名，在部署目录的 `.env` 中设置 `ALLOW_INSECURE_COOKIES=0`，再用原 Compose 参数重建 OpenMusic
 
 ```nginx
@@ -359,7 +362,7 @@ curl -fsS https://music.example.com/api/health
 4. **上传大小与版本探测**：设置 `client_max_body_size 20m;` 避免封面/图片上传被默认 1MB 截断；`/version.json` 必须设为 `no-cache, must-revalidate`
 5. **真实 IP 透传**：前置接入 CDN 时透传对应 `CLIENT_IP_HEADER`，并限制源站仅信任来自 CDN 的回源流量或校验自定义回源密钥头
 
-### CDN / EdgeOne 边缘缓存速查
+### CDN 与 EdgeOne 边缘缓存速查
 
 若在 Nginx 前方接入 EdgeOne / Cloudflare 等 CDN，建议按以下策略配置（避免误缓存动态接口或锁死旧资源）：
 

@@ -98,6 +98,9 @@ export -f docker curl ip
         assert.ok(calls.includes('exec -T openmusic node -e'));
         assert.ok(calls.includes('exec -T openmusic node configureMeting.js'));
         assert.ok(calls.includes('restart openmusic'));
+        const generatedNginx = readFileSync(join(fixtureDirectory, 'nginx-openmusic-docker.conf'), 'utf8');
+        assert.ok(generatedNginx.includes('proxy_pass http://127.0.0.1:'));
+        assert.ok(generatedNginx.includes('location ^~ /api/media-proxy'));
         assert.equal(calls.includes('meting-api-audio-loudness:3100/healthz'), scenario.loudness === 'y');
         assert.equal(calls.includes('docker-compose.loudness.yml'), scenario.loudness === 'y');
         if (scenario.repair) {

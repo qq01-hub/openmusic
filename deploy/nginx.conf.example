@@ -9,6 +9,12 @@
 #
 # 若前置接入 EdgeOne / Cloudflare 等 CDN，请限制源站仅接受 CDN 回源或校验自定义回源密钥头，
 # 防止公网绕过 CDN 直连 Nginx 伪造 EO-Connecting-IP / CF-Connecting-IP
+# 示例（置于 http {} 或独立 snippet）：
+#   map $http_x_eo_origin_auth $openmusic_trusted_eo_ip {
+#       default "";
+#       "替换为高强度随机密钥" $http_eo_connecting_ip;
+#   }
+# 并在下方将 EO-Connecting-IP 改为 $openmusic_trusted_eo_ip
 # 完整宝塔面板版见 deploy/nginx.baota-optimized.conf.example
 
 upstream openmusic_backend {
@@ -16,6 +22,11 @@ upstream openmusic_backend {
     keepalive 32;
     # 略小于 OpenMusic Node 的 keepAliveTimeout（65s），避免空闲长连接竞态断开
     keepalive_timeout 60s;
+}
+
+map $http_upgrade $openmusic_connection_upgrade {
+    default upgrade;
+    ''      '';
 }
 
 server {
@@ -78,7 +89,7 @@ server {
         proxy_pass http://openmusic_backend/socket.io/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection $openmusic_connection_upgrade;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;

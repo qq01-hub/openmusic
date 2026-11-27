@@ -10,8 +10,8 @@ curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh 
 ```
 
 1. 已有站点时，先备份并将示例中的 `/www/openmusic` 替换为原 Compose 目录，保留原项目名
-2. OpenMusic、Redis、Meting 和 API Token 由脚本自动准备，从本地电脑按脚本输出建立 SSH 隧道，即可打开安装向导
-3. 正式上线时在宝塔添加网站并配置 SSL，将网站反向代理到安装器显示的端口：[Docker 镜像上线 HTTPS](../docs/DEPLOY.md#docker-镜像上线-https)
+2. OpenMusic、Redis、Meting 与 API Token 全程自动准备；支持按 `Y/N` 选择仅监听本机（推荐，配合隧道或 Nginx）或直接监听公网端口快速体验
+3. 正式上线时在宝塔添加网站并配置 SSL，直接复用安装器生成的 `/www/openmusic/nginx-openmusic-docker.conf`（已自动填入实际端口），详见：[Docker 镜像上线 HTTPS](../docs/DEPLOY.md#docker-镜像上线-https)
 
 已有外部音源或需要自定义 Compose 时，直接使用仓库的标准文件并按手动部署流程准备持久化文件：[Docker 手动 Compose](../docs/DEPLOY.md#方式二docker-手动-compose)
 
@@ -83,7 +83,7 @@ pm2 restart openmusic --update-env
 
 ### 音域回响提示 Origin null / CORS 错误
 
-沉浸模式的音域回响在 `sandbox="allow-scripts"` iframe 中运行，资源请求的 Origin 为 `null`。
+沉浸模式的音域回响在 `sandbox="allow-scripts"` iframe 中运行，资源请求的 Origin 为 `null`
 Node 和部署向导推荐配置已提供所需响应头；Nginx 静态直出不会经过 Node，因此旧站点也需要在实际使用的 `server` 块中补上以下规则（已有同名 location 时更新它，不要重复添加）：
 
 ```nginx
@@ -98,13 +98,13 @@ location ^~ /vendor/sonic-workshop/ {
 }
 ```
 
-该规则复用站点指向 `client/dist` 的 `root`，比 `/vendor/` 更长的前缀会优先匹配。
-仅对这个公开资源目录设置响应头，不要扩展到 API，也不要添加 `Access-Control-Allow-Credentials` 或移除 iframe 沙箱。
+该规则复用站点指向 `client/dist` 的 `root`，比 `/vendor/` 更长的前缀会优先匹配
+仅对这个公开资源目录设置响应头，不要扩展到 API，也不要添加 `Access-Control-Allow-Credentials` 或移除 iframe 沙箱
 
-上线：备份当前站点配置，执行 `nginx -t && nginx -s reload`，无需重启 Node、迁移数据或重新构建前端。
-若启用了 CDN，刷新 `/vendor/sonic-workshop/` 目录缓存并确认 CDN 保留此响应头；浏览器禁用缓存后刷新页面。
-验收时对控制台实际报错的 JS 和 CSS URL 分别执行 `curl -I -H 'Origin: null' 'https://你的域名/实际资源路径'`，确认状态为 200 且包含 `Access-Control-Allow-Origin: null`，再进入音域回响确认场景显示且无 CORS 报错。
-若重载后静态资源出现异常，恢复备份配置，重新检查并重载 Nginx；恢复后本 CORS 问题可能再次出现。
+上线：备份当前站点配置，执行 `nginx -t && nginx -s reload`，无需重启 Node、迁移数据或重新构建前端
+若启用了 CDN，刷新 `/vendor/sonic-workshop/` 目录缓存并确认 CDN 保留此响应头，浏览器禁用缓存后刷新页面
+验收时对控制台实际报错的 JS 和 CSS URL 分别执行 `curl -I -H 'Origin: null' 'https://你的域名/实际资源路径'`，确认状态为 200 且包含 `Access-Control-Allow-Origin: null`，再进入音域回响确认场景显示且无 CORS 报错
+若重载后静态资源出现异常，恢复备份配置，重新检查并重载 Nginx；恢复后本 CORS 问题可能再次出现
 
 ---
 

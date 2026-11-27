@@ -4,6 +4,7 @@ const DEFAULT_APP_ROOT = '/www/openmusic';
 
 const NGINX_LOCATIONS = String.raw`# 静态 Nginx 直出，动态回 Node（把下面的 location 放进站点 server 块）
 # 前端目录：__APP_ROOT__/client/dist   后端：127.0.0.1:4000
+# ★ 建议在 server 块同时配置：client_max_body_size 20m; 与 proxy_hide_header 去重安全头
 # ★ 删掉原来的 location / { proxy_pass 4000; }，改成末尾的动态路由 + 404 回退
 # 保存后执行：nginx -t && nginx -s reload
 
@@ -52,6 +53,7 @@ location ^~ /api/ {
     proxy_cache off;
     proxy_pass http://127.0.0.1:4000;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -67,6 +69,7 @@ location ^~ /api/ {
 location ^~ /downloads/ {
     proxy_pass http://127.0.0.1:4000;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -81,6 +84,7 @@ location ^~ /downloads/ {
 location ^~ /wx-proxy {
     proxy_pass http://127.0.0.1:4000;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -93,6 +97,7 @@ location ^~ /wx-proxy {
 location ^~ /cgi-bin/ {
     proxy_pass http://127.0.0.1:4000;
     proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -104,6 +109,8 @@ location ^~ /cgi-bin/ {
 
 location = /robots.txt {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -115,6 +122,8 @@ location = /robots.txt {
 
 location = /sitemap.xml {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -127,6 +136,8 @@ location = /sitemap.xml {
 # 首页 HTML 走 Node，保证百度验证 meta 出现在源码里（格式与平台一致）
 location = / {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -138,6 +149,8 @@ location = / {
 
 location = /index.html {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -150,6 +163,8 @@ location = /index.html {
 # 动态会话页由 Node 返回 X-Robots-Tag: noindex，避免被收录
 location ^~ /room/ {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -161,6 +176,8 @@ location ^~ /room/ {
 
 location ^~ /tv/ {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -173,6 +190,8 @@ location ^~ /tv/ {
 # /admin 与自定义后台入口由 Node 校验；随机后台路径经下方 @openmusic_not_found 进入 Node 并返回 200
 location = /admin {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -274,6 +293,8 @@ location / {
 
 location @openmusic_not_found {
     proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
     proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;

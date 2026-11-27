@@ -124,7 +124,7 @@ if ! command -v curl &> /dev/null; then
 fi
 
 if ! command -v docker &> /dev/null; then
-    if ask_yes_no "未检测到 Docker，是否以管理员权限运行 Docker 官方安装脚本？[y/N]" "N"; then
+    if ask_yes_no "未检测到 Docker，是否自动安装 Docker（需管理员权限）？[Y/n]" "Y"; then
         echo "正在自动安装 Docker..."
         docker_installer="$(mktemp)"
         trap 'rm -f "$docker_installer"' EXIT
@@ -152,7 +152,7 @@ if ! docker compose version &> /dev/null; then
 fi
 
 if ! docker info > /dev/null 2>&1; then
-    if is_real_cmd docker && ask_yes_no "Docker 引擎不可访问，是否尝试启动本机 Docker 服务？[y/N]" "N"; then
+    if is_real_cmd docker && ask_yes_no "Docker 服务未运行，是否自动启动本机 Docker？[Y/n]" "Y"; then
         echo "检测到 Docker 服务未运行，正在尝试自动启动..."
         if command -v systemctl &> /dev/null; then
             run_privileged systemctl enable --now docker >/dev/null 2>&1 || true
@@ -177,7 +177,7 @@ if [ -z "$enable_loudness" ]; then
     if [ -f "$LOUDNESS_COMPOSE_FILE" ]; then
         enable_loudness=y
     else
-        if ask_yes_no "是否启用响度均衡服务（额外占用内存）？[y/N]" "N"; then
+        if ask_yes_no "是否启用跨平台响度均衡服务（统一各平台音量，额外占用约 200MB~1GB 内存）？[y/N]" "N"; then
             enable_loudness=y
         else
             enable_loudness=N
@@ -213,6 +213,89 @@ read_env_value() {
         value="$(awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); gsub(/\r$/, ""); print; exit }' "$ENV_FILE" || true)"
     fi
     printf '%s' "${value:-$fallback}"
+}
+
+write_docker_nginx_snippet() {
+    local app_port="$1"
+    local target_file="${DEPLOY_DIR}/nginx-openmusic-docker.conf"
+    cat > "$target_file" << EOF
+# OpenMusic Docker 反代示例（由 install.sh 自动生成，已填入当前端口 ${app_port}）
+# 使用步骤：
+#   1. 将下方 music.example.com 替换为你的域名，并配置对应 SSL 证书路径
+#   2. 如同一套 Nginx 已有同名 map，请只保留一份 map 块
+#   3. 保存后执行：nginx -t && nginx -s reload
+#   4. 在 ${DEPLOY_DIR}/data/.env 中核对 CLIENT_URL=https://你的域名、TRUST_PROXY=1、TRUSTED_PROXY_IPS=127.0.0.1,::1
+
+map \$http_upgrade \$openmusic_connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+
+server {
+    listen 80;
+    server_name music.example.com;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name music.example.com;
+    server_tokens off;
+    client_max_body_size 20m;
+
+    ssl_certificate     /etc/letsencrypt/live/music.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/music.example.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Referrer-Policy;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+    location ^~ /api/media-proxy {
+        proxy_pass http://127.0.0.1:${app_port};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header EO-Connecting-IP \$http_eo_connecting_ip;
+        proxy_set_header CF-Connecting-IP \$http_cf_connecting_ip;
+        proxy_set_header Range \$http_range;
+        proxy_set_header If-Range \$http_if_range;
+        proxy_cache off;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_max_temp_file_size 0;
+        proxy_force_ranges on;
+        gzip off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:${app_port};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \$openmusic_connection_upgrade;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_set_header EO-Connecting-IP \$http_eo_connecting_ip;
+        proxy_set_header CF-Connecting-IP \$http_cf_connecting_ip;
+        proxy_cache off;
+        proxy_buffering off;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+}
+EOF
 }
 
 echo "正在下载配置文件..."
@@ -260,10 +343,18 @@ if [ ! -f "$ENV_FILE" ]; then
     METING_PASSWORD="$(random_hex 16)"
     METING_USERNAME="admin"
     ENCRYPTION_KEY="$(generate_key)"
+    BIND_ADDRESS="${OPENMUSIC_BIND_ADDRESS:-}"
+    if [ -z "$BIND_ADDRESS" ]; then
+        if ask_yes_no "是否直接监听公网端口以便通过服务器 IP 打开向导（有域名配 Nginx 反代建议选 N，仅听本机）？[y/N]" "N"; then
+            BIND_ADDRESS="0.0.0.0"
+        else
+            BIND_ADDRESS="127.0.0.1"
+        fi
+    fi
 
     (umask 077 && cat > "$ENV_FILE") << EOF
 OPENMUSIC_PORT=$OPENMUSIC_PORT
-OPENMUSIC_BIND_ADDRESS=${OPENMUSIC_BIND_ADDRESS:-127.0.0.1}
+OPENMUSIC_BIND_ADDRESS=$BIND_ADDRESS
 METING_PORT=$METING_PORT
 OPENMUSIC_NETWORK_SUBNET=${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
 ALLOW_INSECURE_COOKIES=${ALLOW_INSECURE_COOKIES:-1}
@@ -316,7 +407,11 @@ compose_up_args=(-d --wait --wait-timeout 180)
 if [ "$config_files_repaired" -eq 1 ]; then
     compose_up_args+=(--force-recreate)
 fi
-if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull && docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_args[@]}"; then
+if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull; then
+    echo "错误: 镜像拉取失败，如当前网络访问 Docker Hub / GHCR 受限，请配置镜像加速后重新运行脚本（已有 .env 与数据会自动保留）" >&2
+    exit 1
+fi
+if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_args[@]}"; then
     echo "正在自动配置 Meting API Token..."
     if ! docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T meting node -e 'const fs = require("node:fs"); const path = require("node:path"); const file = path.join(process.env.DATA_DIR || "/app/data", "api_tokens.json"); const tokens = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; const token = Object.values(tokens).find(t => t.name === "OpenMusic joint deployment" && t.token && (!t.permissions || t.permissions.length === 0)); process.stdout.write(JSON.stringify({token: token?.token || "", username: process.env.ADMIN_USERNAME, password: process.env.ADMIN_PASSWORD}));' |
         docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" exec -T openmusic node configureMeting.js; then
@@ -342,16 +437,29 @@ if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" pull && docker co
     actual_meting_port="${meting_endpoint##*:}"
     actual_openmusic_port="${actual_openmusic_port:-$(read_env_value OPENMUSIC_PORT 4000)}"
     actual_meting_port="${actual_meting_port:-$(read_env_value METING_PORT 3000)}"
+    actual_bind_address="$(read_env_value OPENMUSIC_BIND_ADDRESS 127.0.0.1)"
+    actual_insecure_cookies="$(read_env_value ALLOW_INSECURE_COOKIES 1)"
+    write_docker_nginx_snippet "$actual_openmusic_port"
     echo ""
     echo "========================================"
     echo "  部署成功！"
     echo "========================================"
     echo ""
-    echo "在本地电脑用原 SSH 账号和端口建立隧道"
-    echo "  ssh -N -L ${actual_openmusic_port}:127.0.0.1:${actual_openmusic_port} -L ${actual_meting_port}:127.0.0.1:${actual_meting_port} user@server"
-    echo "打开 http://localhost:${actual_openmusic_port}/setup，使用预填配置完成初始化并保存管理员凭据"
+    if [ "$actual_bind_address" = "0.0.0.0" ] || [ "$actual_bind_address" = "::" ]; then
+        echo "1. 浏览器直接打开 http://<你的服务器IP>:${actual_openmusic_port}/setup 完成首次部署向导（需确保防火墙已放行 ${actual_openmusic_port}/tcp）"
+        echo "2. Meting 管理后台仍仅绑定本机回环，远程访问请在本地电脑执行 SSH 隧道："
+        echo "   ssh -N -L ${actual_meting_port}:127.0.0.1:${actual_meting_port} user@server"
+    else
+        echo "1. 在本地电脑用原 SSH 账号和端口建立隧道："
+        echo "   ssh -N -L ${actual_openmusic_port}:127.0.0.1:${actual_openmusic_port} -L ${actual_meting_port}:127.0.0.1:${actual_meting_port} user@server"
+        echo "2. 浏览器打开 http://localhost:${actual_openmusic_port}/setup，确认预填配置并保存管理员凭据"
+    fi
     echo "Meting 管理后台的入口和初始凭据保存在 ${DEPLOY_DIR}/${ENV_FILE}"
-    echo "正式上线时请使用 HTTPS 域名，详见项目部署文档"
+    echo "已自动生成开箱即用的 Nginx HTTPS 反代示例：${DEPLOY_DIR}/nginx-openmusic-docker.conf"
+    if [ "$actual_insecure_cookies" != "0" ]; then
+        echo "正式上线 HTTPS 后，执行以下一行命令收紧 Cookie 安全属性："
+        echo "  cd \"$DEPLOY_DIR\" && sed -i 's/^ALLOW_INSECURE_COOKIES=.*/ALLOW_INSECURE_COOKIES=0/' $ENV_FILE && docker compose --env-file $ENV_FILE ${COMPOSE_FILES[*]} up -d --force-recreate --wait openmusic"
+    fi
     echo ""
     echo "常用命令:"
     echo "  先进入部署目录: cd \"$DEPLOY_DIR\""

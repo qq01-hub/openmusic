@@ -1,4 +1,4 @@
-# 响度增强覆盖：与 docker-compose.full.yml 一起使用。
+# 响度增强覆盖：与 docker-compose.full.yml 一起使用
 
 services:
   loudness:

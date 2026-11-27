@@ -4,6 +4,8 @@
 # 请按实际域名与部署路径替换 music.example.com、/www/openmusic
 # 保存后执行：nginx -t && nginx -s reload
 #
+# 若前置接入 EdgeOne / Cloudflare 等 CDN，建议限制源站仅接受 CDN 回源或在回源规则注入自定义密钥头，
+# 再通过 map 仅在密钥匹配时透传 EO-Connecting-IP / CF-Connecting-IP，防止公网直连伪造真实 IP
 # 精简通用版见 deploy/nginx.conf.example
 
 upstream openmusic_backend {
