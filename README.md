@@ -275,7 +275,6 @@ npm run package:build # 交互式组装发布包
 
 欢迎加入 OpenMusic QQ 交流群反馈建议和交流部署经验，也可以请作者喝杯咖啡支持持续维护
 
-<div align="center">
 <table>
   <tr>
     <th align="center" width="220">QQ 交流群</th>
@@ -294,7 +293,6 @@ npm run package:build # 交互式组装发布包
     </td>
   </tr>
 </table>
-</div>
 
 ---
 
