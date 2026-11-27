@@ -28,15 +28,6 @@
 
 </div>
 
-<table>
-  <tr>
-    <td align="center" width="25%"><b>🎧 四源聚合同步</b><br/><sub>网易 / QQ / 汽水 / 酷狗<br/>毫秒级多人同步播放</sub></td>
-    <td align="center" width="25%"><b>🤖 AI 识图控播</b><br/><sub>自然语言点歌查队<br/>内置 7 入口免费联网</sub></td>
-    <td align="center" width="25%"><b>🚀 一行命令部署</b><br/><sub>自动避端口与配 Token<br/>后台热更新免改配置</sub></td>
-    <td align="center" width="25%"><b>📱 全端沉浸体验</b><br/><sub>3D 星河与舞台歌词<br/>Web / Android / Windows</sub></td>
-  </tr>
-</table>
-
 ---
 
 <a id="preview"></a>
@@ -74,14 +65,12 @@
 curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh -o install.sh && bash install.sh
 ```
 
-<table>
-  <tr>
-    <td width="25%" valign="top"><b>1. 自动装环境</b><br/><sub>缺失 Docker 或未启动时直接回车即可自动安装并拉起</sub></td>
-    <td width="25%" valign="top"><b>2. 自动避冲突</b><br/><sub>4000 / 3000 端口与默认子网被占用时自动顺延切换</sub></td>
-    <td width="25%" valign="top"><b>3. 自动配音源</b><br/><sub>生成 600 权限随机密钥，启动全家桶并自动配对 Meting Token</sub></td>
-    <td width="25%" valign="top"><b>4. 自动备反代</b><br/><sub>容器健康体检通过后自动生成填好端口的 Nginx HTTPS 模板</sub></td>
-  </tr>
-</table>
+**脚本自动完成：**
+
+- **自动装环境**：缺失 Docker 或未启动时直接回车即可自动安装并拉起
+- **自动避冲突**：`4000` / `3000` 端口或默认子网被占用时自动顺延切换
+- **自动配音源**：生成 `600` 权限随机密钥，启动 OpenMusic + Redis + Meting 并自动配对 Token
+- **自动备反代**：容器健康体检通过后自动生成填好端口的 `nginx-openmusic-docker.conf`
 
 **部署后极简三步：**
 
@@ -203,22 +192,11 @@ flowchart LR
 | **忘记随机入口** | 查看 `server/adminConfig.json`（Docker 为 `data/adminConfig.json`）中的 `entryPath` |
 | **本机快捷入口** | 浏览器访问过真实入口后会在 `localStorage` 记录路径，首页顶栏显示仅本机可见的盾牌图标 |
 
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <b>⚙️ 运行时配置（热更新）</b><br/>
-      音源与 Meting、SVIP 音质、共享会员池、OAuth / 扫码登录、注册邮箱 SMTP、七牛 OSS、SEO 等在线保存即生效
-    </td>
-    <td width="33%" valign="top">
-      <b>🤖 AI 模型管理</b><br/>
-      全局开关、机器人名称、OpenAI 兼容文本 / 视觉模型池、限流阈值与连通性测试（API Key 服务端加密保存）
-    </td>
-    <td width="33%" valign="top">
-      <b>🔒 房间与安全治理</b><br/>
-      房间搜索 / 解散 / 常驻审核、违规昵称重置、全站 IP / 设备封禁、账户风控、全局广播、操作审计与在线升级
-    </td>
-  </tr>
-</table>
+| 管理模块 | 核心能力 |
+|------|------|
+| **⚙️ 运行时配置（热更新）** | 音源与 Meting、SVIP 音质、共享会员池、OAuth / 扫码登录、注册邮箱 SMTP、七牛 OSS、SEO 等在线保存即生效 |
+| **🤖 AI 模型管理** | 全局开关、机器人名称、OpenAI 兼容文本 / 视觉模型池、限流阈值与连通性测试（API Key 服务端加密保存） |
+| **🔒 房间与安全治理** | 房间搜索 / 解散 / 常驻审核、违规昵称重置、全站 IP / 设备封禁、账户风控、全局广播、操作审计与在线升级 |
 
 > **OAuth 回调提示**：在管理后台「运行时配置 → 身份登录」启用 Linux.do（`https://你的域名/api/auth/linuxdo/callback`）或 GitHub（`https://你的域名/api/auth/github/callback`）时，请确保第三方应用与本站填写的 `redirect_uri` 协议、域名与路径完全一致
 
