@@ -7,20 +7,12 @@
 网易云 / QQ / 汽水 / 酷狗 · 实时同步播放 · AI 助手 · Web / Android / Windows
 
 <p>
-  <a href="https://github.com/qq01-hub/openmusic/releases">
-    <img src="https://img.shields.io/github/v/release/qq01-hub/openmusic?style=flat-square&color=5b6ef5&label=Release" alt="Release" />
-  </a>
-  <a href="https://github.com/qq01-hub/openmusic/stargazers">
-    <img src="https://img.shields.io/github/stars/qq01-hub/openmusic?style=flat-square&color=f59e0b&label=Stars" alt="Stars" />
-  </a>
-  <a href="https://hub.docker.com/r/w3126197382/openmusic">
-    <img src="https://img.shields.io/docker/pulls/w3126197382/openmusic?style=flat-square&color=2496ed&logo=docker&logoColor=white&label=Docker%20Pulls" alt="Docker Pulls" />
-  </a>
+  <img src="https://img.shields.io/github/v/release/qq01-hub/openmusic?style=flat-square&color=5b6ef5&label=Release" alt="Release" />
+  <img src="https://img.shields.io/github/stars/qq01-hub/openmusic?style=flat-square&color=f59e0b&label=Stars" alt="Stars" />
+  <img src="https://img.shields.io/docker/pulls/w3126197382/openmusic?style=flat-square&color=2496ed&logo=docker&logoColor=white&label=Docker%20Pulls" alt="Docker Pulls" />
   <img src="https://img.shields.io/badge/Node.js-%3E%3D20%20%3C25-339933?style=flat-square&logo=node.js&logoColor=white" alt="Node.js >=20 <25" />
   <img src="https://img.shields.io/badge/Deploy-Docker%20%7C%20%E5%AE%9D%E5%A1%94%20%7C%20PM2-ff6b6b?style=flat-square" alt="Deploy" />
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/License-MIT%20with%20Attribution-0ea5e9?style=flat-square" alt="License" />
-  </a>
+  <img src="https://img.shields.io/badge/License-MIT%20with%20Attribution-0ea5e9?style=flat-square" alt="License" />
 </p>
 
 <p>
@@ -43,20 +35,16 @@
 ## 📸 界面预览
 
 <p align="center">
-  <a href="docs/screenshots/room.png">
-    <img src="docs/screenshots/room.png" alt="房间点歌主界面" width="92%" />
-  </a>
+  <a href="docs/screenshots/home.png"><img src="docs/screenshots/home.png" alt="首页大厅" width="92%" /></a>
   <br/>
-  <sub><b>房间点歌主界面</b> — 同步播放 · 实时歌词 · 队列互动 · 聊天与 AI 助手</sub>
+  <sub><b>首页大厅</b> — 公开房 · 随机匹配 · 最近访问 · 热歌发现</sub>
 </p>
 
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="docs/screenshots/home.png">
-        <img src="docs/screenshots/home.png" alt="首页大厅" width="100%" />
-      </a>
-      <br/><sub><b>首页大厅</b> — 公开房 · 随机匹配 · 最近访问 · 热歌发现</sub>
+      <a href="docs/screenshots/room.png"><img src="docs/screenshots/room.png" alt="房间点歌主界面" width="100%" /></a>
+      <br/><sub><b>房间点歌主界面</b> — 同步播放 · 实时歌词 · 队列互动 · 聊天与 AI 助手</sub>
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/admin.png">
