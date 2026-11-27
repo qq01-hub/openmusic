@@ -288,27 +288,29 @@ npm run package:build # 交互式组装发布包
 
 ## 👥 交流群 & ☕ 支持项目
 
-欢迎加入 OpenMusic QQ 交流群反馈建议或交流部署经验；如果 OpenMusic 对你有帮助，也欢迎请作者喝一杯咖啡支持持续维护
+欢迎加入 OpenMusic QQ 交流群反馈建议和交流部署经验，也可以请作者喝杯咖啡支持持续维护
 
 <table>
   <tr>
-    <td align="center" width="34%" valign="top">
+    <th align="center">QQ 交流群</th>
+    <th align="center">微信赞赏</th>
+    <th align="center">支付宝赞赏</th>
+  </tr>
+  <tr>
+    <td align="center" valign="top">
       <a href="docs/community/qq.jpg">
-        <img src="docs/community/qq.jpg" alt="OpenMusic QQ 交流群二维码" width="240" />
+        <img src="docs/community/qq.jpg" alt="OpenMusic QQ 交流群二维码" width="160" />
       </a>
-      <br/><sub><b>QQ 交流群</b></sub>
     </td>
-    <td align="center" width="33%" valign="top">
+    <td align="center" valign="top">
       <a href="docs/donate/wechat.png">
-        <img src="docs/donate/wechat.png" alt="微信赞赏码" width="240" />
+        <img src="docs/donate/wechat.png" alt="微信赞赏码" width="160" />
       </a>
-      <br/><sub><b>微信赞赏</b></sub>
     </td>
-    <td align="center" width="33%" valign="top">
+    <td align="center" valign="top">
       <a href="docs/donate/alipay.png">
-        <img src="docs/donate/alipay.png" alt="支付宝赞赏码" width="240" />
+        <img src="docs/donate/alipay.png" alt="支付宝赞赏码" width="160" />
       </a>
-      <br/><sub><b>支付宝赞赏</b></sub>
     </td>
   </tr>
 </table>
