@@ -21,10 +21,94 @@ err()  { printf '\033[31m[ERROR]\033[0m %s\n' "$1" >&2; }
 
 require_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+AUTO_YES="${OPENMUSIC_AUTO_YES:-0}"
+
+ask_yes_no() {
+  local prompt="$1"
+  local default_ans="${2:-N}"
+  local reply=""
+  if [ "$AUTO_YES" = "1" ]; then
+    reply="$default_ans"
+  elif [ -t 0 ]; then
+    read -r -p "$prompt " reply || reply="$default_ans"
+  elif [ -r /dev/tty ]; then
+    read -r -p "$prompt " reply < /dev/tty || reply="$default_ans"
+  else
+    reply="$default_ans"
+  fi
+  reply="${reply:-$default_ans}"
+  [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+run_privileged() {
+  if [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ]; then
+    "$@"
+  elif require_cmd sudo; then
+    sudo "$@"
+  else
+    return 1
+  fi
+}
+
+port_in_use() {
+  local port="$1"
+  if require_cmd ss; then
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\.)${port}$"
+    return $?
+  elif require_cmd netstat; then
+    netstat -tln 2>/dev/null | awk '{print $4}' | grep -Eq "(:|\\.)${port}$"
+    return $?
+  fi
+  return 1
+}
+
+pick_free_port() {
+  local port="$1"
+  local tries=0
+  while [ "$tries" -lt 30 ] && port_in_use "$port"; do
+    port=$((port + 1))
+    tries=$((tries + 1))
+  done
+  printf '%s' "$port"
+}
+
+subnet_in_use() {
+  local candidate="$1"
+  local prefix="${candidate%.0/24}."
+  if require_cmd ip && ip route 2>/dev/null | grep -Fq "$prefix"; then
+    return 0
+  fi
+  if require_cmd docker; then
+    local used
+    used="$(docker network ls -q 2>/dev/null | xargs -r docker network inspect --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || true)"
+    if printf '%s' "$used" | grep -Fq "$candidate"; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+pick_free_subnet() {
+  local preferred="${1:-172.30.80.0/24}"
+  if ! subnet_in_use "$preferred"; then
+    printf '%s' "$preferred"
+    return
+  fi
+  local octet
+  for octet in $(seq 81 120); do
+    local candidate="172.30.${octet}.0/24"
+    if ! subnet_in_use "$candidate"; then
+      printf '%s' "$candidate"
+      return
+    fi
+  done
+  printf '%s' "$preferred"
+}
+
 print_banner() {
   cat <<'EOF'
 =========================================
-   OpenMusic 一键部署脚本
+   OpenMusic 全自动一键部署脚本
 =========================================
 EOF
 }
@@ -33,81 +117,99 @@ EOF
 
 check_docker() {
   if ! require_cmd docker; then
-    err "未检测到 docker，请先安装：https://docs.docker.com/engine/install/"
+    err "未检测到 Docker，可直接运行 bash deploy/deploy.sh 进入一键安装"
     exit 1
   fi
   local compose_cmd
   compose_cmd="$(resolve_compose_cmd)"
   if [ -z "$compose_cmd" ]; then
-    err "未检测到 docker compose（插件或独立版本均可），请先安装"
+    err "未检测到 Docker Compose 插件，请先安装"
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1 && ask_yes_no "Docker 引擎不可访问，是否尝试启动本机 Docker 服务？[y/N]" "N"; then
+    if require_cmd systemctl; then
+      run_privileged systemctl enable --now docker >/dev/null 2>&1 || true
+    elif require_cmd service; then
+      run_privileged service docker start >/dev/null 2>&1 || true
+    fi
+    local i
+    for i in 1 2 3 4 5; do
+      docker info >/dev/null 2>&1 && break
+      sleep 2
+    done
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    err "Docker 引擎不可访问，请先启动 Docker 并确认当前账号权限"
     exit 1
   fi
   echo "$compose_cmd"
 }
 
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  local fallback="$3"
+  local value=""
+  if [ -f "$file" ]; then
+    value="$(awk -F= -v k="$key" '$1 == k { sub(/^[^=]*=/, ""); gsub(/\r$/, ""); print; exit }' "$file" || true)"
+  fi
+  printf '%s' "${value:-$fallback}"
+}
+
+check_compose_config() {
+  local compose_cmd="$1"
+  shift
+  if ! $compose_cmd "$@" config --quiet; then
+    err "Compose 配置校验失败，未启动或重建容器；请检查 .env 中的凭据和 OPENMUSIC_NETWORK_SUBNET"
+    exit 1
+  fi
+}
+
+verify_container_connectivity() {
+  local compose_cmd="$1"
+  local check_loudness="$2"
+  shift 2
+  info "检查容器间 DNS 和 HTTP 连通性..."
+  if ! $compose_cmd "$@" exec -T openmusic node -e 'fetch("http://meting-api:3000", {signal: AbortSignal.timeout(10000), redirect: "manual"}).then(r => { if (r.status >= 500) throw new Error("Meting HTTP " + r.status); console.log("OpenMusic -> meting-api:3000 OK"); }).catch(e => { console.error(e.message); process.exit(1); })'; then
+    err "OpenMusic 无法访问 Meting，请检查服务网络和日志；配置及数据已保留"
+    exit 1
+  fi
+  if [ "$check_loudness" = "1" ]; then
+    if ! $compose_cmd "$@" exec -T meting node -e 'fetch("http://meting-api-audio-loudness:3100/healthz", {signal: AbortSignal.timeout(10000)}).then(r => { if (!r.ok) throw new Error("响度 HTTP " + r.status); console.log("Meting -> meting-api-audio-loudness:3100 OK"); }).catch(e => { console.error(e.message); process.exit(1); })'; then
+      err "Meting 无法访问响度服务，请检查统一网络和日志；配置及数据已保留"
+      exit 1
+    fi
+  fi
+}
+
 resolve_compose_cmd() {
   if docker compose version >/dev/null 2>&1; then
     echo "docker compose"
-  elif require_cmd docker-compose; then
-    echo "docker-compose"
-  else
-    echo ""
   fi
 }
 
 # ---------- 更新（拉取最新代码） ----------
-
-# 这些路径是构建产物（依赖锁文件 / 增量编译缓存），本地跑过 install / build 后
-# 内容常与远端不同、会挡住 git pull；后续 install / build 步骤会重新生成它们，
-# 直接丢弃本地改动即可，不影响任何业务配置。
-UPDATE_SAFE_RESET_PATHS=(
-  "package-lock.json"
-  "server/package-lock.json"
-  "client/package-lock.json"
-  "client/tsconfig.tsbuildinfo"
-)
 
 update_git_pull() {
   if ! require_cmd git; then
     err "未检测到 git，无法自动更新（非 git 安装的部署请手动替换代码）"
     exit 1
   fi
-  if [ ! -d .git ]; then
+  if [ ! -e .git ]; then
     err "当前目录不是 git 仓库，无法自动更新"
     exit 1
   fi
 
-  # 部署时给脚本 chmod +x、不同文件系统 / 编辑器保存方式等都可能只改动权限位、
-  # 不改内容，却会让 git 永远把它当成「本地改动」挡住更新。这类噪音直接忽略，
-  # 不影响真正的内容变更检测。仅设置本仓库局部配置，不影响其它项目。
-  git config core.fileMode false
-
-  local path
-  for path in "${UPDATE_SAFE_RESET_PATHS[@]}"; do
-    # 与 HEAD 比较：无论改动只在工作区还是已被 git add 暂存过，都能识别到，
-    # 避免「改动已 add 过 → git diff（不比对暂存区）看不到 → 误判为没有本地改动」。
-    if [ -f "$path" ] && ! git diff --quiet HEAD -- "$path" 2>/dev/null; then
-      info "重置本地构建产物：$path"
-      # 用 HEAD 显式指定版本：同时重置暂存区和工作区。只 checkout 工作区（不带 HEAD）
-      # 在改动已被 add 过时不生效——那样只会把工作区重置成暂存区里同样过时的内容。
-      git checkout HEAD -- "$path"
-    fi
-  done
-
-  local exclude_args=()
-  for path in "${UPDATE_SAFE_RESET_PATHS[@]}"; do
-    exclude_args+=(":!$path")
-  done
-  if ! git diff --quiet HEAD -- . "${exclude_args[@]}"; then
+  if ! git -c core.fileMode=false diff --quiet HEAD -- .; then
     err "检测到其他未提交的本地改动，为避免覆盖已中止更新，请先自行处理（git status 查看）："
     git status --short
     exit 1
   fi
 
   local branch
-  branch="$(git rev-parse --abbrev-ref HEAD)"
+  branch="$(git symbolic-ref --quiet --short HEAD)" || { err "当前检出的是固定版本，请使用原部署方式更新"; exit 1; }
   info "拉取最新代码（分支：$branch）..."
-  git pull origin "$branch"
+  git -c core.fileMode=false pull --ff-only origin "$branch"
   ok "代码已更新"
 }
 
@@ -117,20 +219,20 @@ detect_deploy_mode() {
   compose_cmd="$(resolve_compose_cmd)"
 
   if [ -n "$compose_cmd" ] && [ -f docker-compose.full.yml ] && [ -f docker-compose.loudness.yml ] \
-      && [ -n "$($compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml ps -q loudness 2>/dev/null)" ]; then
+      && [ -n "$($compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml ps -aq loudness 2>/dev/null)" ]; then
     echo "docker-loudness"
     return
   fi
   if [ -n "$compose_cmd" ] && [ -f docker-compose.full.yml ] \
-      && [ -n "$($compose_cmd -f docker-compose.full.yml ps -q meting 2>/dev/null)" ]; then
+      && [ -n "$($compose_cmd -f docker-compose.full.yml ps -aq meting 2>/dev/null)" ]; then
     echo "docker-full"
     return
   fi
-  if [ -n "$compose_cmd" ] && [ -n "$($compose_cmd ps -q openmusic 2>/dev/null)" ]; then
+  if [ -n "$compose_cmd" ] && [ -n "$($compose_cmd ps -aq openmusic 2>/dev/null)" ]; then
     echo "docker"
     return
   fi
-  if require_cmd pm2 && pm2 describe openmusic >/dev/null 2>&1; then
+  if require_cmd pm2 && require_cmd node && pm2 jlist 2>/dev/null | node -e 'const path = require("node:path"); const apps = JSON.parse(require("node:fs").readFileSync(0, "utf8")); process.exit(apps.some(app => app.name === "openmusic" && app.pm2_env?.pm_exec_path === path.resolve("server/index.js")) ? 0 : 1)' 2>/dev/null; then
     echo "source"
     return
   fi
@@ -141,8 +243,9 @@ update_docker() {
   local compose_cmd
   compose_cmd="$(check_docker)"
   update_git_pull
+  check_compose_config "$compose_cmd"
   info "重新构建并启动容器..."
-  $compose_cmd up -d --build
+  $compose_cmd up -d --build --wait --wait-timeout 180
   ok "更新完成（Docker 精简版）"
 }
 
@@ -151,9 +254,12 @@ update_docker_full() {
   compose_cmd="$(check_docker)"
   update_git_pull
   ensure_full_env_file
+  check_compose_config "$compose_cmd" --env-file .env -f docker-compose.full.yml
   info "重新构建并启动容器（含 Meting）..."
-  $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
-  configure_meting "$compose_cmd" -f docker-compose.full.yml
+  $compose_cmd --env-file .env -f docker-compose.full.yml pull redis meting
+  $compose_cmd --env-file .env -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
+  configure_meting "$compose_cmd" --env-file .env -f docker-compose.full.yml
+  verify_container_connectivity "$compose_cmd" 0 --env-file .env -f docker-compose.full.yml
   ok "更新完成（Docker 全量版）"
 }
 
@@ -162,10 +268,12 @@ update_docker_loudness() {
   compose_cmd="$(check_docker)"
   update_git_pull
   ensure_full_env_file
+  check_compose_config "$compose_cmd" --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
   info "重新构建并启动容器（含 Meting + 响度辅助服务）..."
-  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
-  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
-  configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
+  $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml pull redis meting loudness
+  $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
+  configure_meting "$compose_cmd" --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
+  verify_container_connectivity "$compose_cmd" 1 --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
   ok "更新完成（Docker 响度增强版）"
 }
 
@@ -178,7 +286,8 @@ update_source() {
   update_git_pull
 
   info "安装依赖（根 / server / client）..."
-  npm run install:all
+  npm ci --prefix server --omit=dev
+  npm ci --prefix client --include=dev
   npm ci --prefix deploy/updater --omit=dev
 
   info "构建前端..."
@@ -200,20 +309,8 @@ deploy_update() {
   fi
 
   if [ -z "$mode" ]; then
-    warn "未能自动识别当前部署方式"
-    echo "请选择要更新的部署方式："
-    echo "  1) Docker 部署"
-    echo "  2) Docker 全量部署（含 Meting）"
-    echo "  3) Docker 全量部署 + 响度辅助服务"
-    echo "  4) 源码部署（PM2）"
-    read -r -p "输入 1、2、3 或 4: " choice
-    case "$choice" in
-      1) mode="docker" ;;
-      2) mode="docker-full" ;;
-      3) mode="docker-loudness" ;;
-      4) mode="source" ;;
-      *) err "无效选择"; exit 1 ;;
-    esac
+    err "未识别到现有部署，请使用原方式指定 update docker、update docker-full、update docker-loudness 或 update source"
+    exit 1
   else
     info "识别到当前部署方式：$mode"
   fi
@@ -235,8 +332,22 @@ deploy_update() {
 ensure_full_env_file() {
   local env_file=".env"
   if [ ! -f "$env_file" ]; then
-    local openmusic_port="${OPENMUSIC_PORT:-4000}"
-    local meting_port="${METING_PORT:-3000}"
+    local openmusic_port="${OPENMUSIC_PORT:-}"
+    local meting_port="${METING_PORT:-}"
+    local network_subnet="${OPENMUSIC_NETWORK_SUBNET:-}"
+    if [ -z "$openmusic_port" ]; then
+      openmusic_port="$(pick_free_port 4000)"
+      [ "$openmusic_port" = "4000" ] || info "默认端口 4000 已被占用，自动选用空闲端口 ${openmusic_port}"
+    fi
+    if [ -z "$meting_port" ]; then
+      meting_port="$(pick_free_port 3000)"
+      [ "$meting_port" = "$openmusic_port" ] && meting_port="$(pick_free_port $((meting_port + 1)))"
+      [ "$meting_port" = "3000" ] || info "默认端口 3000 已被占用，Meting 自动选用空闲端口 ${meting_port}"
+    fi
+    if [ -z "$network_subnet" ]; then
+      network_subnet="$(pick_free_subnet 172.30.80.0/24)"
+      [ "$network_subnet" = "172.30.80.0/24" ] || info "默认子网冲突，自动切换至 ${network_subnet}"
+    fi
     local meting_admin_path
     local meting_pw
     local encryption_key
@@ -249,17 +360,19 @@ ensure_full_env_file() {
       meting_pw="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
       encryption_key="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
     fi
-    cat > "$env_file" <<EOF
+    (umask 077 && cat > "$env_file") <<EOF
 OPENMUSIC_PORT=$openmusic_port
+OPENMUSIC_BIND_ADDRESS=${OPENMUSIC_BIND_ADDRESS:-127.0.0.1}
 METING_PORT=$meting_port
-OPENMUSIC_NETWORK_SUBNET=${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
+OPENMUSIC_NETWORK_SUBNET=$network_subnet
 ALLOW_INSECURE_COOKIES=${ALLOW_INSECURE_COOKIES:-1}
 METING_ADMIN_PATH=$meting_admin_path
 METING_ADMIN_USERNAME=admin
 METING_ADMIN_PASSWORD=$meting_pw
 ROOM_CREDENTIAL_ENCRYPTION_KEY=$encryption_key
 EOF
-    ok "已自动生成根目录 $env_file 配置"
+    chmod 600 "$env_file"
+    ok "已自动生成根目录 $env_file 配置（权限 600）"
   else
     for required_var in METING_ADMIN_PATH METING_ADMIN_USERNAME METING_ADMIN_PASSWORD ROOM_CREDENTIAL_ENCRYPTION_KEY; do
       if ! grep -Eq "^${required_var}=.+$" "$env_file"; then
@@ -273,31 +386,39 @@ EOF
 deploy_docker_loudness() {
   local compose_cmd
   compose_cmd="$(check_docker)"
-  info "使用命令：$compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml"
+  info "使用命令：$compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml"
   ensure_full_env_file
   prepare_data_dir
+  check_compose_config "$compose_cmd" --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
 
-  info "启动容器（redis + meting + loudness）..."
-  $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness
+  info "启动容器（redis + meting + loudness + openmusic）..."
+  $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml pull redis meting loudness
   if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
-    $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180 --force-recreate
+    $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180 --force-recreate
   else
-    $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
+    $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --build --wait --wait-timeout 180
   fi
-  configure_meting "$compose_cmd" -f docker-compose.full.yml -f docker-compose.loudness.yml
+  configure_meting "$compose_cmd" --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
+  verify_container_connectivity "$compose_cmd" 1 --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml
 
   ok "部署完成（全量版，含 Meting + 响度辅助服务）"
-  local port="${OPENMUSIC_PORT:-4000}"
+  local port meting_port
+  port="$(read_env_value .env OPENMUSIC_PORT "${OPENMUSIC_PORT:-4000}")"
+  meting_port="$(read_env_value .env METING_PORT "${METING_PORT:-3000}")"
   cat <<EOF
 
 下一步：
-  1. 浏览器打开 http://<服务器IP>:${port}/setup 完成首次部署向导
+  1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      - Redis、Meting 和响度服务已自动配置，只需填站点域名
   2. 向导完成后服务会自动重启，刷新页面即可
-  3. 响度服务仅加入 Docker 内网，不直接暴露端口；Meting 会通过它统一各平台音量基准
-  4. 常用命令：
-     $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml logs -f loudness
-     $compose_cmd -f docker-compose.full.yml -f docker-compose.loudness.yml down
+  3. 上线 HTTPS 后（一行命令收紧 Cookie 安全）：
+     sed -i 's/^ALLOW_INSECURE_COOKIES=.*/ALLOW_INSECURE_COOKIES=0/' .env && $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d --force-recreate openmusic
+  4. Meting 后台仅绑定本机回环（凭据见 .env），远程管理请使用 SSH 隧道：
+     ssh -N -L ${port}:127.0.0.1:${port} -L ${meting_port}:127.0.0.1:${meting_port} user@server
+     Meting 管理入口见 .env 中的 METING_ADMIN_PATH
+  5. 常用命令：
+     $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml logs -f loudness
+     $compose_cmd --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml down
 EOF
 }
 
@@ -311,6 +432,7 @@ configure_meting() {
     exit 1
   fi
   $compose_cmd "$@" restart openmusic
+  $compose_cmd "$@" up -d --no-deps --no-recreate --wait --wait-timeout 180 openmusic
 }
 
 prepare_data_dir() {
@@ -328,7 +450,7 @@ prepare_data_dir() {
       exit 1
     fi
   done
-  [ -f data/.env ] || : > data/.env
+  [ -f data/.env ] || (umask 077 && : > data/.env)
   [ -f data/runtimeConfig.json ] || echo '{}' > data/runtimeConfig.json
   [ -f data/adminConfig.json ] || echo '{}' > data/adminConfig.json
   [ -f data/setup.lock ] || : > data/setup.lock
@@ -341,23 +463,26 @@ deploy_docker() {
   compose_cmd="$(check_docker)"
   info "使用命令：$compose_cmd"
   prepare_data_dir
+  check_compose_config "$compose_cmd"
 
   info "启动容器（redis + openmusic）..."
   if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
-    $compose_cmd up -d --build --wait --wait-timeout 180 --force-recreate openmusic
+    $compose_cmd up -d --build --wait --wait-timeout 180 --force-recreate
   else
     $compose_cmd up -d --build --wait --wait-timeout 180
   fi
 
   ok "部署完成"
-  local port="${OPENMUSIC_PORT:-4000}"
+  local port
+  port="$(read_env_value .env OPENMUSIC_PORT "${OPENMUSIC_PORT:-4000}")"
   cat <<EOF
 
 下一步：
-  1. 浏览器打开 http://<服务器IP>:${port}/setup 完成首次部署向导
+  1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      - Redis 已自动配置，只需填 Meting 音源地址和站点域名
   2. 向导完成后服务会自动重启，刷新页面即可
-  3. 常用命令：
+  3. 上线 HTTPS 后，请将 ALLOW_INSECURE_COOKIES 设为 0 并重建容器
+  4. 常用命令：
      $compose_cmd logs -f openmusic   # 查看日志
      $compose_cmd down                # 停止
      $compose_cmd up -d --build       # 更新代码后重新构建启动
@@ -369,33 +494,40 @@ EOF
 deploy_docker_full() {
   local compose_cmd
   compose_cmd="$(check_docker)"
-  info "使用命令：$compose_cmd -f docker-compose.full.yml"
+  info "使用命令：$compose_cmd --env-file .env -f docker-compose.full.yml"
   ensure_full_env_file
   prepare_data_dir
+  check_compose_config "$compose_cmd" --env-file .env -f docker-compose.full.yml
 
   info "启动容器（redis + meting + openmusic）..."
+  $compose_cmd --env-file .env -f docker-compose.full.yml pull redis meting
   if [ "$CONFIG_FILES_REPAIRED" -eq 1 ]; then
-    $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180 --force-recreate openmusic
+    $compose_cmd --env-file .env -f docker-compose.full.yml up -d --build --wait --wait-timeout 180 --force-recreate
   else
-    $compose_cmd -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
+    $compose_cmd --env-file .env -f docker-compose.full.yml up -d --build --wait --wait-timeout 180
   fi
-  configure_meting "$compose_cmd" -f docker-compose.full.yml
+  configure_meting "$compose_cmd" --env-file .env -f docker-compose.full.yml
+  verify_container_connectivity "$compose_cmd" 0 --env-file .env -f docker-compose.full.yml
 
   ok "部署完成（全量版，含 Meting）"
-  local port="${OPENMUSIC_PORT:-4000}"
+  local port meting_port
+  port="$(read_env_value .env OPENMUSIC_PORT "${OPENMUSIC_PORT:-4000}")"
+  meting_port="$(read_env_value .env METING_PORT "${METING_PORT:-3000}")"
   cat <<EOF
 
 下一步：
-  1. 浏览器打开 http://<服务器IP>:${port}/setup 完成首次部署向导
+  1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      - Redis 和 Meting 已自动配置，只需填站点域名
   2. 向导完成后服务会自动重启，刷新页面即可
-  3. Meting 管理后台：http://<服务器IP>:${port} 不直接暴露 Meting 端口，
-     如需配置 Meting Cookie，可进入容器：
-     docker exec -it \$(docker compose -f docker-compose.full.yml ps -q meting) sh
-  4. 常用命令：
-     $compose_cmd -f docker-compose.full.yml logs -f openmusic   # 查看日志
-     $compose_cmd -f docker-compose.full.yml down                # 停止
-     $compose_cmd -f docker-compose.full.yml up -d --build       # 更新后重建
+  3. 上线 HTTPS 后（一行命令收紧 Cookie 安全）：
+     sed -i 's/^ALLOW_INSECURE_COOKIES=.*/ALLOW_INSECURE_COOKIES=0/' .env && $compose_cmd --env-file .env -f docker-compose.full.yml up -d --force-recreate openmusic
+  4. Meting 管理后台仅绑定本机回环（凭据见 .env），远程管理请使用 SSH 隧道：
+     ssh -N -L ${port}:127.0.0.1:${port} -L ${meting_port}:127.0.0.1:${meting_port} user@server
+     Meting 管理入口见 .env 中的 METING_ADMIN_PATH
+  5. 常用命令：
+     $compose_cmd --env-file .env -f docker-compose.full.yml logs -f openmusic   # 查看日志
+     $compose_cmd --env-file .env -f docker-compose.full.yml down                # 停止
+     $compose_cmd --env-file .env -f docker-compose.full.yml up -d --build       # 更新后重建
 EOF
 }
 
@@ -403,13 +535,13 @@ EOF
 
 check_node_version() {
   if ! require_cmd node; then
-    err "未检测到 Node.js，请先安装 Node.js >= 18：https://nodejs.org/"
+    err "未检测到 Node.js，请先安装 Node.js >= 20 且 < 25：https://nodejs.org/"
     exit 1
   fi
   local major
   major="$(node -e 'console.log(process.versions.node.split(".")[0])')"
-  if [ "$major" -lt 18 ]; then
-    err "Node.js 版本过低（当前 $(node -v)），需要 >= 18"
+  if [ "$major" -lt 20 ] || [ "$major" -ge 25 ]; then
+    err "当前 Node.js 为 $(node -v)，需要 >= 20 且 < 25"
     exit 1
   fi
   ok "Node.js $(node -v)"
@@ -428,15 +560,44 @@ ensure_pm2() {
   ok "PM2 安装完成"
 }
 
+ensure_local_redis() {
+  if [ -s server/.env ]; then
+    return 0
+  fi
+  if port_in_use 6379; then
+    info "本机端口 6379 已占用，请在部署向导中验证 Redis 连接"
+    return 0
+  fi
+  if ask_yes_no "是否通过系统软件源安装并启动本机 Redis？[y/N]" "N"; then
+    if require_cmd apt-get; then
+      run_privileged apt-get update -qq && run_privileged apt-get install -y -qq redis-server && run_privileged systemctl enable --now redis-server >/dev/null 2>&1 || true
+    elif require_cmd dnf; then
+      run_privileged dnf install -y -q redis && run_privileged systemctl enable --now redis >/dev/null 2>&1 || true
+    elif require_cmd yum; then
+      run_privileged yum install -y -q redis && run_privileged systemctl enable --now redis >/dev/null 2>&1 || true
+    else
+      warn "未识别系统包管理器，请稍后在部署向导中填写已有 Redis 连接地址"
+      return 0
+    fi
+    if require_cmd redis-cli && [ "$(redis-cli -h 127.0.0.1 ping 2>/dev/null || true)" = "PONG" ]; then
+      ok "本机 Redis 已自动安装并启动"
+    else
+      warn "本机 Redis 尚未在 6379 端口就绪，可在部署向导中手动填写 Redis 地址"
+    fi
+  fi
+}
+
 deploy_source() {
   check_node_version
   if ! require_cmd npm; then
     err "未检测到 npm"
     exit 1
   fi
+  ensure_local_redis
 
   info "安装依赖（根 / server / client）..."
-  npm run install:all
+  npm ci --prefix server --omit=dev
+  npm ci --prefix client --include=dev
   npm ci --prefix deploy/updater --omit=dev
 
   info "构建前端..."
@@ -445,24 +606,31 @@ deploy_source() {
   ensure_pm2
 
   info "使用 PM2 启动服务（deploy/ecosystem.config.cjs）..."
-  pm2 start deploy/ecosystem.config.cjs
+  pm2 startOrReload deploy/ecosystem.config.cjs --update-env
   pm2 save
+  if [ "$(id -u 2>/dev/null || echo 1)" -eq 0 ] && require_cmd systemctl && [ ! -f /etc/systemd/system/pm2-root.service ]; then
+    if ask_yes_no "是否配置 PM2 开机自启？[y/N]" "N"; then
+      pm2 startup systemd -u root --hp /root >/dev/null 2>&1 && pm2 save >/dev/null 2>&1 && ok "PM2 开机自启已配置" || warn "PM2 开机自启配置未自动完成，可手动执行：pm2 startup"
+    fi
+  fi
 
   ok "部署完成"
-  local port="${PORT:-4000}"
+  local port
+  port="$(read_env_value server/.env PORT "${PORT:-4000}")"
   cat <<EOF
 
 下一步：
-  1. 浏览器打开 http://<服务器IP>:${port}/setup 完成首次部署向导
+  1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      （若已存在有效 server/.env，会跳过向导）
   2. 向导完成后需要重启一次服务使 .env 生效：
-     pm2 restart openmusic
-  3. 常用命令：
+     pm2 restart openmusic --update-env
+  3. 生产环境请配置 Nginx 反代 + HTTPS，并在 server/.env 中设置 HOST=127.0.0.1 避免绕过反代直连 Node 端口
+  4. 常用命令：
      pm2 logs openmusic     # 查看日志
      pm2 restart openmusic  # 重启
      pm2 status             # 查看状态
-  4. 如需开机自启：pm2 startup 按提示执行一次即可（pm2 save 已保存当前进程列表）
-  5. 更新代码后重新部署：git pull 后再次执行本脚本（或手动 npm run build && pm2 restart openmusic）
+  5. 如需开机自启：pm2 startup 按提示执行一次即可（pm2 save 已保存当前进程列表）
+  6. 后续更新代码：bash deploy/deploy.sh update source
 EOF
 }
 
@@ -478,21 +646,15 @@ main() {
   fi
 
   if [ -z "$mode" ]; then
-    echo "请选择部署方式："
-    echo "  1) Docker 部署（推荐，自带 Redis）"
-    echo "  2) Docker 全量部署（自带 Redis + Meting，最省心）"
-    echo "  3) Docker 全量部署 + 响度辅助服务"
-    echo "  4) 源码部署（PM2，需自行提供 Redis）"
-    echo "  5) 更新已有部署"
-    read -r -p "输入 1、2、3、4 或 5: " choice
-    case "$choice" in
-      1) mode="docker" ;;
-      2) mode="docker-full" ;;
-      3) mode="docker-loudness" ;;
-      4) mode="source" ;;
-      5) deploy_update ""; return ;;
-      *) err "无效选择"; exit 1 ;;
-    esac
+    local detected_mode
+    detected_mode="$(detect_deploy_mode)"
+    if [ -n "$detected_mode" ]; then
+      if ask_yes_no "检测到已有部署（${detected_mode}），是否更新？[y/N]" "N"; then
+        deploy_update "$detected_mode"
+      fi
+      return
+    fi
+    exec "$BASH" "$ROOT_DIR/install.sh"
   fi
 
   case "$mode" in

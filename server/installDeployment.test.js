@@ -57,11 +57,12 @@ test('管道安装保留配置，统一启动服务，配置或引擎失败时�
     { loudness: 'y', configStatus: '0', engineStatus: '0', loudnessStatus: '1', status: 1 },
     { loudness: '', configStatus: '0', engineStatus: '0', tokenStatus: '1', status: 1 },
     { loudness: '', configStatus: '0', engineStatus: '0', tokenReadStatus: '1', status: 1 },
+    { loudness: '', configStatus: '0', engineStatus: '0', status: 0, fresh: true },
   ];
   for (const scenario of cases) {
     const fixtureDirectory = mkdtempSync(join(tmpdir(), 'openmusic-installer-'));
     try {
-      writeFileSync(join(fixtureDirectory, '.env'), existingEnv);
+      if (!scenario.fresh) writeFileSync(join(fixtureDirectory, '.env'), existingEnv);
       if (scenario.repair) mkdirSync(join(fixtureDirectory, 'data/runtimeConfig.json'), { recursive: true });
       const result = spawnSync(process.env.BASH || 'bash', ['-c', `docker() {
   printf '%s\n' "$*" >> docker.calls
@@ -72,15 +73,23 @@ test('管道安装保留配置，统一启动服务，配置或引擎失败时�
   return 0
 }
 curl() { cp "$FIXTURE_ROOT/\${4##*/}" "$3"; }
-export -f docker curl
-bash < "$FIXTURE_ROOT/install.sh"`], {
+ip() { printf '%s\n' 'default via 192.0.2.1' '172.30.80.0/23 dev docker0'; }
+export -f docker curl ip
+"$BASH" < "$FIXTURE_ROOT/install.sh"`], {
         cwd: fixtureDirectory,
-        env: { ...process.env, FIXTURE_ROOT: fixtureRoot, OPENMUSIC_DEPLOY_DIR: '.', OPENMUSIC_ENABLE_LOUDNESS: scenario.loudness, CONFIG_STATUS: scenario.configStatus, ENGINE_STATUS: scenario.engineStatus, NETWORK_STATUS: scenario.networkStatus || '0', LOUDNESS_STATUS: scenario.loudnessStatus || '0', TOKEN_STATUS: scenario.tokenStatus || '0', TOKEN_READ_STATUS: scenario.tokenReadStatus || '0' },
+        env: { ...process.env, FIXTURE_ROOT: fixtureRoot, OPENMUSIC_DEPLOY_DIR: '.', OPENMUSIC_AUTO_YES: '1', OPENMUSIC_ENABLE_LOUDNESS: scenario.loudness, CONFIG_STATUS: scenario.configStatus, ENGINE_STATUS: scenario.engineStatus, NETWORK_STATUS: scenario.networkStatus || '0', LOUDNESS_STATUS: scenario.loudnessStatus || '0', TOKEN_STATUS: scenario.tokenStatus || '0', TOKEN_READ_STATUS: scenario.tokenReadStatus || '0' },
         encoding: 'utf8',
         timeout: 10000,
       });
       assert.equal(result.status, scenario.status, result.stderr);
-      assert.equal(readFileSync(join(fixtureDirectory, '.env'), 'utf8'), existingEnv);
+      const writtenEnv = readFileSync(join(fixtureDirectory, '.env'), 'utf8');
+      if (scenario.fresh) {
+        assert.ok(/^OPENMUSIC_BIND_ADDRESS=127\.0\.0\.1$/m.test(writtenEnv));
+        assert.ok(/^OPENMUSIC_NETWORK_SUBNET=172\.30\.82\.0\/24$/m.test(writtenEnv));
+        assert.match(result.stdout, /ssh -N -L/);
+      } else {
+        assert.equal(writtenEnv, existingEnv);
+      }
       const calls = readFileSync(join(fixtureDirectory, 'docker.calls'), 'utf8');
       if (scenario.status === 0) {
         assert.ok(calls.includes('config --quiet'));
@@ -108,7 +117,7 @@ bash < "$FIXTURE_ROOT/install.sh"`], {
       }
       assert.ok(!readdirSync(fixtureDirectory).some(name => name.includes('.tmp.')));
     } finally {
-      rmSync(fixtureDirectory, { recursive: true, force: true });
+      rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 5 });
     }
   }
 });

@@ -1,33 +1,55 @@
-# OpenMusic Nginx 示例：静态直出前端，仅动态回 Node
-# 不要用 location / { proxy_pass 4000; }，否则 JS/CSS 全走 Node，前端会很卡。
+# OpenMusic Nginx 生产示例：静态直出前端，仅动态回源 Node
+# 切勿直接写 location / { proxy_pass http://127.0.0.1:4000; }，否则静态资源全走 Node
 #
-# 替换：
-#   your-domain.com
+# 按需替换：
+#   your-domain.com             → 你的站点域名
 #   /www/openmusic/client/dist  → 前端构建目录
-#   127.0.0.1:4000             → Node 端口
+#   127.0.0.1:4000              → Node 服务监听地址（建议 .env 设置 HOST=127.0.0.1）
 # 保存后：nginx -t && nginx -s reload
 #
-# 完整宝塔版见 nginx.baota-optimized.conf.example
+# 若前置接入 EdgeOne / Cloudflare 等 CDN，请限制源站仅接受 CDN 回源或校验自定义回源密钥头，
+# 防止公网绕过 CDN 直连 Nginx 伪造 EO-Connecting-IP / CF-Connecting-IP
+# 完整宝塔面板版见 deploy/nginx.baota-optimized.conf.example
 
 upstream openmusic_backend {
     server 127.0.0.1:4000;
     keepalive 32;
+    # 略小于 OpenMusic Node 的 keepAliveTimeout（65s），避免空闲长连接竞态断开
+    keepalive_timeout 60s;
 }
 
 server {
     listen 80;
+    server_name your-domain.com;
+    return 301 https://your-domain.com$request_uri;
+}
+
+server {
     listen 443 ssl http2;
+    # Nginx >= 1.25.1 也可改为：
+    # listen 443 ssl;
+    # http2 on;
     server_name your-domain.com;
 
     root /www/openmusic/client/dist;
     index index.html;
+    server_tokens off;
+    client_max_body_size 20m;
 
-    # SSL 证书路径按宝塔实际填写
-    # ssl_certificate     /www/server/panel/vhost/cert/your-domain.com/fullchain.pem;
-    # ssl_certificate_key /www/server/panel/vhost/cert/your-domain.com/privkey.pem;
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
 
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    # 避免 Nginx 与 Node 重复输出相同安全响应头
+    proxy_hide_header Strict-Transport-Security;
+    proxy_hide_header X-Content-Type-Options;
+    proxy_hide_header Referrer-Policy;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
     add_header X-Content-Type-Options "nosniff" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -40,7 +62,7 @@ server {
     gzip_comp_level 4;
     gzip_min_length 1024;
     gzip_types text/plain text/css text/xml application/javascript application/json application/xml image/svg+xml;
-    # 若 Nginx 编译了 ngx_brotli，可开启静态 Brotli；否则保留 gzip 即可。
+    # 若 Nginx 编译了 ngx_brotli，可开启静态 Brotli；否则保留 gzip 即可
     # brotli on;
     # brotli_static on;
     # brotli_comp_level 4;
@@ -53,7 +75,7 @@ server {
     # —— 仅下列路径反代到 Node ——
 
     location /socket.io/ {
-        proxy_pass http://127.0.0.1:4000/socket.io/;
+        proxy_pass http://openmusic_backend/socket.io/;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -126,8 +148,9 @@ server {
     }
 
     location ^~ /wx-proxy {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -138,8 +161,9 @@ server {
     }
 
     location ^~ /cgi-bin/ {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
         proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -150,7 +174,9 @@ server {
     }
 
     location = /robots.txt {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -161,7 +187,9 @@ server {
     }
 
     location = /sitemap.xml {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -173,7 +201,9 @@ server {
 
     # 首页 HTML 走 Node，保证百度验证 meta 写入源码
     location = / {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -184,7 +214,9 @@ server {
     }
 
     location = /index.html {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -196,7 +228,9 @@ server {
 
     # 动态会话页由 Node 返回 X-Robots-Tag: noindex，避免被收录
     location ^~ /room/ {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -207,7 +241,9 @@ server {
     }
 
     location ^~ /tv/ {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -219,7 +255,9 @@ server {
 
     # /admin 与自定义后台入口由 Node 校验；随机后台路径经下方 @openmusic_not_found 进入 Node 并返回 200
     location = /admin {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;
@@ -229,99 +267,135 @@ server {
         proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
     }
 
-    # —— 静态直出（不要 proxy_pass）——
+    # —— 静态直出（不经过 Node；仅用 add_header Cache-Control 避免重复头，并补齐安全头）——
+
+    # 版本探测文件绝不可长缓存，确保发版后浏览器第一时间感知更新
+    location = /version.json {
+        add_header Cache-Control "no-cache, must-revalidate" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        access_log off;
+        try_files $uri =404;
+    }
 
     location ^~ /assets/ {
         # 构建产物带 content hash，可长期缓存；发版后无需清此路径也可拿到新文件
-        expires 1y;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location ^~ /qface/ {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location ^~ /desk-pet/ {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Cache-Control "public, max-age=2592000";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
-    # Sonic Workshop 的 sandbox iframe 使用 opaque origin；仅为公开静态资源允许 Origin: null，不允许凭据。
+    # Sonic Workshop 的 sandbox iframe 使用 opaque origin；仅为公开静态资源允许 Origin: null，不允许凭据
     location ^~ /vendor/sonic-workshop/ {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Cache-Control "public, max-age=2592000";
         add_header Access-Control-Allow-Origin "null" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location ^~ /vendor/folia/assets/ {
-        expires 1y;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location ^~ /vendor/folia/ {
-        expires -1;
         add_header Cache-Control "no-cache, must-revalidate" always;
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location ^~ /vendor/ {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000" always;
+        add_header Cache-Control "public, max-age=2592000";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         try_files $uri =404;
     }
 
     location = /favicon.svg {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
     }
 
     location = /favicon.ico {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
     }
 
     location = /apple-touch-icon.png {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
     }
 
     location = /site.webmanifest {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         default_type application/manifest+json;
     }
 
     location = /og-cover.png {
-        expires 7d;
-        add_header Cache-Control "public, max-age=604800" always;
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
     }
 
-    # 未知路径保持 404 状态，同时交给前端展示 404 页面。
+    # 未知路径保持 404 状态，同时交给前端展示 404 页面
     location / {
         error_page 404 = @openmusic_not_found;
         try_files $uri $uri/ =404;
     }
 
     location @openmusic_not_found {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://openmusic_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header EO-Connecting-IP $http_eo_connecting_ip;

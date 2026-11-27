@@ -1,22 +1,66 @@
 # OpenMusic 部署文档
 
+> **配置管理原则**：绝大多数业务配置（音源 / Meting、SVIP 音质、共享会员、OAuth、注册邮箱 SMTP、七牛 OSS、SEO、AI 模型池等）都在 **管理后台 → 运行时配置** 中在线修改并即时生效，无需手动改 `.env` 或重启服务；`.env` 仅用于启动前置条件、网络与安全引导
+
+## 目录
+
+- [部署方式怎么选](#部署方式怎么选)
+- [快速开始](#快速开始)
+- [前置依赖](#前置依赖)
+- [环境变量](#环境变量)
+- [Docker 部署细节](#docker-部署细节)
+- [推荐架构（生产）](#推荐架构生产)
+- [Nginx 与 CDN 边缘缓存建议](#nginx-与-cdn-边缘缓存建议)
+- [构建与发版](#构建与发版)
+- [HTTP API 速查](#http-api-速查)
+- [媒体代理 502 排查](#媒体代理-502-排查)
+- [Redis 容量与读写治理](#redis-容量与读写治理)
+
+---
+
+## 部署方式怎么选
+
+| 方式 | 内置服务 | 适用场景 | 入口 |
+|------|------|------|------|
+| **Docker 一键脚本（推荐）** | OpenMusic + Redis + Meting（可选响度） | 新机器最快上手，自动生成密钥并配对 Meting Token | `install.sh` |
+| **Docker 手动 Compose** | 全量版或精简版按需选择 | 需自定义 Compose / 内网子网 / 端口映射 | `docker-compose.full.yml` / `docker-compose.yml` |
+| **宝塔面板** | Docker Compose 或 PM2 源码 | 习惯可视化面板管理 Nginx 与 SSL 证书 | [宝塔部署指南](../deploy/DEPLOY-BAOTA.md) |
+| **源码 + PM2** | 需自行提供 Redis 与 Meting | 二次开发或已有现成 Node + Nginx 环境 | `bash deploy/deploy.sh source` |
+
+---
+
 ## 快速开始
 
-### Docker 部署（推荐）
+### 方式一：Docker 一键脚本（推荐）
 
-无需克隆源码，直接拉镜像运行：
+在 Linux 服务器执行，安装器负责生成配置、等待容器健康并配对 Meting Token
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh -o install.sh && bash install.sh
+```
+
+- 新部署默认位于 `/opt/openmusic`，可用 `OPENMUSIC_DEPLOY_DIR=/srv/openmusic bash install.sh` 指定目录
+- 已有部署在原目录运行并保留原项目名、端口、Compose 文件、密钥和数据，更新前先备份
+- Docker 已就绪时，可用 `OPENMUSIC_AUTO_YES=1 bash install.sh` 按默认选项运行，组合 `OPENMUSIC_ENABLE_LOUDNESS=y` 可启用响度均衡
+- 在本地电脑按输出建立 SSH 隧道，打开 `http://localhost:4000/setup` 并确认预填配置，端口以实际输出为准
+- 有正式域名时先配好 HTTPS，再通过该域名打开向导，可直接使用预填的站点地址
+- Docker 缺失时可按 `Y/N` 选择安装，Docker 官方提供了正式环境的软件源安装步骤：[Docker Engine 安装指南](https://docs.docker.com/engine/install/)
+
+### 方式二：Docker 手动 Compose
+
+适合希望完全掌控目录结构与配置项的运维场景：
 
 ```bash
 # 新部署使用独立宿主机目录；已有部署沿用原目录，迁移前先备份
 mkdir -p /opt/openmusic
 cd /opt/openmusic
 
-# 下载 compose 文件
-curl -O https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.full.yml
-curl -O https://raw.githubusercontent.com/qq01-hub/openmusic/main/.env.full.example
+# 下载 Compose 文件与环境变量模板
+curl -fsSLO https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.full.yml
+curl -fsSLO https://raw.githubusercontent.com/qq01-hub/openmusic/main/.env.full.example
 
 # 生成部署变量并填写全部空值；留空时 Compose 会拒绝启动
-[ -f .env ] || cp .env.full.example .env
+[ -f .env ] || (umask 077 && cp .env.full.example .env && chmod 600 .env)
 
 # 准备持久化目录
 mkdir -p data/downloads data/meting
@@ -26,27 +70,27 @@ for config_file in data/.env data/runtimeConfig.json data/adminConfig.json data/
     backup_path="${config_file}.directory-backup-$(date +%Y%m%d%H%M%S)-$$"
     mv -- "$config_file" "$backup_path"
     config_files_repaired=1
-    echo "已将异常目录移至 $backup_path 并保留备份。"
+    echo "已将异常目录移至 $backup_path 并保留备份"
   fi
   if [ -e "$config_file" ] && [ ! -f "$config_file" ]; then
-    echo "错误: $config_file 不是普通文件，无法安全自动修复。" >&2
+    echo "错误: $config_file 不是普通文件，无法安全自动修复" >&2
     exit 1
   fi
 done
-[ -f data/.env ] || touch data/.env
+[ -f data/.env ] || (umask 077 && : > data/.env)
 [ -f data/setup.lock ] || touch data/setup.lock
 [ -f data/runtimeConfig.json ] || printf '{}\n' > data/runtimeConfig.json
 [ -f data/adminConfig.json ] || printf '{}\n' > data/adminConfig.json
 
 # 启动（全量版：Redis + Meting + OpenMusic）
 if [ "$config_files_repaired" -eq 1 ]; then
-  docker compose --env-file .env -f docker-compose.full.yml up -d --force-recreate openmusic
+  docker compose --env-file .env -f docker-compose.full.yml up -d --force-recreate
 else
   docker compose --env-file .env -f docker-compose.full.yml up -d
 fi
 ```
 
-打开 `http://<IP>:4000`，Redis / Meting 已自动填好，只需填站点域名。完成后自动重启。
+使用 SSH 隧道打开 `http://localhost:4000/setup`，或配置 HTTPS 后通过域名打开向导，完成后容器会自动重启
 
 使用 `install.sh`，或运行 `deploy/deploy.sh docker-full` / `docker-loudness` 及对应更新命令时，脚本会通过 Meting 管理接口创建或复用名为 `OpenMusic joint deployment` 的 API Token，验证 Bearer 与 OpenMusic 签名后，将内置 Meting 地址和令牌写入 OpenMusic 加密运行配置，并重启 OpenMusic 使首次初始化的加密主密钥生效
 
@@ -54,29 +98,33 @@ fi
 
 仅手动启动 Compose 不执行自动配对，需要在两端管理后台配置一致的 API Token；已有 Meting 修改过初始化管理员密码或启用双重验证，且尚无上述专用令牌时，自动创建可能失败，此时通过 Meting 后台创建令牌，再在 OpenMusic 后台填写，脚本不会重置管理员密码、关闭认证或改动 Cookie
 
-Meting 管理后台仅绑定服务器的 `127.0.0.1:${METING_PORT:-3000}`，路径、用户名和首次初始化密码必须在 `.env` 中显式设置。远程管理时执行 `ssh -L 3000:127.0.0.1:3000 user@server`，再从本机浏览器访问；不要直接开放该端口。
+Meting 管理后台仅绑定服务器的 `127.0.0.1:${METING_PORT:-3000}`，路径、用户名和首次初始化密码必须在 `.env` 中显式设置；远程管理时执行 `ssh -L 3000:127.0.0.1:3000 user@server`，再从本机浏览器访问，切勿直接开放该端口
 
-> 从旧版全量 Compose 升级时，先按示例补齐根目录 `.env`，否则新版会安全失败而不启动。已有 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 必须原样沿用；Meting 已有数据不会因再次声明初始化变量而被重置。
+> 从旧版全量 Compose 升级时，先按示例补齐根目录 `.env`，否则新版会安全失败而不启动；已有 `ROOM_CREDENTIAL_ENCRYPTION_KEY` 必须原样沿用，Meting 已有数据不会因再次声明初始化变量而被重置
 
-> 不需要内置 Meting？下载 `docker-compose.yml` 代替。
+> 不需要内置 Meting？下载 `docker-compose.yml` 代替
 > 需要统一不同平台的音量基准？再下载 `docker-compose.loudness.yml`，并与全量版一起启动：
 > `docker compose --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml pull loudness && docker compose --env-file .env -f docker-compose.full.yml -f docker-compose.loudness.yml up -d`
 > 更新：`docker compose --env-file .env -f docker-compose.full.yml pull && docker compose --env-file .env -f docker-compose.full.yml up -d`
-> 宝塔用户：见 [宝塔部署指南](../deploy/DEPLOY-BAOTA.md)，可在 Docker 管理器里直接粘贴 compose。
+> 宝塔用户：见 [宝塔部署指南](../deploy/DEPLOY-BAOTA.md)，可在 Docker 管理器里直接粘贴 Compose
 
-有源码时也可用一键脚本：`bash deploy/deploy.sh`
+### 方式三：源码部署（PM2）
 
-无源码时可运行 `curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh | bash`；新部署默认创建 `/opt/openmusic`，也可通过 `OPENMUSIC_DEPLOY_DIR` 指定目录。已有部署先 `cd` 到原目录再执行，脚本会保留原路径、配置和密钥，不自动迁移。以上命令需有目标目录写入权限。
+```bash
+git clone https://github.com/qq01-hub/openmusic.git && cd openmusic
+# 自动构建并用 PM2 托管主服务与升级服务
+bash deploy/deploy.sh source
+```
 
-### 源码部署
+手动构建时，在仓库目录执行
 
 ```bash
 npm run install:all
 npm run build
-npm start   # http://0.0.0.0:4000
+npm start   # 默认监听 0.0.0.0:4000，配好 Nginx 反代后可在 server/.env 设 HOST=127.0.0.1
 ```
 
-首次访问自动进入部署向导，填 Redis / Meting / 站点域名即可。向导自动生成密钥、管理员账号密码和 Nginx 配置片段。
+首次访问自动进入部署向导，填 Redis / Meting / 站点域名即可；向导自动生成密钥、管理员账号密码和 Nginx 配置片段
 
 > 开发模式：`npm run dev`（前端 `:5173`，后端 `:4000`）
 
@@ -86,33 +134,37 @@ npm start   # http://0.0.0.0:4000
 
 | 依赖 | 必填 | 说明 |
 |------|:----:|------|
+| **Node.js** | 源码部署 | `>=20 <25`（见根目录 `package.json` 的 `engines.node`） |
 | **Redis** | 必需 | 房间、收藏、管理凭据、公告、封禁均只存 Redis |
 | **[Meting-API](https://github.com/qq01-hub/Meting-API)** | 必填 | 网易 / QQ 搜索播放、歌词、封面、歌单导入；提供 Docker 镜像 |
 | **Meting-API 响度辅助服务** | 可选 | 统一不同平台的 `gain` / `peak` 响度基准；不部署时仍可播放，但平台间音量可能不一致 |
-| 七牛 OSS | 可选 | 聊天发图。管理后台填写 |
+| 七牛 OSS | 可选 | 聊天发图，管理后台填写 |
 
 ---
 ## 环境变量
 
-向导会自动写入 `server/.env`。**业务配置优先用管理后台「运行时配置」**（Meting、账户邮件 SMTP（注册与找回密码）、OAuth、七牛、歌词、空房 TTL 等），不必改文件。SMTP 密码会以加密形式保存在 `runtimeConfig.json`，生产环境须保留稳定的 `CLIENT_ID_SECRET`，否则保存的密码无法解密。
+向导会自动写入 `server/.env`，**业务配置优先用管理后台「运行时配置」**（Meting、账户邮件 SMTP、OAuth、七牛、歌词、空房 TTL 等），不必改文件；SMTP 密码会以加密形式保存在 `runtimeConfig.json`，生产环境须保留稳定的 `CLIENT_ID_SECRET`，否则保存的密码无法解密
 
 进程级变量（详见 `server/.env.example`）：
 
 | 变量 | 必填 | 说明 |
 |------|:----:|------|
 | `PORT` | | 默认 `4000` |
+| `HOST` | 推荐（源码反代） | 监听地址，默认 `0.0.0.0`；宿主机 Nginx 反代源码部署建议设为 `127.0.0.1`，Docker 容器内切勿设为 `127.0.0.1` |
 | `NODE_ENV` | 推荐 | 生产设为 `production` |
-| `CLIENT_URL` | 生产必填 | 前端 Origin（https） |
+| `CLIENT_URL` | 生产必填 | 前端 Origin（https），多个用英文逗号分隔，规范主站写在最前 |
 | `CLIENT_ID_SECRET` | 生产必填 | 设备身份与配置加密引导密钥，向导自动生成且必须稳定保存，不是向前端下发的登录私钥 |
 | `TRUST_PROXY` | 推荐 | 反代后设为 `1`；仅当 TCP 对端在 `TRUSTED_PROXY_IPS` 中时才采信转发 IP 头 |
 | `TRUSTED_PROXY_IPS` | 反代必填 | 逗号分隔的反向代理 TCP 地址；本机 Nginx 默认可用 `127.0.0.1,::1`，容器部署须填网关/代理地址 |
 | `CLIENT_IP_HEADER` | 有 CDN | Cloudflare：`CF-Connecting-IP`；EdgeOne：`EO-Connecting-IP`，`iqp` 仅为旧版自定义回源头 |
+| `ALLOW_INSECURE_COOKIES` | 首次 HTTP | 仅首次 IP / HTTP 调试可设为 `1`，HTTPS 上线后务必改为 `0` 强制 Secure Cookie |
 | `REDIS_URL` | 必需 | Redis 连接串（或分项 `REDIS_HOST` 等） |
 
 生产最小配置示例：
 
 ```env
 PORT=4000
+HOST=127.0.0.1
 NODE_ENV=production
 CLIENT_URL=https://music.example.com
 CLIENT_ID_SECRET=换成一段长随机字符串
@@ -125,7 +177,7 @@ Meting / 房间凭证密钥等由向导或管理后台配置。使用汽水音�
 
 普通用户访问令牌固定 3 天，refresh 凭证首次登录起 30 天绝对有效，均通过 HttpOnly Cookie 传递，原 `ACCOUNT_SESSION_TTL_SEC` 不再调整登录期限，旧 `API_SIGN_REQUIRED` 与 `ALLOW_INSECURE_HTTP_API` 不再控制账户业务授权，也不能开放匿名接口
 
-微信扫码登录与 QQ扫码登录复用后台接口盒子的 ID 和 API Key，在「系统设置 → 身份登录」分别开关，管理员扫码身份在账号设置中绑定，前台用户在账户与安全中绑定，新微信与原微信文件传输助手身份独立，配置、验收和回退见 [扫码登录说明](SOCIAL_SCAN_LOGIN.md)
+微信扫码登录与 QQ 扫码登录复用后台接口盒子的 ID 和 API Key，在管理后台「系统设置 → 身份登录」分别开关；管理员扫码身份在账号设置中绑定，前台用户在账户与安全中绑定，新微信与原微信文件传输助手身份独立
 
 自部署若不需要普通用户登录，可在管理后台「系统设置 → 身份登录」开启「允许匿名登录」并保存，默认关闭，保存后立即影响后续业务请求，无需修改 `.env` 或重启服务
 
@@ -247,25 +299,80 @@ done
 | **Nginx** | 直出 `client/dist` 静态资源；仅首页、房间和后台入口回退；HTTPS |
 | **Node `:4000`** | 仅承接 `/api/*`、`/socket.io/`、`/downloads/`、`/wx-proxy`、`/cgi-bin/`、SEO 文件 |
 
-**不要** `location / { proxy_pass 4000; }` 全站进 Node。
+宿主机有 `client/dist` 时采用静态直出，纯 Docker 镜像安装由容器提供网页和接口
 
 ---
 
-## Nginx 配置
+## Nginx 与 CDN 边缘缓存建议
 
-向导完成页会按站点域名生成可复制的 Nginx 配置。仓库内完整示例：
+以下示例适用于宿主机可读取 `client/dist` 的源码部署，向导完成页也可复制站点配置片段
 
 - 宝塔完整版：[deploy/nginx.baota-optimized.conf.example](../deploy/nginx.baota-optimized.conf.example)
 - 精简通用版：[deploy/nginx.conf.example](../deploy/nginx.conf.example)
 
-### 必配要点
+### Docker 镜像上线 HTTPS
 
-1. `/socket.io/` 必须 WebSocket 升级
-2. `/api/media-proxy` 写在 `/api/` 前面，关闭缓冲
-3. `root` 指向 `client/dist`；未知路径须保持 HTTP `404`，并按示例回退到前端 404 页面；仅 `/`、`/room/*`、`/tv/*` 与后台入口可进入应用
-4. 有 CDN 时透传 `CLIENT_IP_HEADER`
+1. 将域名解析到你的入口，在 Nginx 或宝塔申请证书并启用 HTTPS
+2. 在 HTTPS 站点转发到安装器打印的宿主机端口，按以下示例填写 `server` 块内的反向代理
+3. 已通过隧道完成向导时核对 `data/.env` 的 `CLIENT_URL` 为正式 HTTPS 域名，在部署目录的 `.env` 中设置 `ALLOW_INSECURE_COOKIES=0`，再用原 Compose 参数重建 OpenMusic
 
-宝塔详细步骤见 [deploy/DEPLOY-BAOTA.md](../deploy/DEPLOY-BAOTA.md)。
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:4000;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $openmusic_connection_upgrade;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_cache off;
+    proxy_buffering off;
+    proxy_read_timeout 300s;
+    client_max_body_size 20m;
+}
+```
+
+在 Nginx 的 `http` 块内定义升级变量，一套 Nginx 配置只定义一次
+
+```nginx
+map $http_upgrade $openmusic_connection_upgrade {
+    default upgrade;
+    ''      '';
+}
+```
+
+在 `data/.env` 中设置 `TRUST_PROXY=1` 和 `TRUSTED_PROXY_IPS`，后者填写容器实际看到的代理 TCP 地址，然后执行 `nginx -t` 并重载
+
+在原部署目录保留原项目名和所有覆盖文件，以下以全量版为例
+
+```bash
+docker compose --env-file .env -f docker-compose.full.yml up -d --force-recreate --wait openmusic
+curl -fsS https://music.example.com/api/health
+```
+
+### Nginx 必配要点
+
+1. **静态直出 + 回退**：`root` 指向 `client/dist`，未知路径保持 HTTP `404` 并回退到 `@openmusic_not_found`，仅动态入口与接口回源 Node
+2. **WebSocket 与音频流**：`/socket.io/` 必须启用 WebSocket 升级与长超时；`/api/media-proxy` 必须写在 `/api/` 前面并关闭缓冲、关闭 gzip、透传 `Range` / `If-Range`
+3. **长连接与安全头**：定义 `upstream openmusic_backend`（`keepalive 32` + `keepalive_timeout 60s`，略低于 Node `65s`）；通过 `proxy_hide_header` 避免 Nginx 与 Node 重复输出安全头；静态块仅写 `add_header Cache-Control`（不重复叠写 `expires`），同时补齐安全响应头
+4. **上传大小与版本探测**：设置 `client_max_body_size 20m;` 避免封面/图片上传被默认 1MB 截断；`/version.json` 必须设为 `no-cache, must-revalidate`
+5. **真实 IP 透传**：前置接入 CDN 时透传对应 `CLIENT_IP_HEADER`，并限制源站仅信任来自 CDN 的回源流量或校验自定义回源密钥头
+
+### CDN / EdgeOne 边缘缓存速查
+
+若在 Nginx 前方接入 EdgeOne / Cloudflare 等 CDN，建议按以下策略配置（避免误缓存动态接口或锁死旧资源）：
+
+| 路径 / 类型 | 边缘缓存策略 | 浏览器缓存（Max-Age） | 关键注意点 |
+|------|------|------|------|
+| `/api/*`、`/socket.io/*`、`/wx-proxy/*`、`/cgi-bin/*`、`/version.json`、`/vendor/folia/stage.json`、`/room/*`、`/tv/*`、`index.html` | **不缓存**（NoCache） | 遵循源站 | 防止低优先级规则的 Max-Age 穿透覆写 |
+| 公开封面（`/api/rooms/*/cover`、`/api/meting` 的封面请求） | 仅对源站显式声明为公开可缓存的响应启用共享缓存 | 遵循源站 | 保留完整查询参数作为缓存键，确认公开响应无会话 Cookie |
+| `/assets/*`、`/vendor/folia/assets/*` | 遵循源站（`365d immutable`） | 遵循源站 | 保留源站 `immutable`，避免强覆写抹除 |
+| `/qface/*`、`/desk-pet/*`、`/vendor/*`、图标与静态图片 | 遵循源站（7d / 30d） | 遵循源站 | 避免强锁 365 天导致无哈希资源无法更新 |
+| `/downloads/*` | 成功下载短缓存（建议 1 小时）+ 分片回源 | 遵循源站 | 发布时刷新固定下载地址，错误响应避免长缓存 |
+| 站点默认兜底（含 `/robots.txt`、`/sitemap.xml`、`/site.webmanifest`） | **遵循源站**（无缓存头不缓存） | 遵循源站 | 避免 HTML 入口误落入全站长缓存 |
+
+宝塔详细步骤见 [deploy/DEPLOY-BAOTA.md](../deploy/DEPLOY-BAOTA.md)
 
 ---
 

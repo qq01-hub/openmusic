@@ -1,175 +1,21 @@
 # 宝塔面板部署指南
 
-## 方式一：Docker 部署（推荐，最快）
+## 方式一：Docker 一键部署（推荐）
 
-宝塔 → **Docker** → **Compose** → 新建，粘贴以下内容：
-
-```yaml
-services:
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    networks:
-      - openmusic
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-
-  meting:
-    image: w3126197382/meting-api:latest
-    restart: unless-stopped
-    networks:
-      openmusic:
-        aliases:
-          - meting-api
-    ports:
-      # 仅绑定宿主机回环，远程维护请走 SSH 隧道：ssh -L 3000:127.0.0.1:3000 root@服务器IP
-      - "127.0.0.1:3000:3000"
-    environment:
-      # 管理后台：http://127.0.0.1:3000/<ADMIN_PATH>（请将路径和密码改为随机强凭据）
-      ADMIN_PATH: ${METING_ADMIN_PATH:-change_me_random_path}
-      ADMIN_USERNAME: ${METING_ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${METING_ADMIN_PASSWORD:-admin123}
-    volumes:
-      - ./data/meting:/app/data
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-
-  openmusic:
-    image: w3126197382/openmusic:latest
-    restart: unless-stopped
-    stop_grace_period: 30s
-    networks:
-      - openmusic
-    ports:
-      - "4000:4000"
-    environment:
-      PORT: 4000
-      NODE_ENV: production
-      # 首次 IP/HTTP 部署允许 Cookie，HTTPS 上线后设为 0 强制 Secure
-      ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
-      DOCKER_REDIS_URL: redis://redis:6379/0
-      DOCKER_METING_URL: http://meting-api:3000
-      OPENMUSIC_UPDATE_SOCKET: /run/openmusic-update/control.sock
-      ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:-}
-    volumes:
-      - type: bind
-        source: ./data/.env
-        target: /app/server/.env
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./data/runtimeConfig.json
-        target: /app/server/runtimeConfig.json
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./data/adminConfig.json
-        target: /app/server/adminConfig.json
-        bind:
-          create_host_path: false
-      - type: bind
-        source: ./data/setup.lock
-        target: /app/server/setup.lock
-        bind:
-          create_host_path: false
-      - ./data/downloads:/app/server/downloads
-      - openmusic-update:/run/openmusic-update
-    depends_on:
-      redis:
-        condition: service_healthy
-      meting:
-        condition: service_healthy
-
-  updater:
-    image: w3126197382/openmusic:latest
-    restart: unless-stopped
-    command: ["node", "/app/deploy/updater/index.mjs", "docker"]
-    networks:
-      - openmusic
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - openmusic-update:/run/openmusic-update
-    depends_on:
-      openmusic:
-        condition: service_started
-
-volumes:
-  redis-data:
-  openmusic-update:
-
-networks:
-  openmusic:
-    driver: bridge
-    ipam:
-      config:
-        - subnet: ${OPENMUSIC_NETWORK_SUBNET:-172.30.80.0/24}
-```
-
-所有服务都加入 `<项目名>_openmusic` 网络，已声明子网；面板编辑容器时保留该网络并使用自动分配 IP，不要选择独立响度项目的默认网络。部署响度增强版请使用仓库的全量 Compose 与响度覆盖文件，在同一项目启动，见 [容器互访与网络迁移](../docs/DEPLOY.md#容器互访与网络迁移)。若子网冲突，先确认未占用网段，再设置 `OPENMUSIC_NETWORK_SUBNET`；已创建网络变更子网时需本项目停服重建，不能加 `down -v`。
-
-或者用 SSH 终端：
+在宝塔的终端运行以下命令，生成的 Compose 项目可在宝塔 Docker 面板中查看
 
 ```bash
-# 创建目录并准备持久化文件
-mkdir -p /www/openmusic/data/downloads /www/openmusic/data/meting
-cd /www/openmusic
-config_files_repaired=0
-for config_file in data/.env data/runtimeConfig.json data/adminConfig.json data/setup.lock; do
-  if [ -d "$config_file" ]; then
-    backup_path="${config_file}.directory-backup-$(date +%Y%m%d%H%M%S)-$$"
-    mv -- "$config_file" "$backup_path"
-    config_files_repaired=1
-    echo "已将异常目录移至 $backup_path 并保留备份。"
-  fi
-  if [ -e "$config_file" ] && [ ! -f "$config_file" ]; then
-    echo "错误: $config_file 不是普通文件，无法安全自动修复。" >&2
-    exit 1
-  fi
-done
-[ -f data/.env ] || touch data/.env
-[ -f data/setup.lock ] || touch data/setup.lock
-[ -f data/runtimeConfig.json ] || printf '{}\n' > data/runtimeConfig.json
-[ -f data/adminConfig.json ] || printf '{}\n' > data/adminConfig.json
-
-# 把上面的 yaml 保存为 docker-compose.yml，然后：
-if [ "$config_files_repaired" -eq 1 ]; then
-  docker compose up -d --force-recreate openmusic
-else
-  docker compose up -d
-fi
+curl -fsSL https://raw.githubusercontent.com/qq01-hub/openmusic/main/install.sh -o install.sh &&
+  OPENMUSIC_DEPLOY_DIR=/www/openmusic bash install.sh
 ```
 
-然后：
+1. 已有站点时，先备份并将示例中的 `/www/openmusic` 替换为原 Compose 目录，保留原项目名
+2. OpenMusic、Redis、Meting 和 API Token 由脚本自动准备，从本地电脑按脚本输出建立 SSH 隧道，即可打开安装向导
+3. 正式上线时在宝塔添加网站并配置 SSL，将网站反向代理到安装器显示的端口：[Docker 镜像上线 HTTPS](../docs/DEPLOY.md#docker-镜像上线-https)
 
-1. 打开 `http://<IP>:4000`，Redis 和 Meting 已自动配好，只需填站点域名
-2. 点完成，服务自动重启，刷新即可用
-3. 如果要配 Nginx 反代 + HTTPS，见下方「Nginx 配置」
+已有外部音源或需要自定义 Compose 时，直接使用仓库的标准文件并按手动部署流程准备持久化文件：[Docker 手动 Compose](../docs/DEPLOY.md#方式二docker-手动-compose)
 
-### 更新
-
-已接入独立升级服务后，优先在管理后台的「系统设置 → 系统升级」检查并确认升级
-Docker 拉取版本镜像，PM2 源码 / 发布包部署下载 ZIP，旧部署需先按 [系统升级接入说明](../docs/SYSTEM_UPGRADE.md) 安装一次升级服务
-
-```bash
-cd /www/openmusic
-docker compose pull
-docker compose up -d
-```
-
-### 不需要内置 Meting？
-
-去掉 `meting` 服务和 `DOCKER_METING_URL` 那行，自行准备 Meting 即可。
-
----
+更新前备份部署目录下的 `.env`、`data/` 和 Redis 命名卷，已接入独立升级服务的部署可从管理后台升级：[系统升级指南](../docs/SYSTEM_UPGRADE.md)
 
 ## 方式二：源码部署（PM2）
 
@@ -187,32 +33,36 @@ docker compose up -d
 ### 2. 安装依赖并启动
 
 ```bash
-cd /www/openmusic/server
-npm install --production
-cd ..
-pm2 start deploy/ecosystem.config.cjs
+cd /www/openmusic
+npm ci --prefix server --omit=dev
+npm ci --prefix deploy/updater --omit=dev
+pm2 startOrReload deploy/ecosystem.config.cjs --update-env
 pm2 save
 pm2 startup   # 按提示设置开机自启
 ```
 
-或在宝塔 → **Node 项目** → 添加：运行目录 `/www/openmusic/server`，启动文件 `index.js`，端口 `4000`。
+也可由宝塔 **Node 项目** 托管，运行目录为 `/www/openmusic/server`，入口为 `index.js`，默认端口为 `4000`，同一实例只选一种托管方式
+
+源码部署接入本机 Nginx 时，可在 `server/.env` 设置 `HOST=127.0.0.1`
 
 ### 3. 完成配置
 
-打开站点，自动进入部署向导，填 Redis / Meting / 域名即可。
+打开站点，自动进入部署向导，填 Redis / Meting / 域名即可；其余音源、OAuth、SMTP、SEO、AI 等业务项后续直接在 **管理后台 → 运行时配置** 在线修改
 
 ### 更新
 
 ```bash
 # 上传新的 server/ 和 client/dist/ 后：
 cd /www/openmusic/server
-npm install --production
-pm2 restart openmusic
+npm ci --omit=dev
+pm2 restart openmusic --update-env
 ```
 
 ---
 
 ## Nginx 配置
+
+本节适用于源码或发布包部署，纯镜像安装请使用上面的 Docker 反代步骤
 
 宝塔 → **网站** → 添加站点 → **设置** → **配置文件**
 
@@ -225,7 +75,9 @@ pm2 restart openmusic
 1. `root` 指向 `client/dist`，**不要** `location / { proxy_pass 4000; }`
 2. `/socket.io/` 必须 WebSocket 升级
 3. `/api/media-proxy` 写在 `/api/` 前并关闭缓冲
-4. HTTPS 在宝塔申请 SSL 即可，反代仍用 `http://127.0.0.1:4000`
+4. 定义 `upstream openmusic_backend`（`keepalive 32` + `keepalive_timeout 60s`）并在所有 HTTP 反代块设 `proxy_set_header Connection ""` 复用长连接
+5. HTTPS 在宝塔申请 SSL 即可，反代仍走 `http://openmusic_backend`；若未开放 UDP 443 或前置套了免费版 CDN，请勿开启 `listen 443 quic` 与 `Alt-Svc`
+6. 使用 `proxy_hide_header` 避免与 Node 重复输出安全头，静态块仅用 `add_header Cache-Control`（不重复写 `expires`），且 `/version.json` 必须设为 `no-cache, must-revalidate`
 
 保存后：`nginx -t && nginx -s reload`
 
@@ -236,9 +88,11 @@ Node 和部署向导推荐配置已提供所需响应头；Nginx 静态直出不
 
 ```nginx
 location ^~ /vendor/sonic-workshop/ {
-    expires 30d;
-    add_header Cache-Control "public, max-age=2592000" always;
+    add_header Cache-Control "public, max-age=2592000";
     add_header Access-Control-Allow-Origin "null" always;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     access_log off;
     try_files $uri =404;
 }
@@ -259,7 +113,10 @@ location ^~ /vendor/sonic-workshop/ {
 | 问题 | 处理 |
 |------|------|
 | 无法加入房间 | 检查 Nginx `/socket.io/` WebSocket 配置 |
-| 媒体播放卡顿 | `/api/media-proxy` 加 `proxy_buffering off` |
+| 媒体播放卡顿 | `/api/media-proxy` 加 `proxy_buffering off` 与 `gzip off` |
+| HTTPS 登录后立即 401 | 核对 Nginx 透传 `X-Forwarded-Proto $scheme`、`.env` 的 `TRUST_PROXY=1` 与 `TRUSTED_PROXY_IPS`，上线 HTTPS 后将 `ALLOW_INSECURE_COOKIES` 设为 `0` 并重建容器 |
+| 上传封面或图片报 413 | 在 Nginx `server` 块补齐 `client_max_body_size 20m;` 并重载 |
 | 搜不到歌 / 无法播放 | 检查 Meting 配置与 Token |
 | 502 | `pm2 list` 或 `docker compose ps` 看服务是否在跑 |
-| 端口冲突 | 改 `.env` 的 `PORT` 和 Nginx 反代端口 |
+| 端口冲突 | Docker 调整部署目录的 `OPENMUSIC_PORT`，源码调整 `server/.env` 的 `PORT`，再同步反代端口 |
+| Redis 在数据库页没有显示 | Docker Redis 由 Compose 托管，可用原 Compose 参数运行 `ps redis` 或 `exec -T redis redis-cli ping` 查看 |

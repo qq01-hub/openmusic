@@ -182,19 +182,30 @@ location = /admin {
     proxy_set_header CF-Connecting-IP $http_cf_connecting_ip;
 }
 
-# 静态直出（构建产物带 content hash，可长期缓存；预压缩 .gz 直接复用）
+# 静态直出（仅使用 add_header Cache-Control 避免重复头；预压缩 .gz 直接复用）
+location = /version.json {
+    add_header Cache-Control "no-cache, must-revalidate" always;
+    access_log off;
+    try_files $uri =404;
+}
+
 location ^~ /assets/ {
     gzip_static on;
-    expires 1y;
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header Cache-Control "public, max-age=31536000, immutable";
     access_log off;
     try_files $uri =404;
 }
 
 location ^~ /qface/ {
     gzip_static on;
-    expires 365d;
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header Cache-Control "public, max-age=604800";
+    access_log off;
+    try_files $uri =404;
+}
+
+location ^~ /desk-pet/ {
+    gzip_static on;
+    add_header Cache-Control "public, max-age=2592000";
     access_log off;
     try_files $uri =404;
 }
@@ -202,8 +213,7 @@ location ^~ /qface/ {
 # Sonic Workshop 在 sandbox 的 opaque origin 内加载 ES module；仅允许 Origin: null，且不允许凭据
 location ^~ /vendor/sonic-workshop/ {
     gzip_static on;
-    expires 30d;
-    add_header Cache-Control "public, max-age=2592000" always;
+    add_header Cache-Control "public, max-age=2592000";
     add_header Access-Control-Allow-Origin "null" always;
     access_log off;
     try_files $uri =404;
@@ -211,14 +221,12 @@ location ^~ /vendor/sonic-workshop/ {
 
 location ^~ /vendor/folia/assets/ {
     gzip_static on;
-    expires 1y;
-    add_header Cache-Control "public, max-age=31536000, immutable" always;
+    add_header Cache-Control "public, max-age=31536000, immutable";
     access_log off;
     try_files $uri =404;
 }
 
 location ^~ /vendor/folia/ {
-    expires -1;
     add_header Cache-Control "no-cache, must-revalidate" always;
     access_log off;
     try_files $uri =404;
@@ -226,41 +234,35 @@ location ^~ /vendor/folia/ {
 
 location ^~ /vendor/ {
     gzip_static on;
-    expires 30d;
-    add_header Cache-Control "public, max-age=2592000" always;
+    add_header Cache-Control "public, max-age=2592000";
     access_log off;
     try_files $uri =404;
 }
 
 location = /favicon.svg {
     gzip_static on;
-    expires 7d;
-    add_header Cache-Control "public, max-age=604800" always;
+    add_header Cache-Control "public, max-age=604800";
     access_log off;
 }
 
 location = /favicon.ico {
-    expires 7d;
-    add_header Cache-Control "public, max-age=604800" always;
+    add_header Cache-Control "public, max-age=604800";
     access_log off;
 }
 
 location = /apple-touch-icon.png {
-    expires 7d;
-    add_header Cache-Control "public, max-age=604800" always;
+    add_header Cache-Control "public, max-age=604800";
     access_log off;
 }
 
 location = /site.webmanifest {
-    expires 7d;
-    add_header Cache-Control "public, max-age=604800" always;
+    add_header Cache-Control "public, max-age=604800";
     access_log off;
     default_type application/manifest+json;
 }
 
 location = /og-cover.png {
-    expires 7d;
-    add_header Cache-Control "public, max-age=604800" always;
+    add_header Cache-Control "public, max-age=604800";
     access_log off;
 }
 

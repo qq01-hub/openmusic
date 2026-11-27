@@ -1,8 +1,8 @@
-# 全量版：OpenMusic + Redis + Meting-API。
-# 用法：复制 .env.full.example 为 .env，填入随机凭据后再启动。
+# 全量版：OpenMusic + Redis + Meting-API
+# 用法：复制 .env.full.example 为 .env，填入随机凭据后再启动
 #       docker compose --env-file .env -f docker-compose.full.yml up -d
 #
-# Meting 管理后台仅监听宿主机回环地址；远程管理请使用 SSH 隧道。
+# Meting 管理后台仅监听宿主机回环地址，远程管理请使用 SSH 隧道
 
 services:
   redis:
@@ -50,7 +50,7 @@ services:
     networks:
       - openmusic
     ports:
-      - "${OPENMUSIC_PORT:-4000}:4000"
+      - "${OPENMUSIC_BIND_ADDRESS:-0.0.0.0}:${OPENMUSIC_PORT:-4000}:4000"
     environment:
       PORT: 4000
       NODE_ENV: production
