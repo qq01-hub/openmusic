@@ -51,6 +51,13 @@ export async function applySourceRelease({ root, stage, backup, journal, checkpo
   await fs.rename(path.join(stage, 'server'), path.join(root, 'server'));
   await fs.rename(path.join(root, 'client/dist'), path.join(backup, 'client-dist'));
   await fs.rename(path.join(stage, 'client/dist'), path.join(root, 'client/dist'));
+  // 外置大资源（批 4）：static/ 随发布包一起换版；旧部署根目录可能还没有 static/，故带存在性判断
+  if (await exists(path.join(stage, 'static'))) {
+    if (await exists(path.join(root, 'static'))) {
+      await fs.rename(path.join(root, 'static'), path.join(backup, 'static'));
+    }
+    await fs.rename(path.join(stage, 'static'), path.join(root, 'static'));
+  }
   await checkpoint('正在启动新版本并检查服务响应');
   await run('pm2', ['restart', 'openmusic']);
   await health();
@@ -80,6 +87,12 @@ export async function rollbackSource(journal, run = runCommand) {
       await fs.rename(path.join(root, 'client/dist'), path.join(backup, 'failed-client-dist'));
     }
     await fs.rename(path.join(backup, 'client-dist'), path.join(root, 'client/dist'));
+  }
+  if (await exists(path.join(backup, 'static'))) {
+    if (await exists(path.join(root, 'static'))) {
+      await fs.rename(path.join(root, 'static'), path.join(backup, 'failed-static'));
+    }
+    await fs.rename(path.join(backup, 'static'), path.join(root, 'static'));
   }
   if (Object.hasOwn(journal, 'previousVersion')) {
     const file = path.join(root, 'deployment-version.json');

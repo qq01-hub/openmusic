@@ -13,8 +13,9 @@
     "check:room-visuals": "tsx scripts/check-room-visuals.ts",
     "prebuild": "node ../scripts/build-folia.mjs",
     "build": "vite build",
-    "build:check": "npm run typecheck && npm run check:antd-boundary && npm run build",
+    "build:check": "npm run typecheck && npm run check:antd-boundary && npm run build && npm run check:antd-dist",
     "check:antd-boundary": "node scripts/check-antd-boundary.mjs",
+    "check:antd-dist": "node scripts/check-antd-boundary.mjs --dist",
     "preview": "vite preview",
     "build:apk": "node ../mobile/scripts/build-flutter-apk.mjs --release"
   },

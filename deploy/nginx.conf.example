@@ -4,6 +4,8 @@
 # 按需替换：
 #   your-domain.com             → 你的站点域名
 #   /www/openmusic/client/dist  → 前端构建目录
+#   /www/openmusic/static       → 外置大资源目录（desk-pet/qface/vendor，批 4 起不再进 dist；
+#                                 下方各 location 已用 alias 指向它，也可整体换成独立静态域名/CDN 回源）
 #   127.0.0.1:4000              → Node 服务监听地址（建议 .env 设置 HOST=127.0.0.1）
 # 保存后：nginx -t && nginx -s reload
 #
@@ -301,6 +303,7 @@ server {
     }
 
     location ^~ /qface/ {
+    alias /www/openmusic/static/qface/;
         add_header Cache-Control "public, max-age=604800";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -310,6 +313,7 @@ server {
     }
 
     location ^~ /desk-pet/ {
+    alias /www/openmusic/static/desk-pet/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -320,6 +324,7 @@ server {
 
     # Sonic Workshop 的 sandbox iframe 使用 opaque origin；仅为公开静态资源允许 Origin: null，不允许凭据
     location ^~ /vendor/sonic-workshop/ {
+    alias /www/openmusic/static/vendor/sonic-workshop/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Access-Control-Allow-Origin "null" always;
         add_header Strict-Transport-Security "max-age=31536000" always;
@@ -330,6 +335,7 @@ server {
     }
 
     location ^~ /vendor/folia/assets/ {
+    alias /www/openmusic/static/vendor/folia/assets/;
         add_header Cache-Control "public, max-age=31536000, immutable";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -339,6 +345,7 @@ server {
     }
 
     location ^~ /vendor/folia/ {
+    alias /www/openmusic/static/vendor/folia/;
         add_header Cache-Control "no-cache, must-revalidate" always;
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -348,6 +355,7 @@ server {
     }
 
     location ^~ /vendor/ {
+    alias /www/openmusic/static/vendor/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -387,6 +395,14 @@ server {
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         default_type application/manifest+json;
+    }
+
+    location = /og-cover.webp {
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        access_log off;
     }
 
     location = /og-cover.png {

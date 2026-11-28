@@ -354,6 +354,7 @@ server {
     }
 
     location ^~ /qface/ {
+    alias /www/openmusic/static/qface/;
         add_header Cache-Control "public, max-age=604800";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -363,6 +364,7 @@ server {
     }
 
     location ^~ /desk-pet/ {
+    alias /www/openmusic/static/desk-pet/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -373,6 +375,7 @@ server {
 
     # Sonic Workshop 的 sandbox iframe 使用 opaque origin；仅为公开静态资源允许 Origin: null，不允许凭据
     location ^~ /vendor/sonic-workshop/ {
+    alias /www/openmusic/static/vendor/sonic-workshop/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Access-Control-Allow-Origin "null" always;
         add_header Strict-Transport-Security "max-age=31536000" always;
@@ -383,6 +386,7 @@ server {
     }
 
     location ^~ /vendor/folia/assets/ {
+    alias /www/openmusic/static/vendor/folia/assets/;
         add_header Cache-Control "public, max-age=31536000, immutable";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -392,6 +396,7 @@ server {
     }
 
     location ^~ /vendor/folia/ {
+    alias /www/openmusic/static/vendor/folia/;
         add_header Cache-Control "no-cache, must-revalidate" always;
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -401,6 +406,7 @@ server {
     }
 
     location ^~ /vendor/ {
+    alias /www/openmusic/static/vendor/;
         add_header Cache-Control "public, max-age=2592000";
         add_header Strict-Transport-Security "max-age=31536000" always;
         add_header X-Content-Type-Options "nosniff" always;
@@ -440,6 +446,14 @@ server {
         add_header Referrer-Policy "strict-origin-when-cross-origin" always;
         access_log off;
         default_type application/manifest+json;
+    }
+
+    location = /og-cover.webp {
+        add_header Cache-Control "public, max-age=604800";
+        add_header Strict-Transport-Security "max-age=31536000" always;
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        access_log off;
     }
 
     location = /og-cover.png {

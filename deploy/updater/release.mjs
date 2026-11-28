@@ -123,7 +123,8 @@ export function archiveTarget(name, mode = 0) {
   }
   const relative = name.replace(/^openmusic\//, '');
   if (/^server\/(?:[a-zA-Z0-9_-]+\.js|package(?:-lock)?\.json)$/.test(relative)
-    || /^client\/dist\/[^/].*/.test(relative)) return relative;
+    || /^client\/dist\/[^/].*/.test(relative)
+    || /^static\/[^/].*/.test(relative)) return relative;
   throw updateError('UPDATE_ARCHIVE_UNSAFE', '升级包尝试覆盖受保护文件');
 }
 export async function extractRelease(archive, destination) {
@@ -151,7 +152,7 @@ export async function extractRelease(archive, destination) {
         if (name.endsWith('/')) {
           return;
         }
-        if (!name.startsWith('server/') && !name.startsWith('client/dist/')) return;
+        if (!name.startsWith('server/') && !name.startsWith('client/dist/') && !name.startsWith('static/')) return;
         if (name === 'server/.env.example' || name === 'client/.env.example') return;
         const relative = archiveTarget(entry.fileName, entry.externalFileAttributes >>> 16);
         total += entry.uncompressedSize;
@@ -167,7 +168,7 @@ export async function extractRelease(archive, destination) {
     });
     zip.readEntry();
   });
-  for (const required of ['server/index.js', 'server/package.json', 'server/package-lock.json', 'client/dist/index.html']) {
+  for (const required of ['server/index.js', 'server/package.json', 'server/package-lock.json', 'client/dist/index.html', 'static/vendor/folia/stage.json']) {
     await fsp.access(path.join(destination, required));
   }
 }

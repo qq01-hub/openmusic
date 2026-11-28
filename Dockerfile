@@ -25,10 +25,12 @@ COPY release-notes.json ./release-notes.json
 COPY client/package.json client/package-lock.json* ./client/
 RUN --mount=type=cache,id=openmusic-npm-cache,target=/root/.npm,sharing=locked cd client && npm ci --prefer-offline
 COPY client ./client
+# 大资源已外置到仓库根 static/（批 4）；构建时 folia 产物也会由 scripts/build-folia.mjs 搬进 static/
+COPY static ./static
 RUN cd client && npm run build
 
 # ---- 后端生产依赖 ----
-FROM node:20-alpine AS server-deps
+FROM ${NODE_IMAGE} AS server-deps
 WORKDIR /app/server
 ENV NPM_CONFIG_FETCH_RETRIES=6 \
     NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
@@ -53,6 +55,8 @@ COPY server ./server
 COPY deploy/updater ./deploy/updater
 COPY --from=server-deps /app/deploy/updater/node_modules ./deploy/updater/node_modules
 COPY --from=client-builder /app/client/dist ./client/dist
+# 外置大资源（desk-pet/qface/vendor）：server 按 /desk-pet/、/qface/、/vendor/ 从 ../static 托管
+COPY --from=client-builder /app/static ./static
 # 运行时以官方镜像内置的非 root 用户 node（uid 1000）运行：
 # - 镜像内目录（downloads、临时缓存走 /tmp）归 node 所有，应用可直接写
 # - Compose 的 bind 挂载（./data/.env 等宿主机文件）需宿主机侧 chown 到 1000:1000，

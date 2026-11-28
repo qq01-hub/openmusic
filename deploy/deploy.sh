@@ -259,6 +259,7 @@ write_source_nginx_snippet() {
   awk -v root_dir="${ROOT_DIR}" -v app_port="${app_port}" '
     {
       gsub(/\/www\/openmusic\/client\/dist/, root_dir "/client/dist")
+      gsub(/\/www\/openmusic\/static/, root_dir "/static")
       gsub(/127\.0\.0\.1:4000/, "127.0.0.1:" app_port)
       print
     }

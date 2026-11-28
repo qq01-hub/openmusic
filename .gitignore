@@ -1,5 +1,6 @@
 node_modules/
 client/public/vendor/folia/
+static/vendor/folia/
 dist/
 .env
 *.log

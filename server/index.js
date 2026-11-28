@@ -416,6 +416,9 @@ async function clearRoomOwnerBindings(roomId) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.join(__dirname, '../client/dist');
+// 大资源（desk-pet/qface/vendor）已外置到仓库根 static/（批 4），不再进 client/dist；
+// URL 不变，仍按 /desk-pet/、/qface/、/vendor/ 托管，部署时可把 static/ 换成独立目录或 CDN 回源。
+const clientStatic = path.join(__dirname, '../static');
 const PORT = process.env.PORT || 4000;
 const HOST = (process.env.HOST || '').trim();
 const DISCONNECT_GRACE_MS = 30_000;
@@ -4712,15 +4715,36 @@ app.use('/assets', servePrecompressedStatic(
   () => 'public, max-age=31536000, immutable',
 ));
 app.use('/vendor/folia/assets', servePrecompressedStatic(
-  path.join(clientDist, 'vendor', 'folia', 'assets'),
+  path.join(clientStatic, 'vendor', 'folia', 'assets'),
   /\.(?:js|css|json|svg|map)$/i,
   () => 'public, max-age=31536000, immutable',
 ));
 app.use('/vendor/sonic-workshop', servePrecompressedStatic(
-  path.join(clientDist, 'vendor', 'sonic-workshop'),
+  path.join(clientStatic, 'vendor', 'sonic-workshop'),
   /\.(?:js|css|html|json|svg)$/i,
   () => 'public, max-age=2592000',
 ));
+
+// 外置大资源托管（批 4）：static/ 顶层即 desk-pet/、qface/、vendor/，URL 与原 dist 内路径一致。
+// 必须挂在 client/dist 之前，避免旧部署残留的 dist 同名目录抢先命中。
+app.use(express.static(clientStatic, {
+  index: false,
+  setHeaders(res, filePath) {
+    const rel = path.relative(clientStatic, filePath).replace(/\\/g, '/');
+    if (rel.startsWith('vendor/sonic-workshop/')) {
+      // sandboxed iframe 使用 opaque origin 加载 ES module，精确允许 Origin: null。
+      res.setHeader('Access-Control-Allow-Origin', 'null');
+    }
+    if (['vendor/folia/stage.json', 'vendor/folia/index.html', 'vendor/folia/source.zip', 'vendor/folia/LICENSE.txt'].includes(rel)) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      return;
+    }
+    if (rel.startsWith('qface/') || rel.startsWith('vendor/') || rel.startsWith('desk-pet/')) {
+      // 表情与桌宠资源几乎不变，浏览器长缓存 1 年
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  },
+}));
 
 app.use(express.static(clientDist, {
   index: false,

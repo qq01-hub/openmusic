@@ -216,6 +216,7 @@ location ^~ /assets/ {
 }
 
 location ^~ /qface/ {
+    alias __APP_ROOT__/static/qface/;
     gzip_static on;
     add_header Cache-Control "public, max-age=604800";
     access_log off;
@@ -223,6 +224,7 @@ location ^~ /qface/ {
 }
 
 location ^~ /desk-pet/ {
+    alias __APP_ROOT__/static/desk-pet/;
     gzip_static on;
     add_header Cache-Control "public, max-age=2592000";
     access_log off;
@@ -231,6 +233,7 @@ location ^~ /desk-pet/ {
 
 # Sonic Workshop 在 sandbox 的 opaque origin 内加载 ES module；仅允许 Origin: null，且不允许凭据
 location ^~ /vendor/sonic-workshop/ {
+    alias __APP_ROOT__/static/vendor/sonic-workshop/;
     gzip_static on;
     add_header Cache-Control "public, max-age=2592000";
     add_header Access-Control-Allow-Origin "null" always;
@@ -239,6 +242,7 @@ location ^~ /vendor/sonic-workshop/ {
 }
 
 location ^~ /vendor/folia/assets/ {
+    alias __APP_ROOT__/static/vendor/folia/assets/;
     gzip_static on;
     add_header Cache-Control "public, max-age=31536000, immutable";
     access_log off;
@@ -246,12 +250,14 @@ location ^~ /vendor/folia/assets/ {
 }
 
 location ^~ /vendor/folia/ {
+    alias __APP_ROOT__/static/vendor/folia/;
     add_header Cache-Control "no-cache, must-revalidate" always;
     access_log off;
     try_files $uri =404;
 }
 
 location ^~ /vendor/ {
+    alias __APP_ROOT__/static/vendor/;
     gzip_static on;
     add_header Cache-Control "public, max-age=2592000";
     access_log off;
@@ -278,6 +284,11 @@ location = /site.webmanifest {
     add_header Cache-Control "public, max-age=604800";
     access_log off;
     default_type application/manifest+json;
+}
+
+location = /og-cover.webp {
+    add_header Cache-Control "public, max-age=604800";
+    access_log off;
 }
 
 location = /og-cover.png {

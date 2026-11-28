@@ -16,6 +16,8 @@ for (const file of fs.readdirSync(path.join(root, 'server'))) {
   }
 }
 fs.cpSync(path.join(root, 'client/dist'), path.join(output, 'client/dist'), { recursive: true });
+// 外置大资源（批 4）：desk-pet/qface/vendor 已移到仓库根 static/，发布包必须带上，否则新装缺资源
+fs.cpSync(path.join(root, 'static'), path.join(output, 'static'), { recursive: true });
 fs.cpSync(path.join(root, 'deploy'), path.join(output, 'deploy'), {
   recursive: true, filter: source => !source.split(path.sep).includes('node_modules'),
 });
