@@ -1,9 +1,13 @@
 # syntax=docker/dockerfile:1
 
+# 基础镜像 pin 到具体版本 + manifest digest（批 2）：升级 Node 时同步更新版本号与 digest，
+# digest 可用 `docker buildx imagetools inspect node:<版本>` 复核
+ARG NODE_IMAGE=node:20.19.5-alpine3.22@sha256:6178e78b972f79c335df281f4b7674a2d85071aae2af020ffa39f0a770265435
+
 # ---- 前端构建 ----
 # Vite 输出为架构无关的静态文件；固定在构建机执行，避免多架构发布时
 # 在 QEMU 下为 ARM64 重复执行 npm ci/build。
-FROM --platform=$BUILDPLATFORM node:20-alpine AS client-builder
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS client-builder
 WORKDIR /app
 ENV NPM_CONFIG_FETCH_RETRIES=6 \
     NPM_CONFIG_FETCH_RETRY_FACTOR=2 \
@@ -39,7 +43,7 @@ COPY deploy/updater/package.json deploy/updater/package-lock.json /app/deploy/up
 RUN --mount=type=cache,id=openmusic-npm-cache,target=/root/.npm,sharing=locked cd /app/deploy/updater && npm ci --omit=dev --prefer-offline
 
 # ---- 运行时镜像 ----
-FROM node:20-alpine AS runtime
+FROM ${NODE_IMAGE} AS runtime
 ARG OPENMUSIC_RELEASE_VERSION=development
 ENV NODE_ENV=production
 ENV OPENMUSIC_RELEASE_VERSION=$OPENMUSIC_RELEASE_VERSION
@@ -49,7 +53,15 @@ COPY server ./server
 COPY deploy/updater ./deploy/updater
 COPY --from=server-deps /app/deploy/updater/node_modules ./deploy/updater/node_modules
 COPY --from=client-builder /app/client/dist ./client/dist
-RUN rm -f ./server/*.test.js && mkdir -p ./server/downloads
+# 运行时以官方镜像内置的非 root 用户 node（uid 1000）运行：
+# - 镜像内目录（downloads、临时缓存走 /tmp）归 node 所有，应用可直接写
+# - Compose 的 bind 挂载（./data/.env 等宿主机文件）需宿主机侧 chown 到 1000:1000，
+#   install.sh 已自动处理；手动部署见 docs/DEPLOY.md「非 root 运行与数据目录权限」
+# - updater 服务需访问 docker.sock，是唯一例外：compose 中以 user: "0:0" 覆盖
+RUN rm -f ./server/*.test.js && mkdir -p ./server/downloads \
+    && chown node:node /app/server \
+    && chown -R node:node /app/server/downloads /app/client/dist /app/static
+USER node
 
 EXPOSE 4000
 WORKDIR /app/server

@@ -13,9 +13,22 @@ const LEGACY_LOCAL_PATH = path.join(__dirname, 'adminCredentials.json');
 
 const CREDENTIALS_KEY = 'openmusic:admin:credentials';
 const DEFAULT_USERNAME = 'admin';
+/** 历史默认弱密码：仅用于在改密时拒绝继续使用，禁止再作为引导凭据 */
 const DEFAULT_PASSWORD = '123456';
+/** 随机初始密码字母表（避开易混淆字符），与 setupApi 的引导密码口径一致 */
+const BOOTSTRAP_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%^&*';
+
+/** 生成随机初始管理员密码（20 位）；仅在无向导、无 ADMIN_KEY 的兜底引导时使用 */
+export function generateBootstrapAdminPassword(length = 20) {
+  const bytes = randomBytes(length);
+  let password = '';
+  for (let i = 0; i < length; i += 1) {
+    password += BOOTSTRAP_PASSWORD_ALPHABET[bytes[i] % BOOTSTRAP_PASSWORD_ALPHABET.length];
+  }
+  return password;
+}
 const ENV_USERNAME = String(process.env.ADMIN_USER || DEFAULT_USERNAME).trim() || DEFAULT_USERNAME;
-const ENV_PASSWORD = String(process.env.ADMIN_KEY || DEFAULT_PASSWORD).trim() || DEFAULT_PASSWORD;
+const ENV_PASSWORD = String(process.env.ADMIN_KEY || '').trim();
 
 /**
  * @type {{ username: string, salt: string, hash: string, updatedAt: number, mustChange: boolean, source: 'redis' } | null}
@@ -27,7 +40,7 @@ export function sanitizeAdminUsername(raw) {
   return /^[A-Za-z0-9_.@-]{2,32}$/.test(username) ? username : null;
 }
 
-/** 正式密码 ≥8；引导默认密码 123456 仅用于首次登录 */
+/** 正式密码 ≥8；allowBootstrap 时 ≥6 仅为兼容 ADMIN_KEY 环境变量的既有取值 */
 export function sanitizeAdminPassword(raw, { allowBootstrap = false } = {}) {
   const password = String(raw ?? '');
   const min = allowBootstrap ? 6 : 8;
@@ -156,7 +169,10 @@ function deleteLegacyLocalFile() {
 
 /**
  * 启动时调用（须在 Redis 就绪之后）：
- * 优先 Redis；其次迁移旧本地文件到 Redis 后删除；最后用默认 admin/123456 引导写入 Redis。
+ * 优先 Redis；其次迁移旧本地文件到 Redis 后删除；最后引导写入 Redis——
+ * 部署向导（setupApi）是凭据的主来源，本兜底仅在向导未运行且 Redis 无凭据时触发：
+ * 用 ADMIN_KEY 环境变量（若合法），否则生成随机初始密码并只在本次启动日志打印一次，
+ * 且强制首次登录改密。不再使用任何固定默认口令。
  * 密码哈希只存 Redis，不再写入磁盘，也不使用内存兜底。
  */
 export async function initAdminCredentials() {
@@ -190,15 +206,20 @@ export async function initAdminCredentials() {
   }
 
   const username = sanitizeAdminUsername(ENV_USERNAME) || DEFAULT_USERNAME;
-  const password = sanitizeAdminPassword(ENV_PASSWORD, { allowBootstrap: true }) || DEFAULT_PASSWORD;
-  const isDefaultBootstrap = username === DEFAULT_USERNAME && password === DEFAULT_PASSWORD;
+  const envPassword = sanitizeAdminPassword(ENV_PASSWORD, { allowBootstrap: true });
+  const generated = !envPassword;
+  const password = envPassword || generateBootstrapAdminPassword();
   const record = await buildRecord(username, password, {
-    mustChange: isDefaultBootstrap || password === DEFAULT_PASSWORD || password.length < 8,
+    mustChange: generated || password.length < 8,
   });
 
   if (await writeToRedis(record)) {
     current = { ...record, source: 'redis' };
     console.log(`🔐 管理后台: 已初始化管理员账号（${username}）并写入 Redis${record.mustChange ? '（首次登录须改密）' : ''}`);
+    if (generated) {
+      // 随机初始密码只在此处打印一次，Redis 中只存哈希，错过只能删凭据键后重启重新生成
+      console.log(`🔐 管理后台: 初始管理员密码（随机生成，仅本次启动日志显示，请立即登录并修改）：${password}`);
+    }
   } else {
     current = null;
     console.error('🔐 管理后台: 初始化凭据写入 Redis 失败，后台已安全禁用');

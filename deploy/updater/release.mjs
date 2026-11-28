@@ -76,11 +76,16 @@ export function selectRelease(data) {
     || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > MAX_ARCHIVE) {
     throw updateError('UPDATE_RELEASE_INVALID', '发布 ZIP 缺失、过大或缺少 SHA256 校验信息', 502);
   }
+  // Docker 通道的期望 digest（可选）：发布说明中以 `docker-digest: sha256:<64hex>` 单独成行时才采信，
+  // 与 ZIP 的 asset digest 不同源时可作为镜像换代前的比对依据；缺失时 docker.mjs 退化为记录实际 digest
+  const dockerDigestMatch = /(?:^|\n)\s*(?:docker[-_ ]?digest|image[-_ ]?digest)\s*[:=]\s*(sha256:[0-9a-f]{64})\b/i
+    .exec(String(data.body || ''));
   return {
     id: data.id, tag: data.tag_name, name: String(data.name || data.tag_name).slice(0, 120),
     notes: String(data.body || '').slice(0, 6000), publishedAt: data.published_at || '',
     url: `https://github.com/${REPOSITORY}/releases/tag/${data.tag_name}`,
     downloadUrl: expected, size: asset.size, sha256: asset.digest.slice(7),
+    dockerDigest: dockerDigestMatch ? dockerDigestMatch[1] : '',
   };
 }
 export async function checkRelease() {

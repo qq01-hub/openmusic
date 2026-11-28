@@ -283,7 +283,12 @@ function parseRedisInput(raw = {}) {
     try {
       const parsed = new URL(url);
       if (parsed.protocol !== 'redis:' && parsed.protocol !== 'rediss:') throw new Error();
-      return { options: { url }, values: { REDIS_URL: url } };
+      const options = { url };
+      // Docker 联合部署时密码经 REDIS_PASSWORD 环境变量单独传入（不进 URL、不落盘），
+      // 与 roomStorage.getRedisConnectionOptions 的叠加口径一致；URL 自带密码时以 URL 为准
+      const envPassword = String(process.env.REDIS_PASSWORD || '').trim();
+      if (envPassword && !parsed.password) options.password = envPassword;
+      return { options, values: { REDIS_URL: url } };
     } catch {
       return { error: 'Redis URL 必须以 redis:// 或 rediss:// 开头' };
     }

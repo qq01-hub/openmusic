@@ -293,6 +293,35 @@ done
 - 启动后核对配置挂载路径、Redis 卷名、后台设置、收藏和 Meting Cookie；验证容器重建后仍保留。若失败，停止新目录的服务（不加 `-v`），回原目录用原项目名启动；不要同时运行新旧实例。
 - 源码版 `deploy/deploy.sh` 仍在仓库目录创建 `data/`；新部署请将仓库克隆到 `/opt/openmusic` 等独立目录。宝塔示例使用 `/www/openmusic`，不要删除该宿主机目录。
 
+### 备份与恢复（脚本）
+
+`deploy/backup.sh` 把上述手工备份做成一条命令：打包部署目录 `.env`、整个 `data/`，并在 Redis 容器运行中先执行 `BGSAVE` 再整卷导出（含 AOF 目录），输出带时间戳的 `openmusic-backup-<时间>.tar.gz` 与同名 `.sha256` 校验文件，默认只保留最近 7 份（`OPENMUSIC_BACKUP_KEEP` 可改）：
+
+```bash
+OPENMUSIC_DEPLOY_DIR=/opt/openmusic bash deploy/backup.sh
+# 输出目录可用 OPENMUSIC_BACKUP_DIR 覆盖；项目名非默认时同时传 COMPOSE_PROJECT_NAME
+```
+
+恢复步骤：
+
+1. 校验归档：`sha256sum -c openmusic-backup-<时间>.tar.gz.sha256`。
+2. 停服（不要带 `-v`）：`docker compose --env-file .env -f docker-compose.full.yml down`。
+3. 解开归档，把 `.env` 与 `data/` 放回部署目录（属主与权限保持 600/700，`data/` 需可被容器内 node 用户写入，见下节）。
+4. 恢复 Redis：先启动一次 redis 让卷存在，停掉后把 `redis/redis-data.tar` 解开到 `redis-data` 卷根目录（或用一次性容器 `docker run --rm -v <项目名>_redis-data:/data -v <备份目录>:/backup alpine tar -xf /backup/.../redis-data.tar -C /data`，归档路径按实际调整），再启动全部服务。
+5. 启动后核对后台设置、收藏、房间与 Meting Cookie 是否完整；验收完成前保留原备份与旧目录，不要同时运行新旧实例。
+
+Redis 容器未运行时脚本会跳过 Redis 备份并明确警告——那种备份不含房间、收藏与管理员凭据，不能用于整站恢复。
+
+### 非 root 运行与数据目录权限
+
+运行时镜像默认以非 root 用户 `node`（uid/gid 1000）运行主站；`updater` 是唯一例外（需访问 `docker.sock`，compose 中显式 `user: "0:0"`，其风险与未采用 socket proxy 的理由写在 compose 文件注释里）。主站通过 bind 挂载写入的宿主机文件（`data/.env`、`data/runtimeConfig.json`、`data/adminConfig.json`、`data/setup.lock`、`data/downloads/`）必须归 uid 1000 所有，`install.sh` 会自动 `chown -R 1000:1000 data`；手动部署或从旧版（root 运行）升级时请先执行：
+
+```bash
+sudo chown -R 1000:1000 data
+```
+
+已有部署升级到本版本后若主站日志出现数据文件写入失败，多半就是该目录仍归 root。另外 `openmusic-update` 卷内的升级控制 socket 已改为目录 0710 + socket 0660（root 组），主站容器通过 `group_add: ["0"]` 连接；旧卷若仍是 0700/0600 导致后台升级不可用，删除该卷重建一次即可（其中只有升级状态，无业务数据）：`docker compose down && docker volume rm <项目名>_openmusic-update`。
+
 ---
 
 ## 推荐架构（生产）

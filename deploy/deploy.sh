@@ -541,14 +541,17 @@ ensure_full_env_file() {
     local meting_admin_path
     local meting_pw
     local encryption_key
+    local redis_pw
     if require_cmd openssl; then
       meting_admin_path="$(openssl rand -hex 8)"
       meting_pw="$(openssl rand -hex 16)"
       encryption_key="$(openssl rand -hex 32)"
+      redis_pw="$(openssl rand -hex 32)"
     else
       meting_admin_path="$(od -An -N 8 -tx1 /dev/urandom | tr -d ' \n')"
       meting_pw="$(od -An -N 16 -tx1 /dev/urandom | tr -d ' \n')"
       encryption_key="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
+      redis_pw="$(od -An -N 32 -tx1 /dev/urandom | tr -d ' \n')"
     fi
     (umask 077 && cat > "$env_file") <<EOF
 OPENMUSIC_PORT=$openmusic_port
@@ -560,6 +563,8 @@ METING_ADMIN_PATH=$meting_admin_path
 METING_ADMIN_USERNAME=admin
 METING_ADMIN_PASSWORD=$meting_pw
 ROOM_CREDENTIAL_ENCRYPTION_KEY=$encryption_key
+REDIS_PASSWORD=$redis_pw
+LOUDNESS_REDIS_URL=redis://:${redis_pw}@redis:6379
 EOF
     chmod 600 "$env_file"
     ok "已自动生成根目录 $env_file 配置（权限 600）"
