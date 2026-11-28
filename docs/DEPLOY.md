@@ -178,7 +178,7 @@ REDIS_URL=redis://127.0.0.1:6379/0
 
 Meting / 房间凭证密钥等由向导或管理后台配置。使用汽水音乐时，Meting 须包含 `qishui` provider；网易、QQ、汽水均优先房间绑定账号，否则走全站共享池。
 
-普通用户访问令牌固定 3 天，refresh 凭证首次登录起 30 天绝对有效，均通过 HttpOnly Cookie 传递，原 `ACCOUNT_SESSION_TTL_SEC` 不再调整登录期限，旧 `API_SIGN_REQUIRED` 与 `ALLOW_INSECURE_HTTP_API` 不再控制账户业务授权，也不能开放匿名接口
+普通用户访问令牌固定 3 天，refresh 凭证首次登录起 30 天绝对有效，均通过 HttpOnly Cookie 传递，原 `ACCOUNT_SESSION_TTL_SEC` 不再调整登录期限；API 签名模块（`apiSign`）与 `API_SIGN_REQUIRED` 开关已移除——客户端从未真正签名、服务端也从未校验，账户业务授权一律以 HttpOnly 会话 Cookie 与服务端会话校验为准；`ALLOW_INSECURE_HTTP_API` 不能开放匿名接口
 
 微信扫码登录与 QQ 扫码登录复用后台接口盒子的 ID 和 API Key，在管理后台「系统设置 → 身份登录」分别开关；管理员扫码身份在账号设置中绑定，前台用户在账户与安全中绑定，新微信与原微信文件传输助手身份独立
 

@@ -247,7 +247,7 @@ function isBlockedIpAddress(address) {
   return !/^[23][0-9a-f]{3}:/u.test(normalized) || normalized.startsWith('2001:db8:') || normalized.startsWith('2002:');
 }
 
-async function assertPublicDnsTarget(hostname, timeoutMs) {
+async function assertPublicDnsTarget(hostname, timeoutMs, lookupFn = lookup) {
   const host = String(hostname).replace(/^\[|\]$/gu, '');
   if (isIP(host)) {
     if (isBlockedIpAddress(host)) {
@@ -258,8 +258,9 @@ async function assertPublicDnsTarget(hostname, timeoutMs) {
     return [{ address: host, family: isIP(host) }];
   }
 
+  const useCache = lookupFn === lookup;
   const cacheKey = host.toLowerCase();
-  const cached = validatedDnsCache.get(cacheKey);
+  const cached = useCache ? validatedDnsCache.get(cacheKey) : null;
   if (cached && cached.expiresAt > Date.now()) {
     return cached.records;
   }
@@ -268,7 +269,7 @@ async function assertPublicDnsTarget(hostname, timeoutMs) {
   let deadline;
   try {
     records = await Promise.race([
-      lookup(host, { all: true, verbatim: true }),
+      lookupFn(host, { all: true, verbatim: true }),
       new Promise((_, reject) => {
         deadline = setTimeout(() => {
           reject(Object.assign(new Error('媒体域名解析超时'), { code: 'ETIMEDOUT' }));
@@ -289,14 +290,61 @@ async function assertPublicDnsTarget(hostname, timeoutMs) {
   }
   // 优先使用 IPv4，规避容器或宿主无 IPv6 出口时的连接等待
   const sorted = [...records].sort((a, b) => (a.family === 4 ? 0 : 1) - (b.family === 4 ? 0 : 1));
-  validatedDnsCache.delete(cacheKey);
-  validatedDnsCache.set(cacheKey, { records: sorted, expiresAt: Date.now() + DNS_CACHE_TTL_MS });
-  while (validatedDnsCache.size > MAX_DNS_CACHE_ENTRIES) {
-    const oldest = validatedDnsCache.keys().next().value;
-    if (!oldest) break;
-    validatedDnsCache.delete(oldest);
+  if (useCache) {
+    validatedDnsCache.delete(cacheKey);
+    validatedDnsCache.set(cacheKey, { records: sorted, expiresAt: Date.now() + DNS_CACHE_TTL_MS });
+    while (validatedDnsCache.size > MAX_DNS_CACHE_ENTRIES) {
+      const oldest = validatedDnsCache.keys().next().value;
+      if (!oldest) break;
+      validatedDnsCache.delete(oldest);
+    }
   }
   return sorted;
+}
+
+/**
+ * 通用外发请求目标校验（供自定义音源、AI 上游等非媒体场景复用）：
+ * 只允许 http/https、无 URL 内嵌凭据，主机名命中内网/元数据黑名单或解析到
+ * 私网/链路本地/元数据地址一律拒绝；返回已校验的地址列表供钉扎连接使用，
+ * 避免「先校验、再由 fetch 重新解析」的 DNS 重绑定窗口。
+ * lookupFn 仅供测试注入假解析，生产必须使用默认真实解析。
+ */
+export async function assertPublicOutboundTarget(rawUrl, { timeoutMs = 5000, lookupFn } = {}) {
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    const err = new Error('无效地址');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    const err = new Error('不支持的协议');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (parsed.username || parsed.password) {
+    const err = new Error('目标地址不能包含认证信息');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (isBlockedMediaHostname(parsed.hostname)) {
+    const err = new Error('禁止访问内网地址');
+    err.statusCode = 403;
+    throw err;
+  }
+  const addresses = await assertPublicDnsTarget(parsed.hostname, timeoutMs, lookupFn);
+  return { parsed, addresses };
+}
+
+/**
+ * 校验并钉扎已验证 IP 发起请求的外发 fetch（不跟随重定向，语义与 redirect:'error' 一致）。
+ * 返回标准 Web Response；body 仅支持字符串/Buffer/Uint8Array。
+ */
+export async function fetchPinnedPublicUrl(rawUrl, { method = 'GET', headers = {}, body, signal, timeoutMs = 10_000, lookupFn } = {}) {
+  const target = await assertPublicOutboundTarget(rawUrl, { timeoutMs, lookupFn });
+  if (signal) signal.throwIfAborted();
+  return requestPinnedMedia(target, headers, signal, timeoutMs, { method, body });
 }
 
 /**
@@ -415,7 +463,7 @@ async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist,
   return { parsed, addresses };
 }
 
-function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false } = {}) {
+function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false, body } = {}) {
   return new Promise((resolve, reject) => {
     const transport = parsed.protocol === 'https:' ? https : http;
     const agent = parsed.protocol === 'https:' ? httpsMediaAgent : httpMediaAgent;
@@ -478,6 +526,7 @@ function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, {
     request.once('close', () => clearTimeout(deadline));
     deadline = setTimeout(timeout, timeoutMs);
     request.setTimeout(timeoutMs, timeout);
+    if (body !== undefined && body !== null) request.write(body);
     request.end();
   });
 }

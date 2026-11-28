@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { createHash, randomBytes, scrypt as scryptCallback } from 'crypto';
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import { getRuntimeConfig } from './runtimeConfig.js';
@@ -18,6 +18,10 @@ const INSTALLING_LOCK_PATH = path.join(__dirname, 'setup.installing.lock');
 const INSTALLING_LOCK_STALE_MS = 30 * 60_000;
 const RUNTIME_CONFIG_PATH = path.join(__dirname, 'runtimeConfig.json');
 const ADMIN_CREDENTIALS_KEY = 'openmusic:admin:credentials';
+const SETUP_TOKEN_PATH = path.join(__dirname, 'setup.token');
+const SETUP_TOKEN_COOKIE = 'openmusic_setup_token';
+let memorySetupToken = '';
+let setupTokenNoticeLogged = false;
 const attempts = new Map();
 const MAX_SETUP_ATTEMPT_ENTRIES = 2000;
 
@@ -118,6 +122,113 @@ export function isSetupRequired() {
 
 function clientIp(req) {
   return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function readSetupTokenFile() {
+  try {
+    return fs.readFileSync(SETUP_TOKEN_PATH, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 一次性安装令牌来源（优先级）：环境变量 SETUP_TOKEN > server/setup.token 文件 >
+ * 首启随机生成（0600 落盘，写不进时用内存令牌）并在日志中只呈现一次。
+ * 部署脚本会把 SETUP_TOKEN 写入 .env / data/.env，与本函数第一来源对齐。
+ */
+export function getSetupToken() {
+  const envToken = String(process.env.SETUP_TOKEN || '').trim();
+  if (envToken) return envToken;
+  if (memorySetupToken) return memorySetupToken;
+  const fileToken = readSetupTokenFile();
+  if (fileToken) {
+    memorySetupToken = fileToken;
+    return fileToken;
+  }
+  if (!isSetupRequired()) return '';
+  const token = randomBytes(32).toString('base64url');
+  memorySetupToken = token;
+  try {
+    fs.writeFileSync(SETUP_TOKEN_PATH, `${token}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  } catch (err) {
+    if (err?.code === 'EEXIST') {
+      const raced = readSetupTokenFile();
+      if (raced) {
+        memorySetupToken = raced;
+        return raced;
+      }
+    }
+    // 文件不可写时退化为内存令牌：进程重启后重新生成并重新打印，不降低校验强度。
+  }
+  if (!setupTokenNoticeLogged) {
+    setupTokenNoticeLogged = true;
+    console.log(`🔐 安装向导一次性令牌（仅显示一次，请妥善保存）: ${token}`);
+    console.log('🔐 打开向导前请先访问 /api/setup/authorize?token=<令牌> 完成授权，或在请求头 X-Setup-Token 中携带令牌');
+  }
+  return token;
+}
+
+export function setupTokensEqual(expected, provided) {
+  const a = String(expected || '');
+  const b = String(provided || '');
+  if (!a || !b) return false;
+  const hashA = createHash('sha256').update(a).digest();
+  const hashB = createHash('sha256').update(b).digest();
+  return timingSafeEqual(hashA, hashB);
+}
+
+export function extractSetupToken(req) {
+  const header = String(req.headers?.['x-setup-token'] || '').trim();
+  if (header) return header;
+  const body = String(req.body?.setupToken || '').trim();
+  if (body) return body;
+  const cookieHeader = String(req.headers?.cookie || '');
+  for (const part of cookieHeader.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    if (part.slice(0, eq).trim() === SETUP_TOKEN_COOKIE) {
+      try {
+        return decodeURIComponent(part.slice(eq + 1).trim());
+      } catch {
+        return part.slice(eq + 1).trim();
+      }
+    }
+  }
+  return '';
+}
+
+export function isLoopbackRequest(req) {
+  const remote = String(req.socket?.remoteAddress || req.ip || '').replace(/^::ffff:/, '');
+  return remote === '::1' || remote === '127.0.0.1' || remote.startsWith('127.');
+}
+
+/**
+ * 纯判定：返回 { ok: true } 或 { ok: false }。
+ * 无任何令牌可用（生成失败的极端情形）时只放行回环请求，避免把部署流程彻底锁死；
+ * 正常路径下令牌必然存在（env / 文件 / 内存生成），回退不会被触发。
+ */
+export function checkSetupAuthorization(req, { token, setupRequired }) {
+  if (!setupRequired) return { ok: true };
+  if (token) {
+    return setupTokensEqual(token, extractSetupToken(req)) ? { ok: true } : { ok: false };
+  }
+  return isLoopbackRequest(req) ? { ok: true } : { ok: false };
+}
+
+function requireSetupToken(req, res, next) {
+  const verdict = checkSetupAuthorization(req, { token: getSetupToken(), setupRequired: isSetupRequired() });
+  if (verdict.ok) return next();
+  return res.status(403).json({ error: '安装令牌无效或缺失', code: 'SETUP_TOKEN_REQUIRED' });
+}
+
+function clearSetupToken() {
+  memorySetupToken = '';
+  try {
+    fs.unlinkSync(SETUP_TOKEN_PATH);
+  } catch {
+    // 令牌文件不存在或不可删都不影响安装完成；env 令牌靠 setup.lock 关闭入口兜底。
+  }
 }
 
 function isRateLimited(req, max = 10) {
@@ -356,14 +467,32 @@ function isDockerEnvironment() {
 
 export function mountSetupApi(app) {
   migrateLegacySetupLock();
+  if (isSetupRequired()) getSetupToken();
 
   app.get('/api/setup/status', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const dockerDefaults = isSetupRequired() ? getDockerDefaults() : null;
-    res.json({ setupRequired: isSetupRequired(), ...(dockerDefaults ? { dockerDefaults } : {}) });
+    res.json({
+      setupRequired: isSetupRequired(),
+      ...(isSetupRequired() ? { setupTokenRequired: true } : {}),
+      ...(dockerDefaults ? { dockerDefaults } : {}),
+    });
   });
 
-  app.post('/api/setup/test-redis', requireSameHost, async (req, res) => {
+  // 部署脚本/终端输出的令牌通过此入口换成 HttpOnly Cookie，随后未改动的向导页面
+  // 以同源请求自动携带 Cookie 通过 requireSetupToken 校验。
+  app.get('/api/setup/authorize', (req, res) => {
+    if (!isSetupRequired()) return res.status(404).json({ error: '安装向导已锁定' });
+    const token = getSetupToken();
+    if (!token || !setupTokensEqual(token, String(req.query?.token || ''))) {
+      return res.status(403).json({ error: '安装令牌无效或缺失', code: 'SETUP_TOKEN_REQUIRED' });
+    }
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Set-Cookie', `${SETUP_TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/api/setup; SameSite=Strict; Max-Age=1800`);
+    return res.redirect(302, '/setup');
+  });
+
+  app.post('/api/setup/test-redis', requireSameHost, requireSetupToken, async (req, res) => {
     if (!isSetupRequired()) return res.status(404).json({ error: '安装向导已锁定' });
     if (isRateLimited(req)) return res.status(429).json({ error: '尝试过于频繁，请稍后再试' });
     const result = await connectRedis(req.body?.redis);
@@ -372,7 +501,7 @@ export function mountSetupApi(app) {
     res.json({ ok: true });
   });
 
-  app.post('/api/setup/complete', requireSameHost, async (req, res) => {
+  app.post('/api/setup/complete', requireSameHost, requireSetupToken, async (req, res) => {
     if (isRateLimited(req, 5)) return res.status(429).json({ error: '尝试过于频繁，请稍后再试' });
 
     let releaseLease;
@@ -434,6 +563,7 @@ export function mountSetupApi(app) {
       const pathResult = setAdminEntryPath(adminPath, { requireCustom: true });
       if (!pathResult.success) throw new Error(pathResult.error);
       writeSetupLock({ siteUrl: siteUrl || '', adminPath });
+      clearSetupToken();
       await result.client.quit();
 
       const willAutoRestart = isDockerEnvironment();

@@ -288,6 +288,13 @@ read_env_value() {
   printf '%s' "${value:-$fallback}"
 }
 
+setup_token_hint_text() {
+  local token=""
+  token="$(read_env_value data/.env SETUP_TOKEN '')"
+  if [ -z "$token" ]; then token="$(read_env_value server/.env SETUP_TOKEN '')"; fi
+  printf '%s' "${token:-（无，见服务端日志中的一次性令牌）}"
+}
+
 check_compose_config() {
   local compose_cmd="$1"
   shift
@@ -598,6 +605,7 @@ deploy_docker_loudness() {
 下一步：
   1. 打开首次部署向导（Redis、Meting 与响度服务已自动配置）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "先建立 SSH 隧道，再访问 http://localhost:${port}/setup" )
+     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -643,6 +651,11 @@ prepare_data_dir() {
   [ -f data/runtimeConfig.json ] || echo '{}' > data/runtimeConfig.json
   [ -f data/adminConfig.json ] || echo '{}' > data/adminConfig.json
   [ -f data/setup.lock ] || : > data/setup.lock
+  # 首次安装一次性令牌：服务端从 data/.env（挂载为 server/.env）读取 SETUP_TOKEN
+  if [ ! -s data/setup.lock ] && ! grep -Eq '^SETUP_TOKEN=.+' data/.env; then
+    printf 'SETUP_TOKEN=%s\n' "$(openssl rand -hex 32)" >> data/.env
+    chmod 600 data/.env
+  fi
 }
 
 # ---------- Docker 精简版（不含 Meting） ----------
@@ -672,6 +685,7 @@ deploy_docker() {
 下一步：
   1. 打开首次部署向导（Redis 已自动配置，只需填 Meting 音源地址和站点域名）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "本地执行 ssh -N -L ${port}:127.0.0.1:${port} user@server，再访问 http://localhost:${port}/setup" )
+     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -717,6 +731,7 @@ deploy_docker_full() {
 下一步：
   1. 打开首次部署向导（Redis 和 Meting 已自动配置，只需填站点域名）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "先建立 SSH 隧道，再访问 http://localhost:${port}/setup" )
+     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -840,6 +855,12 @@ deploy_source() {
 
   ensure_pm2
 
+  # 首次安装一次性令牌：预先写入 server/.env（服务端 dotenv 读取），已装站点不生成
+  if [ ! -s server/setup.lock ] && ! grep -Eq '^(REDIS_URL|REDIS_HOST)=.+' server/.env 2>/dev/null && ! grep -Eq '^SETUP_TOKEN=.+' server/.env 2>/dev/null; then
+    (umask 077 && printf 'SETUP_TOKEN=%s\n' "$(openssl rand -hex 32)" >> server/.env)
+    chmod 600 server/.env
+  fi
+
   info "使用 PM2 启动服务（deploy/ecosystem.config.cjs）..."
   pm2 startOrReload deploy/ecosystem.config.cjs --update-env
   pm2 save
@@ -865,6 +886,7 @@ deploy_source() {
 下一步：
   1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      （若已存在有效 server/.env，会跳过向导）
+     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
   2. 向导完成后需要重启一次服务使 .env 生效：
      pm2 restart openmusic --update-env
   3. 已按当前目录与端口自动生成 Nginx 静态直出模板：${ROOT_DIR}/nginx-openmusic-source.conf

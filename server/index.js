@@ -485,9 +485,12 @@ function corsOrigin(origin, callback) {
 
   const normalized = origin.replace(/\/$/, '');
 
-  // 首次部署尚无 CLIENT_URL；安装 API 自身仍执行严格同 Host 校验。
+  // 首次部署尚无 CLIENT_URL：跨站来源只放行已配置的白名单（无白名单时仅非生产本地调试来源）。
+  // 安装向导是同源页面、不依赖 CORS；安装 API 自身另有严格同 Host 校验与一次性令牌校验。
   if (isSetupRequired()) {
-    callback(null, true);
+    callback(null, ALLOWED_ORIGINS
+      ? ALLOWED_ORIGINS.has(normalized)
+      : !IS_PRODUCTION && isLocalDevOrigin(normalized));
     return;
   }
 
@@ -535,9 +538,6 @@ app.use(cors({
     'X-OpenMusic-Request',
     'X-OpenMusic-Device',
     'Authorization',
-    'X-OM-Ts',
-    'X-OM-Nonce',
-    'X-OM-Sign',
   ],
 }));
 app.use((_req, res, next) => {
