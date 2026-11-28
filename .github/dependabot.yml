@@ -1,0 +1,16 @@
+# Dependabot 只管 GitHub Actions：批 2 已把全部 action pin 到 commit SHA，
+# 靠这里每周自动开升级 PR 把 SHA 往前滚，避免 pin 变旧后吃不到安全补丁。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # 全部 action 的升级合并成一个 PR，减少打扰
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
