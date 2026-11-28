@@ -266,6 +266,7 @@ import {
   createDistributedSocketRateLimiter,
   getSocketEventRatePolicy,
 } from './socketRateLimiter.js';
+import { createSocketSessionVerifier } from './socketSessionCache.js';
 import { createLogger, incrementMetric } from './logger.js';
 import {
   isLinuxdoConfigured,
@@ -358,6 +359,7 @@ const accountDeletion = createAccountDeletionService({
     await flushAllPendingRoomPersists();
   },
   onDisabled: (id) => {
+    socketSessionVerifier.invalidateAccount(id);
     io.to(`account:${id}`).emit('account_session_invalidated', { reason: 'account_deleted', stopReconnect: true });
     io.in(`account:${id}`).disconnectSockets(true);
   },
@@ -4788,6 +4790,8 @@ function bindSocketAccountSession(socket) {
 }
 
 function unbindSocketAccountSession(socketId) {
+  const cachedSocket = io.sockets.sockets.get(socketId);
+  if (cachedSocket) socketSessionVerifier.invalidateSocket(cachedSocket);
   const key = socketToAccountSessionKey.get(socketId);
   socketToAccountSessionKey.delete(socketId);
   if (!key) return;
@@ -4800,6 +4804,7 @@ function unbindSocketAccountSession(socketId) {
 function disconnectSocketsForAccountSession(token, reason = 'session_invalidated') {
   const key = accountSessionSocketKey(token);
   if (!key) return;
+  socketSessionVerifier.invalidateSessionKey(key);
   const socketIds = [...(accountSessionSockets.get(key) || [])];
   for (const socketId of socketIds) {
     const socket = io.sockets.sockets.get(socketId);
@@ -4841,6 +4846,17 @@ async function verifySocketAccountSession(socket, { skipRiskCheck = false } = {}
     return { valid: false };
   }
 }
+
+// 包级核验走短 TTL 缓存（只缓存 valid 结果）；30 秒周期的 sweep 仍调用
+// verifySocketAccountSession 本体做权威复核，不经过缓存。
+const socketSessionVerifier = createSocketSessionVerifier({
+  verify: (socket, options) => verifySocketAccountSession(socket, options),
+  getSessionKey: (socket) => (socket.data.anonymous
+    ? `anon:${socket.data.accountId || ''}`
+    : socketToAccountSessionKey.get(socket.id) || ''),
+  onHit: () => incrementMetric('socket_session_cache_total', { outcome: 'hit' }),
+  onMiss: () => incrementMetric('socket_session_cache_total', { outcome: 'miss' }),
+});
 
 const SOCKET_SESSION_SWEEP_MS = 30_000;
 const SOCKET_SESSION_VERIFY_TIMEOUT_MS = 5_000;
@@ -4925,6 +4941,7 @@ function monitorSocketAccountSession(socket) {
     },
     invalidate(reason) {
       if (entry.stopped) return;
+      socketSessionVerifier.invalidateSocket(socket);
       entry.stop();
       incrementMetric('account_socket_rejected_total', { reason });
       socket.emit('account_session_invalidated', { reason, stopReconnect: false });
@@ -5394,7 +5411,7 @@ io.on('connection', (socket) => {
 
   socket.use(async (packet, proceed) => {
     const next = () => runWithMetingRequestContext({ accountId: socket.data.accountId }, proceed);
-    const session = await verifySocketAccountSession(socket, { skipRiskCheck: true });
+    const session = await socketSessionVerifier.verifySocket(socket, { skipRiskCheck: true });
     if (!session.valid) {
       const callback = typeof packet?.[packet.length - 1] === 'function'
         ? packet[packet.length - 1]
@@ -7990,6 +8007,8 @@ if (!isRedisEnabled()) {
       if (config.riskChallengeEnabled && config.turnstileEnabled) suspendAccountSocketsForHumanChallenge(id);
     },
     onSessionRevoked: sid => {
+      // 吊销通道到达即清本进程该会话的包级核验缓存（键与 bind 时一致，为 sid 的 sha256）
+      socketSessionVerifier.invalidateSessionKey(createHash('sha256').update(sid).digest('hex'));
       io.local.to(`account-session:${sid}`).emit('account_session_invalidated', { reason: 'session_revoked', stopReconnect: true });
       io.local.in(`account-session:${sid}`).disconnectSockets(true);
     },
