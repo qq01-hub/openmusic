@@ -74,10 +74,4 @@ export function incrementMetric(name, labels = {}) {
   return next;
 }
 
-export function getMetricsSnapshot() {
-  return [...metrics.entries()].map(([key, value]) => ({ ...JSON.parse(key), value }));
-}
 
-export function _resetLoggerMetricsForTests() {
-  metrics.clear();
-}

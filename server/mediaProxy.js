@@ -1551,4 +1551,3 @@ async function serveConnectedMedia(rawUrl, res, fetchWithTimeout, options) {
 }
 
 /** @deprecated 使用 serveUpstreamMedia */
-export const pipeUpstreamMedia = serveUpstreamMedia;

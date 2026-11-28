@@ -89,11 +89,6 @@ export function parseQqPlaylistId(input) {
   return idMatch[1];
 }
 
-/** @deprecated 使用 parseQqPlaylistId */
-export function parseQqPlaylistUrl(input) {
-  const id = parseQqPlaylistId(input);
-  return id ? String(input).trim() : null;
-}
 
 function extractIdFromApiUrl(url) {
   const match = String(url || '').match(/[?&]id=([^&]+)/i);

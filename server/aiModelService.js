@@ -15,7 +15,6 @@ export { AI_BOT_USER_ID };
 
 export const DEFAULT_AI_TEXT_MODEL = 'Qwen/Qwen3-8B';
 export const DEFAULT_AI_VISION_MODEL = 'Qwen/Qwen3.5-4B';
-export const DEFAULT_AI_MODEL = DEFAULT_AI_TEXT_MODEL;
 export { DEFAULT_ROOM_AI_PERSONA };
 export const AI_FORBIDDEN_ROOM_TOOL_NAMES = new Set([
   'destroy_room',
@@ -2036,9 +2035,6 @@ export function resolveRoomAiBotName(room, config = getRuntimeConfig()) {
   return getAiModelConfig(config).botName;
 }
 
-export function resolveRoomAiPersona(room) {
-  return normalizeRoomAiPersona(room?.roomAiPersona);
-}
 
 /** 站点开启且房主未关闭 */
 export function isRoomAiEnabledForRoom(room, config = getRuntimeConfig()) {
@@ -2072,11 +2068,6 @@ export function getPublicRoomAiConfig(config = getRuntimeConfig(), room = null) 
       : [],
     commands: enabled ? buildAiCommandHints(botName) : [],
   };
-}
-
-/** @deprecated 兼容旧调用，等同 getPublicRoomAiConfig(config, room) */
-export function getPublicRoomAiConfigForRoom(room, config = getRuntimeConfig()) {
-  return getPublicRoomAiConfig(config, room);
 }
 
 

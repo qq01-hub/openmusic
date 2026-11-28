@@ -9,10 +9,7 @@ import { SOFT_BLOCK_CODES, softBlockMessage } from './softBlock.js';
 
 const MAX_KEYS = 8_000;
 
-let testGuardSettings = null;
-
 function getGuardSettings() {
-  if (testGuardSettings) return testGuardSettings;
   const cfg = getRuntimeConfig();
   return {
     cooldownMs: Number(cfg.roomCreateCooldownMs) || 0,
@@ -134,14 +131,5 @@ export function recordRoomCreate({ ip, deviceId, userId } = {}) {
 export function _resetRoomCreateGuardForTests() {
   cooldownUntil.clear();
   lastSweepAt = 0;
-  testGuardSettings = null;
 }
 
-export function _setRoomCreateGuardSettingsForTests(settings = null) {
-  testGuardSettings = settings
-    ? {
-        cooldownMs: Number(settings.cooldownMs) || 0,
-        ipLooseCooldownMs: Number(settings.ipLooseCooldownMs) || 0,
-      }
-    : null;
-}

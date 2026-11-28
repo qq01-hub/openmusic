@@ -79,32 +79,6 @@ export function createAccountRoomIndex() {
   };
 }
 
-/** Redis Set 适配器；由共享层注入 getRedisClient，避免本模块反向依赖 roomStorage。 */
-export function createRedisAccountRoomIndex(getStore) {
-  const store = () => typeof getStore === 'function' ? getStore() : null;
-  return {
-    async add(accountId, roomId) {
-      const key = accountRoomsKey(accountId);
-      const id = normalizeRoomId(roomId);
-      const redis = store();
-      if (!redis || !key || !id) return false;
-      return Number(await redis.sAdd(key, id)) > 0;
-    },
-    async remove(accountId, roomId) {
-      const key = accountRoomsKey(accountId);
-      const id = normalizeRoomId(roomId);
-      const redis = store();
-      if (!redis || !key || !id) return false;
-      return Number(await redis.sRem(key, id)) > 0;
-    },
-    async roomIds(accountId) {
-      const key = accountRoomsKey(accountId);
-      const redis = store();
-      if (!redis || !key) return [];
-      return (await redis.sMembers(key)).map(normalizeRoomId).filter(Boolean);
-    },
-  };
-}
 
 /** 幂等的匿名房间认领判定；调用方必须先在服务端验证 creatorId/device proof。 */
 export function claimAccountRoom({ room, accountId, verifiedCreatorId, accountRoomUserId, index }) {

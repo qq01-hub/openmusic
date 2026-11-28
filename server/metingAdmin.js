@@ -470,12 +470,6 @@ export async function fetchMusicContributions(limit = 20) {
   return { ok: true, data: result.data?.data || [] };
 }
 
-/** 检查 Meting 当前 Cookie 池是否存在有效 SVIP，包含基础账号和共享账号。 */
-export async function hasMetingSvipAccount() {
-  const result = await getMetingQualityCapabilities();
-  if (!result.ok) return result;
-  return { ok: true, hasSvip: result.hasSvip };
-}
 
 /**
  * 按平台检查当前 Cookie 池的会员能力。

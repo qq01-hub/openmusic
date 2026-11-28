@@ -316,15 +316,5 @@ export async function finalizeManagedMusicQrCredential(context) {
   return true;
 }
 
-// 兼容旧调用方；新的绑定流程必须使用 get + finalize/release。
-export function consumeManagedMusicQrCredential(context) {
-  cleanExpired();
-  const session = sessions.get(text(context.sessionId));
-  if (!session || session.ownerId !== text(context.ownerId) || session.purpose !== context.purpose
-    || (context.purpose === 'room' && session.roomId !== text(context.roomId).toUpperCase())
-    || !session.credential) return { ok: false, error: '扫码尚未确认或会话已过期' };
-  sessions.delete(text(context.sessionId));
-  return { ok: true, platform: session.platform, cookie: session.credential };
-}
 
 export const __test = { sessions, extractCookie, normalizeStatus };

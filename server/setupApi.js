@@ -338,7 +338,8 @@ async function connectRedis(raw) {
   }
 }
 
-function updateEnvFile(values) {
+/** 导出仅供测试直接验证 .env 写入语义（不破坏已有键），生产调用方为安装完成流程 */
+export function updateEnvFile(values) {
   const existing = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf8') : '';
   const lines = existing ? existing.replace(/\r\n/g, '\n').split('\n') : [];
   const pending = new Map(Object.entries(values));

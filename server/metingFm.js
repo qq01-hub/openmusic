@@ -288,7 +288,3 @@ export async function fetchMetingFmSongs(fmMode = DEFAULT_FM_MODE, options = {})
   return [];
 }
 
-export async function fetchMetingFmSong(fmMode = DEFAULT_FM_MODE, options = {}) {
-  const songs = await fetchMetingFmSongs(fmMode, options);
-  return Array.isArray(songs) ? songs[0] || null : null;
-}

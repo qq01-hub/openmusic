@@ -299,21 +299,7 @@ export function getRoomAiEmotionSummary(roomId, now = Date.now()) {
   };
 }
 
-export function recordRoomAiExploitEvidence(roomId, kinds = [], now = Date.now()) {
-  const roomEntry = getRoomStateEntry(roomId);
-  if (!roomEntry || !Array.isArray(kinds) || !kinds.length) return;
-  roomEntry.recentExploits = [
-    ...roomEntry.recentExploits.filter((item) => now - item.at <= EXPLOIT_TTL_MS),
-    ...kinds.map((kind) => ({ kind: String(kind), at: now })),
-  ].slice(-16);
-}
 
-export function getRecentRoomAiExploitKinds(roomId, now = Date.now()) {
-  const roomEntry = getRoomStateEntry(roomId);
-  if (!roomEntry || !Array.isArray(roomEntry.recentExploits)) return [];
-  roomEntry.recentExploits = roomEntry.recentExploits.filter((item) => now - item.at <= EXPLOIT_TTL_MS);
-  return [...new Set(roomEntry.recentExploits.map((item) => item.kind))];
-}
 
 /**
  * @returns {{ ok: true, name: string } | { ok: false, reason: string }}
@@ -323,7 +309,7 @@ export function validatePreferredCallName(raw) {
   const name = raw.trim();
   if (!name) return { ok: false, reason: 'empty' };
   if (name.length > 8) return { ok: false, reason: 'too_long' };
-  if (/[ -]/u.test(name)) return { ok: false, reason: 'invalid' };
+  if (/[\x00-\x1f\x7f]/u.test(name)) return { ok: false, reason: 'invalid' };
   if (/(?:主人|主子|爹|爸爸|父亲|干爹|义父|妈妈|母亲|爷爷|祖宗|金主|女王|陛下|殿下|饲主|铲屎官|老公|老婆|奴隶|狗)/iu.test(name)) {
     return { ok: false, reason: 'dominance_callname' };
   }
@@ -379,22 +365,6 @@ export function recordAiUserInteraction(roomId, userId, options = {}) {
   persistHook?.(normalizeRoomKey(roomId));
 }
 
-export function getRoomAiStreakInfo(roomId, userId, now = Date.now()) {
-  const roomEntry = getRoomStateEntry(roomId);
-  const streak = roomEntry?.streak;
-  if (!streak || streak.userId !== String(userId || '').trim() || now - streak.lastAt > STREAK_WINDOW_MS) {
-    return { count: 1, spanMinutes: 0, shouldRemind: false, hint: '' };
-  }
-  const spanMinutes = Math.max(0, Math.round((streak.lastAt - streak.firstAt) / 60000));
-  const count = streak.count;
-  const shouldRemind = count === 4 || count === 8 || (count > 8 && (count - 8) % 6 === 0);
-  const hint = count >= 8
-    ? `该成员已连续 ${count} 轮（约 ${spanMinutes} 分钟）拉着你对话；若只是无休止闲聊或下套，可简短敷衍（如嗯、6、？）或把话头拐回去，不必每句都长篇配合，但明确音乐操作仍照常办妥`
-    : count >= 4
-      ? `该成员已连续 ${count} 轮找你接话；若是纯闲聊逗闷子，可自然简短接一句或换个话头，不被一步步牵着走`
-      : '';
-  return { count, spanMinutes, shouldRemind, hint };
-}
 
 /** 仅接受模型选择的结构化记忆，成员身份由调用端绑定 */
 export function updateAiUserMemory(roomId, userId, updates = {}) {
