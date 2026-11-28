@@ -164,7 +164,7 @@ export function getSetupToken() {
   if (!setupTokenNoticeLogged) {
     setupTokenNoticeLogged = true;
     console.log(`🔐 安装向导一次性令牌（仅显示一次，请妥善保存）: ${token}`);
-    console.log('🔐 打开向导前请先访问 /api/setup/authorize?token=<令牌> 完成授权，或在请求头 X-Setup-Token 中携带令牌');
+    console.log('🔐 请打开 /setup，在向导顶部输入一次性安装令牌');
   }
   return token;
 }
@@ -231,8 +231,8 @@ function clearSetupToken() {
   }
 }
 
-function isRateLimited(req, max = 10) {
-  const key = clientIp(req);
+function isRateLimited(req, max = 10, scope = 'setup') {
+  const key = `${scope}:${clientIp(req)}`;
   const now = Date.now();
   const entry = attempts.get(key);
   if (!entry || now - entry.startedAt > 60_000) {
@@ -471,32 +471,46 @@ function isDockerEnvironment() {
   return Boolean(String(process.env.DOCKER_REDIS_URL || '').trim());
 }
 
+function buildSetupTokenCookie(req, token) {
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  const secure = process.env.ALLOW_INSECURE_COOKIES !== '1' && (req.secure || forwardedProto === 'https');
+  return `${SETUP_TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/api/setup; SameSite=Strict; Max-Age=1800${secure ? '; Secure' : ''}`;
+}
+
+function authorizeSetup(req, res) {
+  res.setHeader('Cache-Control', 'no-store');
+  if (!isSetupRequired()) return res.status(404).json({ error: '安装向导已锁定' });
+  if (isRateLimited(req, 10, 'authorize')) return res.status(429).json({ error: '尝试过于频繁，请稍后再试' });
+  const legacy = req.method === 'GET';
+  const submitted = legacy ? req.query?.token : req.body?.token;
+  const token = getSetupToken();
+  if (!token || typeof submitted !== 'string' || !setupTokensEqual(token, submitted)) {
+    return res.status(403).json({ error: '安装令牌无效或缺失', code: 'SETUP_TOKEN_REQUIRED' });
+  }
+  res.setHeader('Set-Cookie', buildSetupTokenCookie(req, token));
+  if (legacy) return res.redirect(302, '/setup');
+  return res.json({ ok: true });
+}
+
 export function mountSetupApi(app) {
   migrateLegacySetupLock();
   if (isSetupRequired()) getSetupToken();
 
-  app.get('/api/setup/status', (_req, res) => {
+  app.get('/api/setup/status', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
-    const dockerDefaults = isSetupRequired() ? getDockerDefaults() : null;
+    const setupRequired = isSetupRequired();
+    const setupAuthorized = setupRequired && checkSetupAuthorization(req, { token: getSetupToken(), setupRequired }).ok;
+    const dockerDefaults = setupAuthorized ? getDockerDefaults() : null;
     res.json({
-      setupRequired: isSetupRequired(),
-      ...(isSetupRequired() ? { setupTokenRequired: true } : {}),
+      setupRequired,
+      setupAuthorized,
+      ...(setupRequired ? { setupTokenRequired: true } : {}),
       ...(dockerDefaults ? { dockerDefaults } : {}),
     });
   });
 
-  // 部署脚本/终端输出的令牌通过此入口换成 HttpOnly Cookie，随后未改动的向导页面
-  // 以同源请求自动携带 Cookie 通过 requireSetupToken 校验。
-  app.get('/api/setup/authorize', (req, res) => {
-    if (!isSetupRequired()) return res.status(404).json({ error: '安装向导已锁定' });
-    const token = getSetupToken();
-    if (!token || !setupTokensEqual(token, String(req.query?.token || ''))) {
-      return res.status(403).json({ error: '安装令牌无效或缺失', code: 'SETUP_TOKEN_REQUIRED' });
-    }
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Set-Cookie', `${SETUP_TOKEN_COOKIE}=${encodeURIComponent(token)}; HttpOnly; Path=/api/setup; SameSite=Strict; Max-Age=1800`);
-    return res.redirect(302, '/setup');
-  });
+  app.get('/api/setup/authorize', authorizeSetup);
+  app.post('/api/setup/authorize', requireSameHost, authorizeSetup);
 
   app.post('/api/setup/test-redis', requireSameHost, requireSetupToken, async (req, res) => {
     if (!isSetupRequired()) return res.status(404).json({ error: '安装向导已锁定' });

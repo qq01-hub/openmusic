@@ -314,13 +314,17 @@ Redis 容器未运行时脚本会跳过 Redis 备份并明确警告——那种�
 
 ### 非 root 运行与数据目录权限
 
-运行时镜像默认以非 root 用户 `node`（uid/gid 1000）运行主站；`updater` 是唯一例外（需访问 `docker.sock`，compose 中显式 `user: "0:0"`，其风险与未采用 socket proxy 的理由写在 compose 文件注释里）。主站通过 bind 挂载写入的宿主机文件（`data/.env`、`data/runtimeConfig.json`、`data/adminConfig.json`、`data/setup.lock`、`data/downloads/`）必须归 uid 1000 所有，`install.sh` 会自动 `chown -R 1000:1000 data`；手动部署或从旧版（root 运行）升级时请先执行：
+新装 Compose 通过 `user: "1000:1000"` 直接以非 root 用户运行主站，`updater` 以 root 访问 `docker.sock`。主站的配置文件与下载目录须可由 UID 1000 写入，`install.sh` 会自动处理，手动部署时可执行：
 
 ```bash
 sudo chown -R 1000:1000 data
 ```
 
-已有部署升级到本版本后若主站日志出现数据文件写入失败，多半就是该目录仍归 root。另外 `openmusic-update` 卷内的升级控制 socket 已改为目录 0710 + socket 0660（root 组），主站容器通过 `group_add: ["0"]` 连接；旧卷若仍是 0700/0600 导致后台升级不可用，删除该卷重建一次即可（其中只有升级状态，无业务数据）：`docker compose down && docker volume rm <项目名>_openmusic-update`。
+以 root 启动的存量主站在线升级后，镜像入口会尝试迁移挂载权限，再切换到 UID/GID 1000。新 updater 为共享目录和控制 socket 设置 GID 1000，权限分别为 0750 和 0660。Compose 保留附加组 0 以连接旧版 updater。若旧容器的能力限制阻止入口降权或迁移权限，可先在宿主机修正数据目录权限，再用新版 Compose 重建主站与 updater
+
+### 回滚房间聊天存储格式
+
+若要回退到只读取快照内嵌聊天的旧版服务端，先停止所有写入该 Redis 的 OpenMusic 实例并备份 Redis，再用当前版本运行 `node server/scripts/rollback-room-chat.mjs`。脚本读取环境变量或 `server/.env` 中的 Redis 连接配置，可重复执行。确认执行成功后启动旧版服务端。默认保留独立聊天列表，可加 `--delete-chat-keys` 随快照转换一并清理
 
 ---
 

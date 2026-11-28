@@ -6,8 +6,8 @@
 // 现在聊天拆到独立键 openmusic:room:{id}:chat（LIST，每元素一条消息 JSON）：
 // - 追加型变更（新消息 + 头部裁剪）只 RPUSH 新增条目 + LTRIM 到上限，不重写旧消息；
 // - 删除单条/清空/内容变化等非追加变更才整表重写（DEL + RPUSH）；
-// - 进程内记住上次落盘的 id 序列与逐条序列化结果做 diff；进程重启后由
-//   加载路径 noteLoaded 重新播种，Redis 列表与内存不一致时自动退回整表重写。
+// - 进程内记录上次落盘的 id 序列与逐条序列化结果，加载路径通过 noteLoaded 建立基线
+// - Redis 就绪时通过 forgetAll 清除基线，下一次保存会整表重写
 // 主快照以 chatStorageVersion: 2 标记新格式；旧格式（快照内嵌 messages）
 // 由 loadAllRoomsFromStorage 识别并迁移，restore 侧读到的仍是完整 messages 数组。
 
@@ -30,6 +30,7 @@ export function createRoomChatStore({
   const cap = Math.max(1, Math.floor(maxMessages) || ROOM_CHAT_MAX_MESSAGES);
   // roomId -> { ids: string[], serialized: Map<string, string> }
   const lastSaved = new Map();
+  let generation = 0;
 
   function remember(roomId, messages, serializedList) {
     const ids = messages.map((message, index) => messageId(message, index));
@@ -40,6 +41,11 @@ export function createRoomChatStore({
 
   function forget(roomId) {
     lastSaved.delete(roomId);
+  }
+
+  function forgetAll() {
+    lastSaved.clear();
+    generation += 1;
   }
 
   // 判断 newMessages 是否是「旧序列裁掉头部若干条 + 尾部追加若干条」且保留条目内容未变。
@@ -78,6 +84,7 @@ export function createRoomChatStore({
     const list = Array.isArray(messages) ? messages.slice(-cap) : [];
     const serializedList = list.map((message) => JSON.stringify(message));
     const key = roomChatKey(roomId);
+    const writeGeneration = generation;
     const plan = planAppend(roomId, list, serializedList);
     if (plan && (plan.appended.length > 0 || plan.drop > 0)) {
       const transaction = client.multi();
@@ -85,7 +92,7 @@ export function createRoomChatStore({
       // 精确裁到本次快照长度：头部裁剪（drop）也靠这一步在 Redis 侧生效
       transaction.lTrim(key, -list.length, -1);
       await transaction.exec();
-      remember(roomId, list, serializedList);
+      if (writeGeneration === generation) remember(roomId, list, serializedList);
       const bytesWritten = plan.appended.reduce((sum, item) => sum + Buffer.byteLength(item), 0);
       onMode(roomId, 'append');
       return { mode: 'append', appended: plan.appended.length, bytesWritten };
@@ -97,7 +104,7 @@ export function createRoomChatStore({
     const transaction = client.multi().del(key);
     if (serializedList.length > 0) transaction.rPush(key, serializedList);
     await transaction.exec();
-    remember(roomId, list, serializedList);
+    if (writeGeneration === generation) remember(roomId, list, serializedList);
     const bytesWritten = serializedList.reduce((sum, item) => sum + Buffer.byteLength(item), 0);
     onMode(roomId, 'rewrite');
     return { mode: 'rewrite', appended: list.length, bytesWritten };
@@ -138,5 +145,5 @@ export function createRoomChatStore({
     await client.del(roomChatKey(roomId));
   }
 
-  return { saveChat, loadChat, noteLoaded, migrateLegacy, deleteChat, forget, planAppend };
+  return { saveChat, loadChat, noteLoaded, migrateLegacy, deleteChat, forget, forgetAll, planAppend };
 }

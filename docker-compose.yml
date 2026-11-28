@@ -47,6 +47,7 @@ services:
     logging: *default-logging
 
   openmusic:
+    user: "1000:1000"
     image: "${OPENMUSIC_IMAGE:-w3126197382/openmusic:latest}"
     build:
       context: .
@@ -96,7 +97,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    # 升级控制 socket 由 updater 以 0660/root 组创建，主站以 node 用户运行需加入 0 组才能连接
+    # 保留 0 组以兼容旧版 updater 的控制 socket
     group_add:
       - "0"
     security_opt:
@@ -126,7 +127,7 @@ services:
     depends_on:
       openmusic:
         condition: service_started
-    # 例外：updater 必须以 root 运行（访问 docker.sock + 执行容器换代），镜像默认的 node 用户不适用
+    # updater 以 root 访问 docker.sock，并将控制通道交给主站所在的组
     user: "0:0"
     read_only: true
     tmpfs:
@@ -135,6 +136,8 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
     mem_limit: 256m
     cpus: 0.5
     logging: *default-logging

@@ -25,6 +25,9 @@ if (files.length === 0) {
   process.exit(1);
 }
 
-const tsxBin = path.join(clientRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
-const result = spawnSync(tsxBin, ['--test', ...files], { stdio: 'inherit', cwd: clientRoot });
+const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', ...files], {
+  stdio: 'inherit',
+  cwd: clientRoot,
+});
+if (result.error) console.error(result.error);
 process.exit(result.status ?? 1);

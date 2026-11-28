@@ -35,6 +35,7 @@ test('checkSetupAuthorization：无令牌可用时仅回环放行', () => {
 
 async function withSetupServer(run) {
   const app = express();
+  app.set('trust proxy', 'loopback');
   app.use(express.json());
   mountSetupApi(app);
   const server = app.listen(0, '127.0.0.1');
@@ -116,4 +117,42 @@ test('安装完成后 setup 接口保持关闭（404）', async () => {
   } finally {
     fs.unlinkSync(lockPath);
   }
+});
+
+test('POST 安装令牌要求同源，使用 HTTPS Cookie 授权后状态同步', async () => {
+  await withSetupServer(async (base) => {
+    const authorizeUrl = `${base}/api/setup/authorize`;
+    const headers = { 'Content-Type': 'application/json', Origin: base, 'X-Forwarded-Proto': 'https' };
+    const status = (headers) => fetch(`${base}/api/setup/status`, { headers }).then((res) => res.json());
+    assert.equal((await status()).setupAuthorized, false);
+    let res = await fetch(authorizeUrl, {
+      method: 'POST', headers: { ...headers, Origin: 'https://other.example' }, body: JSON.stringify({ token: TEST_TOKEN }),
+    });
+    assert.equal(res.status, 403);
+    res = await fetch(authorizeUrl, { method: 'POST', headers, body: JSON.stringify({ token: 'wrong' }) });
+    assert.equal(res.status, 403);
+    assert.equal(res.headers.has('set-cookie'), false);
+
+    res = await fetch(authorizeUrl, { method: 'POST', headers, body: JSON.stringify({ token: TEST_TOKEN }) });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { ok: true });
+    const cookie = res.headers.get('set-cookie');
+    assert.match(cookie, /; HttpOnly/);
+    assert.match(cookie, /; Secure/);
+    assert.equal((await status({ Cookie: cookie.split(';')[0] })).setupAuthorized, true);
+  });
+});
+
+test('GET 安装令牌授权超过尝试上限后返回 429', async () => {
+  await withSetupServer(async (base) => {
+    const url = `${base}/api/setup/authorize?token=wrong`;
+    for (let i = 0; i < 10; i += 1) {
+      const response = await fetch(url, { redirect: 'manual', headers: { 'X-Forwarded-For': '203.0.113.10' } });
+      assert.equal(response.status, 403);
+      await response.json();
+    }
+    const response = await fetch(url, { redirect: 'manual', headers: { 'X-Forwarded-For': '203.0.113.10' } });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.has('set-cookie'), false);
+  });
 });

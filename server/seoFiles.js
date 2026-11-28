@@ -60,7 +60,7 @@ export function getSeoDefaults() {
     seoSiteName: SITE_NAME,
     seoCanonicalUrl: '',
     seoBaiduVerification: '',
-    seoOgImage: '/og-cover.png',
+    seoOgImage: '/og-cover.jpg',
     seoHeroHeadline: DEFAULT_HERO_HEADLINE,
     seoHeroSubline: DEFAULT_HERO_SUBLINE,
     seoAboutTitle: DEFAULT_ABOUT_TITLE,

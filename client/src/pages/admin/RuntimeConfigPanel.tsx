@@ -1692,7 +1692,7 @@ export default function RuntimeConfigPanel({
           <Input
             value={draft.seoOgImage}
             maxLength={500}
-            placeholder="/og-cover.png"
+            placeholder="/og-cover.jpg"
             onChange={(e) => setDraft({ ...draft, seoOgImage: e.target.value })}
           />
         </Col>

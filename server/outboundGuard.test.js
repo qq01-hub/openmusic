@@ -7,6 +7,98 @@ import { previewCustomMusicApi } from './customMusicApi.js';
 const fakeLookup = (records) => async () => records;
 const PUBLIC_RECORDS = [{ address: '93.184.216.34', family: 4 }];
 const PRIVATE_RECORDS = [{ address: '10.1.2.3', family: 4 }];
+const lookupFn = fakeLookup(PUBLIC_RECORDS);
+
+test('外发 POST 按 UTF-8 字节数补充 Content-Length 并保留调用方请求头', async () => {
+  const headers = { Accept: 'application/json' };
+  const body = '点歌';
+  await fetchPinnedPublicUrl('https://api.example.com', {
+    method: 'POST', headers, body, lookupFn,
+    requestFn: async (_target, sentHeaders) => {
+      assert.equal(Number(sentHeaders['Content-Length']), Buffer.byteLength(body));
+      return new Response(null);
+    },
+  });
+  assert.deepEqual(headers, { Accept: 'application/json' });
+});
+
+test('默认拒绝重定向并取消响应体', async () => {
+  let cancelled = false;
+  const response = new Response(new ReadableStream({ cancel() { cancelled = true; } }), {
+    status: 302, headers: { Location: '/new' },
+  });
+  await assert.rejects(fetchPinnedPublicUrl('https://api.example.com', {
+    lookupFn, requestFn: async () => response,
+  }), /不允许重定向/);
+  assert.equal(cancelled, true);
+});
+
+test('跨域重定向剥离凭据并将 POST 改为 GET', async () => {
+  const requests = [];
+  const response = await fetchPinnedPublicUrl('https://api.example.com/start', {
+    lookupFn, redirect: 'follow', method: 'POST', body: 'data',
+    headers: { Authorization: 'test', Cookie: 'test', 'Proxy-Authorization': 'test', 'Content-Type': 'text/plain', Accept: 'text/plain' },
+    requestFn: async ({ parsed }, headers, _signal, _timeout, options) => {
+      requests.push({ url: parsed.href, headers, ...options });
+      if (requests.length === 1) return new Response(null, { status: 302, headers: { Location: 'https://relay.example.com/next' } });
+      return new Response('ok');
+    },
+  });
+  assert.equal(await response.text(), 'ok');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], { url: 'https://relay.example.com/next', headers: { Accept: 'text/plain' }, method: 'GET', body: undefined });
+});
+
+test('每跳重新校验并拒绝内网和元数据地址', async () => {
+  for (const destination of ['http://10.0.0.1', 'http://169.254.169.254/latest/meta-data', 'https://private.example.com']) {
+    let requests = 0;
+    await assert.rejects(fetchPinnedPublicUrl('https://api.example.com', {
+      lookupFn: async (hostname) => hostname === 'private.example.com' ? PRIVATE_RECORDS : PUBLIC_RECORDS,
+      redirect: 'follow',
+      requestFn: async () => {
+        requests += 1;
+        return new Response(null, { status: 307, headers: { Location: destination } });
+      },
+    }), /禁止访问内网地址/);
+    assert.equal(requests, 1);
+  }
+});
+
+test('同源 307 保留方法、认证以及调用方显式设置的请求体传输头', async () => {
+  for (const headers of [
+    { Authorization: 'test', 'content-length': '4' },
+    { Authorization: 'test', 'TRANSFER-ENCODING': 'chunked' },
+  ]) {
+    let requests = 0;
+    await fetchPinnedPublicUrl('https://api.example.com/start', {
+      method: 'POST', body: Buffer.from('test'), headers, lookupFn, redirect: 'follow',
+      requestFn: async ({ parsed }, sentHeaders, _signal, _timeout, { method, body }) => {
+        assert.deepEqual(sentHeaders, headers);
+        assert.equal(method, 'POST');
+        assert.equal(body.toString(), 'test');
+        requests += 1;
+        if (parsed.pathname === '/start') return new Response(null, { status: 307, headers: { Location: '/next' } });
+        return new Response(null);
+      },
+    });
+    assert.equal(requests, 2);
+  }
+});
+
+test('外发重定向拒绝缺失 Location 或超过跳数限制', async () => {
+  await assert.rejects(fetchPinnedPublicUrl('https://api.example.com', {
+    lookupFn, redirect: 'follow', requestFn: async () => new Response(null, { status: 302 }),
+  }), /缺少 Location/);
+  let requests = 0;
+  await assert.rejects(fetchPinnedPublicUrl('https://api.example.com', {
+    lookupFn, redirect: 'follow', maxRedirects: 1,
+    requestFn: async () => {
+      requests += 1;
+      return new Response(null, { status: 308, headers: { Location: '/loop' } });
+    },
+  }), /重定向次数超出限制/);
+  assert.equal(requests, 2);
+});
 
 test('外发目标校验：IP 字面量内网/元数据地址一律拒绝（不发网络请求）', async () => {
   for (const url of [

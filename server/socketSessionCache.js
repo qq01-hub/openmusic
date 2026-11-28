@@ -26,8 +26,15 @@ export function createSocketSessionVerifier({
   // socketId -> { socket, entry: { sessionKey, accountId, account, verifiedAt } }
   const registry = new Map();
 
+  function invalidateSocketId(socketId) {
+    const record = registry.get(socketId);
+    if (!record) return false;
+    if (record.socket?.data) delete record.socket.data.sessionCacheEntry;
+    return registry.delete(socketId);
+  }
+
   function invalidateSocket(socket) {
-    if (socket?.id) registry.delete(socket.id);
+    invalidateSocketId(socket?.id);
     if (socket?.data) delete socket.data.sessionCacheEntry;
   }
 
@@ -35,9 +42,7 @@ export function createSocketSessionVerifier({
     let removed = 0;
     for (const [socketId, record] of registry) {
       if (!predicate(record)) continue;
-      registry.delete(socketId);
-      if (record.socket?.data) delete record.socket.data.sessionCacheEntry;
-      removed += 1;
+      if (invalidateSocketId(socketId)) removed += 1;
     }
     return removed;
   }
@@ -61,7 +66,7 @@ export function createSocketSessionVerifier({
       }
       onMiss(socket);
       const result = await verify(socket, options);
-      if (result?.valid && result.account && ttl > 0) {
+      if (result?.valid && result.account && ttl > 0 && socket.connected !== false) {
         const next = {
           sessionKey: getSessionKey(socket),
           accountId: result.account.id,
@@ -75,6 +80,7 @@ export function createSocketSessionVerifier({
     },
 
     invalidateSocket,
+    invalidateSocketId,
     invalidateSessionKey(sessionKey) {
       if (!sessionKey) return 0;
       return invalidateWhere((record) => record.entry.sessionKey === sessionKey);

@@ -145,7 +145,7 @@ function staticAssetsDevPlugin(): Plugin {
           return;
         }
         const filePath = path.join(staticRoot, pathname);
-        if (!filePath.startsWith(staticRoot) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        if (!filePath.startsWith(staticRoot + path.sep) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
           next();
           return;
         }

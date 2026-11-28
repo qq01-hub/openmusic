@@ -611,7 +611,7 @@ deploy_docker_loudness() {
 下一步：
   1. 打开首次部署向导（Redis、Meting 与响度服务已自动配置）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "先建立 SSH 隧道，再访问 http://localhost:${port}/setup" )
-     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
+     首次安装令牌：$(setup_token_hint_text)（打开安装向导后，在页面顶部输入令牌并点击验证）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -691,7 +691,7 @@ deploy_docker() {
 下一步：
   1. 打开首次部署向导（Redis 已自动配置，只需填 Meting 音源地址和站点域名）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "本地执行 ssh -N -L ${port}:127.0.0.1:${port} user@server，再访问 http://localhost:${port}/setup" )
-     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
+     首次安装令牌：$(setup_token_hint_text)（打开安装向导后，在页面顶部输入令牌并点击验证）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -737,7 +737,7 @@ deploy_docker_full() {
 下一步：
   1. 打开首次部署向导（Redis 和 Meting 已自动配置，只需填站点域名）：
      $( [ "$bind_address" = "0.0.0.0" ] || [ "$bind_address" = "::" ] && echo "浏览器访问 http://<你的服务器IP>:${port}/setup（确保已放行 ${port}/tcp）" || echo "先建立 SSH 隧道，再访问 http://localhost:${port}/setup" )
-     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
+     首次安装令牌：$(setup_token_hint_text)（打开安装向导后，在页面顶部输入令牌并点击验证）
   2. 向导完成后服务会自动重启，刷新页面即可
   3. 已自动生成开箱即用的 Nginx HTTPS 反代示例：${ROOT_DIR}/nginx-openmusic-docker.conf
      上线 HTTPS 后执行一行命令收紧 Cookie 安全：
@@ -892,7 +892,7 @@ deploy_source() {
 下一步：
   1. 用原 SSH 账号建立隧道后，打开 http://localhost:${port}/setup 完成首次部署向导
      （若已存在有效 server/.env，会跳过向导）
-     首次安装令牌：$(setup_token_hint_text)（打开向导前先访问同地址同端口的 /api/setup/authorize?token=<令牌> 完成授权，会自动跳回向导）
+     首次安装令牌：$(setup_token_hint_text)（打开安装向导后，在页面顶部输入令牌并点击验证）
   2. 向导完成后需要重启一次服务使 .env 生效：
      pm2 restart openmusic --update-env
   3. 已按当前目录与端口自动生成 Nginx 静态直出模板：${ROOT_DIR}/nginx-openmusic-source.conf

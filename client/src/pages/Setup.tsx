@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   CheckCircleOutlined,
   CloudServerOutlined,
@@ -43,6 +43,12 @@ interface DockerDefaults {
   metingUrl: string;
 }
 
+interface SetupStatus {
+  setupTokenRequired?: boolean;
+  setupAuthorized?: boolean;
+  dockerDefaults?: DockerDefaults;
+}
+
 function randomAdminPath() {
   const bytes = new Uint8Array(12);
   crypto.getRandomValues(bytes);
@@ -59,7 +65,12 @@ async function setupFetch<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as { error?: string }).error || `请求失败（${response.status}）`);
+  if (!response.ok) {
+    throw Object.assign(new Error(data.error || `请求失败（${response.status}）`), {
+      status: response.status,
+      code: data.code,
+    });
+  }
   return data as T;
 }
 
@@ -86,23 +97,63 @@ function SetupPage() {
   const [appRoot, setAppRoot] = useState('/www/openmusic');
   const [showNginx, setShowNginx] = useState(true);
   const [dockerDefaults, setDockerDefaults] = useState<DockerDefaults | null>(null);
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+  const [setupAuthorized, setSetupAuthorized] = useState(false);
+  const [setupToken, setSetupToken] = useState('');
+  const [authorizing, setAuthorizing] = useState(false);
+  const [authorizationError, setAuthorizationError] = useState('');
+  const needsAuthorization = setupTokenRequired && !setupAuthorized;
+
+  const refreshSetupStatus = useCallback(async (signal?: AbortSignal) => {
+    const response = await fetch('/api/setup/status', { signal });
+    if (!response.ok) throw new Error('无法读取安装状态');
+    const data: SetupStatus = await response.json();
+    if (signal?.aborted) return;
+    setSetupTokenRequired(Boolean(data.setupTokenRequired));
+    setSetupAuthorized(Boolean(data.setupAuthorized));
+    if (data.dockerDefaults) {
+      setDockerDefaults(data.dockerDefaults);
+      setMode('url');
+      setRedisUrl(data.dockerDefaults.redisUrl);
+      setRedisOk(true);
+      if (data.dockerDefaults.metingUrl) setMetingApiUrl(data.dockerDefaults.metingUrl);
+    }
+    return data;
+  }, []);
 
   useEffect(() => {
-    fetch('/api/setup/status', { credentials: 'same-origin' })
-      .then((r) => r.json())
-      .then((data: { dockerDefaults?: DockerDefaults }) => {
-        if (data.dockerDefaults) {
-          setDockerDefaults(data.dockerDefaults);
-          setMode('url');
-          setRedisUrl(data.dockerDefaults.redisUrl);
-          setRedisOk(true);
-          if (data.dockerDefaults.metingUrl) {
-            setMetingApiUrl(data.dockerDefaults.metingUrl);
-          }
-        }
-      })
-      .catch(() => {});
-  }, []);
+    const controller = new AbortController();
+    void refreshSetupStatus(controller.signal).catch(() => {
+      if (!controller.signal.aborted) setError('无法读取安装状态，请刷新页面重试');
+    });
+    return () => controller.abort();
+  }, [refreshSetupStatus]);
+
+  const authorize = async () => {
+    setAuthorizing(true);
+    setAuthorizationError('');
+    try {
+      await setupFetch('/api/setup/authorize', { token: setupToken.trim() });
+      setSetupToken('');
+      const status = await refreshSetupStatus();
+      if (!status?.setupAuthorized) throw new Error('浏览器未保存安装授权，请检查 Cookie 设置后重试');
+    } catch (err) {
+      setAuthorizationError(err instanceof Error ? err.message : '安装令牌验证失败');
+    } finally {
+      setAuthorizing(false);
+    }
+  };
+
+  const handleSetupError = (err: unknown, fallback: string) => {
+    const text = err instanceof Error ? err.message : fallback;
+    if (err instanceof Error && (('code' in err && err.code === 'SETUP_TOKEN_REQUIRED') || ('status' in err && err.status === 403))) {
+      setSetupTokenRequired(true);
+      setSetupAuthorized(false);
+      setAuthorizationError(text);
+    } else {
+      setError(text);
+    }
+  };
 
   const redis = useMemo(() => (
     mode === 'url'
@@ -155,7 +206,7 @@ function SetupPage() {
       setRedisOk(true);
       message.success('Redis 连接成功');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Redis 连接失败');
+      handleSetupError(err, 'Redis 连接失败');
     } finally {
       setTesting(false);
     }
@@ -175,7 +226,7 @@ function SetupPage() {
       });
       setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '安装失败');
+      handleSetupError(err, '安装失败');
     } finally {
       setInstalling(false);
     }
@@ -317,6 +368,31 @@ function SetupPage() {
             </Space>
           </div>
 
+          {needsAuthorization && (
+            <Card title="一次性安装令牌">
+              <Form layout="vertical" onFinish={() => void authorize()}>
+                <Form.Item
+                  label="安装令牌"
+                  htmlFor="setup-token"
+                  extra="可在部署目录的 data/.env 或服务端首启日志中查看令牌"
+                >
+                  <Input.Password
+                    id="setup-token"
+                    value={setupToken}
+                    onChange={(event) => setSetupToken(event.target.value)}
+                    autoComplete="off"
+                  />
+                </Form.Item>
+                {authorizationError && (
+                  <Alert type="error" message={authorizationError} showIcon style={{ marginBottom: 16 }} />
+                )}
+                <Button type="primary" htmlType="submit" disabled={!setupToken.trim()} loading={authorizing}>
+                  验证令牌
+                </Button>
+              </Form>
+            </Card>
+          )}
+
           <Card
             title={(
               <Space>
@@ -325,7 +401,7 @@ function SetupPage() {
               </Space>
             )}
           >
-            <Form layout="vertical" requiredMark={false}>
+            <Form layout="vertical" requiredMark={false} disabled={needsAuthorization}>
               {dockerDefaults && (
                 <Alert
                   type="success"
@@ -453,7 +529,7 @@ function SetupPage() {
               </Space>
             )}
           >
-            <Form layout="vertical" requiredMark={false}>
+            <Form layout="vertical" requiredMark={false} disabled={needsAuthorization}>
               {dockerDefaults?.metingUrl && (
                 <Alert
                   type="success"
@@ -492,7 +568,7 @@ function SetupPage() {
               </Space>
             )}
           >
-            <Form layout="vertical" requiredMark={false}>
+            <Form layout="vertical" requiredMark={false} disabled={needsAuthorization}>
               <Form.Item label="站点访问地址" style={{ marginBottom: 16 }}>
                 <Input
                   value={siteUrl}
@@ -539,7 +615,7 @@ function SetupPage() {
             size="large"
             block
             loading={installing}
-            disabled={!redisOk || !adminPath.trim()}
+            disabled={needsAuthorization || !redisOk || !adminPath.trim()}
             onClick={() => void install()}
           >
             一键创建并保存配置

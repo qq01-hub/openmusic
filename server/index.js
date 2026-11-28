@@ -4814,8 +4814,7 @@ function bindSocketAccountSession(socket) {
 }
 
 function unbindSocketAccountSession(socketId) {
-  const cachedSocket = io.sockets.sockets.get(socketId);
-  if (cachedSocket) socketSessionVerifier.invalidateSocket(cachedSocket);
+  socketSessionVerifier.invalidateSocketId(socketId);
   const key = socketToAccountSessionKey.get(socketId);
   socketToAccountSessionKey.delete(socketId);
   if (!key) return;
@@ -4841,6 +4840,7 @@ function disconnectSocketsForAccountSession(token, reason = 'session_invalidated
 let riskChallengeBus;
 
 function suspendAccountSocketsForHumanChallenge(accountId) {
+  socketSessionVerifier.invalidateAccount(accountId);
   const sockets = io.in(`account:${accountId}`);
   sockets.emit('account_human_check_required');
   sockets.disconnectSockets(true);
@@ -4957,6 +4957,7 @@ function monitorSocketAccountSession(socket) {
     stop() {
       entry.stopped = true;
       clearTimeout(expiry);
+      socketSessionVerifier.invalidateSocketId(socket.id);
       monitoredSocketSessions.delete(socket.id);
       if (monitoredSocketSessions.size === 0 && socketSessionSweepTimer) {
         clearInterval(socketSessionSweepTimer);

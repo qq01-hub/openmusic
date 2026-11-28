@@ -300,7 +300,20 @@ EOF
 
 # Compose 文件默认拉取上游 main 最新版（可用 OPENMUSIC_COMPOSE_REF 覆盖为指定 tag/分支），
 # 每次都重新下载并覆盖，避免「脚本新、本地 compose 旧」的版本错位。
-# 覆盖前如对本地 compose 做过自定义改动，请先自行备份。
+# 覆盖前自动备份内容有变化的 Compose 文件
+replace_compose_file() {
+    local downloaded="$1" file="$2" backup
+    if [ -f "$file" ] && ! cmp -s -- "$downloaded" "$file"; then
+        backup="${file}.bak.$(date +%Y%m%d%H%M%S)"
+        if [ -e "$backup" ]; then
+            backup="$(mktemp "${backup}.XXXXXX")"
+        fi
+        cp -p -- "$file" "$backup"
+        echo "已备份原 Compose 文件：${DEPLOY_DIR%/}/$backup"
+    fi
+    mv -- "$downloaded" "$file"
+}
+
 COMPOSE_REF="${OPENMUSIC_COMPOSE_REF:-main}"
 COMPOSE_BASE_URL="https://raw.githubusercontent.com/qq01-hub/openmusic/${COMPOSE_REF}"
 echo "正在下载配置文件（来源：${COMPOSE_BASE_URL}，版本：${COMPOSE_REF}）..."
@@ -311,14 +324,14 @@ curl -fsSL -o "$tmp_compose" "${COMPOSE_BASE_URL}/docker-compose.full.yml"
 if command -v sha256sum &> /dev/null; then
     echo "docker-compose.full.yml SHA256：$(sha256sum "$tmp_compose" | awk '{print $1}')"
 fi
-mv "$tmp_compose" "$COMPOSE_FILE"
+replace_compose_file "$tmp_compose" "$COMPOSE_FILE"
 if [[ "$enable_loudness" =~ ^[Yy]$ ]]; then
     tmp_loudness="$(mktemp "${LOUDNESS_COMPOSE_FILE}.tmp.XXXXXX")"
     curl -fsSL -o "$tmp_loudness" "${COMPOSE_BASE_URL}/docker-compose.loudness.yml"
     if command -v sha256sum &> /dev/null; then
         echo "docker-compose.loudness.yml SHA256：$(sha256sum "$tmp_loudness" | awk '{print $1}')"
     fi
-    mv "$tmp_loudness" "$LOUDNESS_COMPOSE_FILE"
+    replace_compose_file "$tmp_loudness" "$LOUDNESS_COMPOSE_FILE"
 fi
 
 echo ""
@@ -381,6 +394,11 @@ EOF
     echo "已生成新的 .env 配置（权限 600）"
 else
     echo "检测到已有 .env，保留现有配置和密钥"
+    if ! grep -Eq '^[[:space:]]*OPENMUSIC_BIND_ADDRESS[[:space:]]*=' "$ENV_FILE" ||
+        ! grep -Eq '^[[:space:]]*ALLOW_INSECURE_COOKIES[[:space:]]*=' "$ENV_FILE"; then
+        echo "注意：新版 Compose 默认监听 127.0.0.1，且 ALLOW_INSECURE_COOKIES=0" >&2
+        echo "若原站点通过 IP 或纯 HTTP 访问，请按需在 .env 补充 OPENMUSIC_BIND_ADDRESS=0.0.0.0 或 ALLOW_INSECURE_COOKIES=1" >&2
+    fi
     for required_var in METING_ADMIN_PATH METING_ADMIN_USERNAME METING_ADMIN_PASSWORD ROOM_CREDENTIAL_ENCRYPTION_KEY; do
         if ! grep -Eq "^${required_var}=.+$" "$ENV_FILE"; then
             echo "错误: .env 缺少非空配置 ${required_var}，为避免覆盖现有密钥，脚本已停止" >&2
@@ -486,7 +504,7 @@ if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_
     setup_token_value="$(awk -F= '$1 == "SETUP_TOKEN" { sub(/^[^=]*=/, ""); print; exit }' data/.env 2>/dev/null || true)"
     if [ -n "$setup_token_value" ]; then
         echo "首次安装令牌（请妥善保存，安装完成后自动失效）：${setup_token_value}"
-        echo "打开向导前先访问与向导相同地址和端口的 /api/setup/authorize?token=${setup_token_value} 完成授权（会自动跳回向导）"
+        echo "打开安装向导后，在页面顶部输入令牌并点击验证"
     fi
     echo "Meting 管理后台的入口和初始凭据保存在 ${DEPLOY_DIR}/${ENV_FILE}"
     echo "已自动生成开箱即用的 Nginx HTTPS 反代示例：${DEPLOY_DIR}/nginx-openmusic-docker.conf"

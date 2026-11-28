@@ -9,8 +9,8 @@ import { createRoomChatStore, roomChatKey, ROOM_CHAT_STORAGE_VERSION } from './r
 import { appendMissingFavoriteSongs } from './favoritesSync.js';
 import { expireMigratedFavoriteSource } from './favoriteRetention.js';
 
-const ROOM_IDS_KEY = 'openmusic:room_ids';
-const roomKey = (id) => `openmusic:room:${id}`;
+export const ROOM_IDS_KEY = 'openmusic:room_ids';
+export const roomKey = (id) => `openmusic:room:${id}`;
 const accountRoomsKey = (accountId) => `openmusic:account:rooms:${accountId}`;
 const log = createLogger('room-storage');
 
@@ -90,6 +90,7 @@ export function getRedisClient() {
 
 /** 仅供测试注入假 Redis 客户端（与 roomCreateGuard 的 _set...ForTests 同惯例） */
 export function _setRoomStorageClientForTests(client) {
+  roomChatStore.forgetAll();
   redisClient = client || null;
   enabled = Boolean(client);
   redisInitPromise = undefined;
@@ -129,7 +130,10 @@ async function initializeRoomStorage() {
       ? new Error('Redis initial connection retry budget exhausted')
       : Math.min(250 * (2 ** Math.min(retries, 5)), 5000) + Math.floor(Math.random() * 200) };
     redisClient = createClient(options);
-    redisClient.once('ready', () => { connected = true; });
+    redisClient.on('ready', () => {
+      connected = true;
+      roomChatStore.forgetAll();
+    });
     redisClient.on('error', (err) => {
       incrementMetric('redis_error_total', { phase: 'runtime' });
       log.error('redis_runtime_error', { error: err });
@@ -273,8 +277,8 @@ export async function deleteRoomFromStorage(roomId, accountId = '') {
   if (!enabled || !redisClient) return;
 
   cancelQueuedRoomSave(roomId);
-  roomChatStore.forget(roomId);
   return enqueueRoomStorageOperation(roomId, async () => {
+    roomChatStore.forget(roomId);
     try {
       const transaction = redisClient.multi().del(roomKey(roomId)).del(roomChatKey(roomId)).sRem(ROOM_IDS_KEY, roomId);
       if (accountId) transaction.sRem(accountRoomsKey(accountId), String(roomId || '').trim().toUpperCase());

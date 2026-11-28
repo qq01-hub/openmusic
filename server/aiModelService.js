@@ -526,6 +526,7 @@ function normalizeAiApiBaseUrl(value) {
 async function fetchAiUpstream(url, { timeoutMs = 20_000, ...options } = {}) {
   if (process.env.ALLOW_PRIVATE_AI_API === '1') return fetch(url, options);
   return fetchPinnedPublicUrl(url, {
+    redirect: 'follow',
     method: options.method || 'GET',
     headers: options.headers || {},
     body: options.body,

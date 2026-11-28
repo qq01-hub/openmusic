@@ -57,17 +57,16 @@ COPY --from=server-deps /app/deploy/updater/node_modules ./deploy/updater/node_m
 COPY --from=client-builder /app/client/dist ./client/dist
 # 外置大资源（desk-pet/qface/vendor）：server 按 /desk-pet/、/qface/、/vendor/ 从 ../static 托管
 COPY --from=client-builder /app/static ./static
-# 运行时以官方镜像内置的非 root 用户 node（uid 1000）运行：
-# - 镜像内目录（downloads、临时缓存走 /tmp）归 node 所有，应用可直接写
-# - Compose 的 bind 挂载（./data/.env 等宿主机文件）需宿主机侧 chown 到 1000:1000，
-#   install.sh 已自动处理；手动部署见 docs/DEPLOY.md「非 root 运行与数据目录权限」
-# - updater 服务需访问 docker.sock，是唯一例外：compose 中以 user: "0:0" 覆盖
+COPY deploy/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# 新装 Compose 直接以 node 用户运行，存量 root 主站由入口迁移挂载权限后降权
 RUN rm -f ./server/*.test.js && mkdir -p ./server/downloads \
     && chown node:node /app/server \
-    && chown -R node:node /app/server/downloads /app/client/dist /app/static
-USER node
+    && chown -R node:node /app/server/downloads /app/client/dist /app/static \
+    && sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod +x /usr/local/bin/docker-entrypoint.sh
 
 EXPOSE 4000
 WORKDIR /app/server
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/api/health').then((r) => { if (!r.ok) process.exit(1); }).catch(() => process.exit(1))"
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["node", "index.js"]

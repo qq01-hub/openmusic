@@ -16,6 +16,9 @@ services:
           - meting-api-audio-loudness
     init: true
     stop_grace_period: 10s
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       PORT: "3100"
       # Redis 设了密码时，把 LOUDNESS_REDIS_URL 设为 redis://:<REDIS_PASSWORD>@redis:6379

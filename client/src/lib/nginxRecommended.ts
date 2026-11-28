@@ -296,6 +296,11 @@ location = /og-cover.png {
     access_log off;
 }
 
+location = /og-cover.jpg {
+    add_header Cache-Control "public, max-age=604800";
+    access_log off;
+}
+
 # 未知路径保持 404 状态，同时交给前端展示 404 页面
 location / {
     error_page 404 = @openmusic_not_found;

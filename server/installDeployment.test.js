@@ -61,9 +61,18 @@ test('管道安装保留配置，统一启动服务，配置或引擎失败时�
   ];
   for (const scenario of cases) {
     const fixtureDirectory = mkdtempSync(join(tmpdir(), 'openmusic-installer-'));
+    const composeFiles = ['docker-compose.full.yml', 'docker-compose.loudness.yml'];
     try {
       if (!scenario.fresh) writeFileSync(join(fixtureDirectory, '.env'), existingEnv);
-      if (scenario.repair) mkdirSync(join(fixtureDirectory, 'data/runtimeConfig.json'), { recursive: true });
+      if (scenario.repair) {
+        mkdirSync(join(fixtureDirectory, 'data/runtimeConfig.json'), { recursive: true });
+        for (const file of composeFiles) writeFileSync(join(fixtureDirectory, file), `# 原配置 ${file}\n`);
+      }
+      if (scenario.configStatus === '1') {
+        for (const file of composeFiles) {
+          writeFileSync(join(fixtureDirectory, file), readFileSync(join(fixtureRoot, file)));
+        }
+      }
       const result = spawnSync(process.env.BASH || 'bash', ['-c', `docker() {
   printf '%s\n' "$*" >> docker.calls
   if [ "$1" = info ]; then return "$ENGINE_STATUS"; fi
@@ -106,6 +115,13 @@ export -f docker curl ip
         if (scenario.repair) {
           assert.ok(calls.includes('--force-recreate'));
           assert.ok(!calls.includes('--force-recreate openmusic'));
+          assert.match(result.stderr, /默认监听 127\.0\.0\.1，且 ALLOW_INSECURE_COOKIES=0/);
+          for (const file of composeFiles) {
+            const backup = readdirSync(fixtureDirectory).find(name => name.startsWith(`${file}.bak.`));
+            assert.ok(backup?.match(/\.bak\.\d{14}$/));
+            assert.ok(result.stdout.includes(backup));
+            assert.equal(readFileSync(join(fixtureDirectory, backup), 'utf8'), `# 原配置 ${file}\n`);
+          }
         }
       } else if (scenario.tokenStatus || scenario.tokenReadStatus) {
         assert.match(result.stderr, /Meting API Token 自动配置失败/);
@@ -119,6 +135,9 @@ export -f docker curl ip
         assert.ok(!result.stdout.includes('部署成功'));
       }
       assert.ok(!readdirSync(fixtureDirectory).some(name => name.includes('.tmp.')));
+      if (scenario.configStatus === '1') {
+        assert.ok(!readdirSync(fixtureDirectory).some(name => name.includes('.bak.')));
+      }
     } finally {
       rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 5 });
     }
@@ -159,10 +178,15 @@ test('所有 Compose 变体使用同一显式子网网络及服务名互访', (c
           assert.deepEqual(config.services[service].networks, { openmusic: alias ? { aliases: [alias] } : null });
         }
         assert.equal(config.services.openmusic.environment.DOCKER_REDIS_URL, 'redis://redis:6379/0');
+        assert.equal(config.services.openmusic.user, '1000:1000');
+        assert.deepEqual(config.services.openmusic.group_add, ['0']);
+        assert.deepEqual(config.services.openmusic.cap_drop, ['ALL']);
+        assert.deepEqual(config.services.updater.cap_add, ['CHOWN']);
         if (config.services.meting) assert.equal(config.services.openmusic.environment.DOCKER_METING_URL, 'http://meting-api:3000');
         if (config.services.loudness) {
           assert.equal(config.services.meting.environment.LOUDNESS_SERVICE_URL, 'http://meting-api-audio-loudness:3100/analyze');
           assert.equal(config.services.loudness.environment.REDIS_URL, 'redis://redis:6379');
+          assert.equal(config.services.loudness.depends_on.redis.condition, 'service_healthy');
         }
       }
     }

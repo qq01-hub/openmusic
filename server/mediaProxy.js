@@ -338,13 +338,45 @@ export async function assertPublicOutboundTarget(rawUrl, { timeoutMs = 5000, loo
 }
 
 /**
- * 校验并钉扎已验证 IP 发起请求的外发 fetch（不跟随重定向，语义与 redirect:'error' 一致）。
+ * 每一跳均校验并钉扎公网 IP，默认拒绝重定向
  * 返回标准 Web Response；body 仅支持字符串/Buffer/Uint8Array。
  */
-export async function fetchPinnedPublicUrl(rawUrl, { method = 'GET', headers = {}, body, signal, timeoutMs = 10_000, lookupFn } = {}) {
-  const target = await assertPublicOutboundTarget(rawUrl, { timeoutMs, lookupFn });
-  if (signal) signal.throwIfAborted();
-  return requestPinnedMedia(target, headers, signal, timeoutMs, { method, body });
+export async function fetchPinnedPublicUrl(rawUrl, {
+  method = 'GET', headers = {}, body, signal, timeoutMs = 10_000, lookupFn,
+  redirect = 'error', maxRedirects = 3, requestFn,
+} = {}) {
+  let currentUrl = rawUrl;
+  let currentMethod = method.toUpperCase();
+  let currentBody = body;
+  let currentHeaders = Object.fromEntries(headers instanceof Headers ? headers : Object.entries(headers));
+  for (let hop = 0; ; hop += 1) {
+    signal?.throwIfAborted();
+    const target = await assertPublicOutboundTarget(currentUrl, { timeoutMs, lookupFn });
+    signal?.throwIfAborted();
+    const response = await requestPinnedMedia(target, currentHeaders, signal, timeoutMs, {
+      method: currentMethod, body: currentBody,
+    }, requestFn);
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+
+    await cancelMediaBody(response);
+    if (redirect !== 'follow') throw new Error('外发请求不允许重定向');
+    if (hop >= maxRedirects) throw new Error('外发请求重定向次数超出限制');
+    const location = response.headers.get('location');
+    if (!location) throw new Error('外发请求重定向缺少 Location');
+    const next = new URL(location, target.parsed);
+    const dropHeaders = new Set();
+    if (next.origin !== target.parsed.origin) {
+      for (const name of ['authorization', 'cookie', 'proxy-authorization', 'host']) dropHeaders.add(name);
+    }
+    if ((response.status === 303 && currentMethod !== 'HEAD')
+      || ([301, 302].includes(response.status) && currentMethod === 'POST')) {
+      currentMethod = 'GET';
+      currentBody = undefined;
+      for (const name of ['content-type', 'content-length', 'transfer-encoding']) dropHeaders.add(name);
+    }
+    currentHeaders = Object.fromEntries(Object.entries(currentHeaders).filter(([name]) => !dropHeaders.has(name.toLowerCase())));
+    currentUrl = next.href;
+  }
 }
 
 /**
@@ -463,7 +495,15 @@ async function assertSafeMediaUrl(rawUrl, extraAllowedHosts, { requireAllowlist,
   return { parsed, addresses };
 }
 
-function requestPinnedMedia({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false, body } = {}) {
+function requestPinnedMedia(target, headers, signal, timeoutMs, options = {}, requestFn = sendPinnedMediaRequest) {
+  const { body } = options;
+  if (body != null && !Object.keys(headers).some((name) => ['content-length', 'transfer-encoding'].includes(name.toLowerCase()))) {
+    headers = { ...headers, 'Content-Length': Buffer.byteLength(body) };
+  }
+  return requestFn(target, headers, signal, timeoutMs, options);
+}
+
+function sendPinnedMediaRequest({ parsed, addresses }, headers, signal, timeoutMs, { method = 'GET', nodeStream = false, body } = {}) {
   return new Promise((resolve, reject) => {
     const transport = parsed.protocol === 'https:' ? https : http;
     const agent = parsed.protocol === 'https:' ? httpsMediaAgent : httpMediaAgent;

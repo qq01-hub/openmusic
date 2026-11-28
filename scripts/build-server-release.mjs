@@ -15,6 +15,10 @@ for (const file of fs.readdirSync(path.join(root, 'server'))) {
     fs.copyFileSync(path.join(root, 'server', file), path.join(output, 'server', file));
   }
 }
+if (fs.existsSync(path.join(root, 'server/scripts/rollback-room-chat.mjs'))) {
+  fs.mkdirSync(path.join(output, 'server/scripts'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'server/scripts/rollback-room-chat.mjs'), path.join(output, 'server/scripts/rollback-room-chat.mjs'));
+}
 fs.cpSync(path.join(root, 'client/dist'), path.join(output, 'client/dist'), { recursive: true });
 // 外置大资源（批 4）：desk-pet/qface/vendor 已移到仓库根 static/，发布包必须带上，否则新装缺资源
 fs.cpSync(path.join(root, 'static'), path.join(output, 'static'), { recursive: true });

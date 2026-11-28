@@ -88,6 +88,32 @@ test('核验未通过的结果不缓存，逐包复核', async () => {
   assert.equal(calls(), 2);
 });
 
+test('断开连接后仅凭 socket ID 清除缓存及索引', async () => {
+  const { verifier } = makeVerifier();
+  const socket = fakeSocket('disconnected');
+  const sockets = new Map([[socket.id, socket]]);
+  await verifier.verifySocket(socket);
+  assert.equal(verifier.size, 1);
+  sockets.delete(socket.id);
+  assert.equal(verifier.invalidateSocketId(socket.id), true);
+  assert.equal(verifier.size, 0);
+  assert.equal(socket.data.sessionCacheEntry, undefined);
+  assert.equal(verifier.invalidateSocketId(socket.id), false);
+});
+
+test('连接断开后，在途核验成功也不会重新写入缓存', async () => {
+  let finish;
+  const verifier = createSocketSessionVerifier({ verify: () => new Promise((resolve) => { finish = resolve; }) });
+  const socket = { ...fakeSocket('in-flight'), connected: true };
+  const verification = verifier.verifySocket(socket);
+  socket.connected = false;
+  verifier.invalidateSocketId(socket.id);
+  finish({ valid: true, account: { id: 'acct_1' } });
+  await verification;
+  assert.equal(verifier.size, 0);
+  assert.equal(socket.data.sessionCacheEntry, undefined);
+});
+
 test('会话键变化（账户切换/重登换会话）时不复用旧缓存', async () => {
   const { verifier, calls } = makeVerifier();
   const socket = fakeSocket('s1', 'key-old');
