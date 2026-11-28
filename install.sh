@@ -298,10 +298,10 @@ server {
 EOF
 }
 
-# Compose 文件固定拉取与脚本对应的发布版本（可用 OPENMUSIC_COMPOSE_REF 覆盖），
-# 不再跟随上游 main 浮动；每次都重新下载并覆盖，避免「脚本新、本地 compose 旧」的版本错位。
+# Compose 文件默认拉取上游 main 最新版（可用 OPENMUSIC_COMPOSE_REF 覆盖为指定 tag/分支），
+# 每次都重新下载并覆盖，避免「脚本新、本地 compose 旧」的版本错位。
 # 覆盖前如对本地 compose 做过自定义改动，请先自行备份。
-COMPOSE_REF="${OPENMUSIC_COMPOSE_REF:-v3.7.27}"
+COMPOSE_REF="${OPENMUSIC_COMPOSE_REF:-main}"
 COMPOSE_BASE_URL="https://raw.githubusercontent.com/qq01-hub/openmusic/${COMPOSE_REF}"
 echo "正在下载配置文件（来源：${COMPOSE_BASE_URL}，版本：${COMPOSE_REF}）..."
 tmp_compose="$(mktemp "${COMPOSE_FILE}.tmp.XXXXXX")"
