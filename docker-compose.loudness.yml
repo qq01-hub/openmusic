@@ -1,8 +1,14 @@
 # 响度增强覆盖：与 docker-compose.full.yml 一起使用
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   loudness:
-    image: ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:latest
+    image: "${LOUDNESS_IMAGE:-ghcr.io/qq01-hub/openmusic-meting-api-audio-loudness:latest}"
     restart: unless-stopped
     networks:
       openmusic:
@@ -12,7 +18,9 @@ services:
     stop_grace_period: 10s
     environment:
       PORT: "3100"
-      REDIS_URL: redis://redis:6379
+      # Redis 设了密码时，把 LOUDNESS_REDIS_URL 设为 redis://:<REDIS_PASSWORD>@redis:6379
+      # （install.sh 生成 .env 时会自动写入与 REDIS_PASSWORD 一致的该变量）
+      REDIS_URL: "${LOUDNESS_REDIS_URL:-redis://redis:6379}"
       MAX_DOWNLOAD_BYTES: "67108864"
       REQUEST_TIMEOUT_MS: "30000"
       ANALYSIS_CONCURRENCY: "2"
@@ -25,10 +33,17 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
     mem_limit: 1g
-    depends_on:
-      redis:
-        condition: service_healthy
+    cpus: 1.0
+    logging: *default-logging
 
   meting:
     environment:

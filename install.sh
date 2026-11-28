@@ -298,17 +298,26 @@ server {
 EOF
 }
 
-echo "正在下载配置文件..."
+# Compose 文件默认拉取上游 main 最新版（可用 OPENMUSIC_COMPOSE_REF 覆盖为指定 tag/分支），
+# 每次都重新下载并覆盖，避免「脚本新、本地 compose 旧」的版本错位。
+# 覆盖前如对本地 compose 做过自定义改动，请先自行备份。
+COMPOSE_REF="${OPENMUSIC_COMPOSE_REF:-main}"
+COMPOSE_BASE_URL="https://raw.githubusercontent.com/qq01-hub/openmusic/${COMPOSE_REF}"
+echo "正在下载配置文件（来源：${COMPOSE_BASE_URL}，版本：${COMPOSE_REF}）..."
 tmp_compose="$(mktemp "${COMPOSE_FILE}.tmp.XXXXXX")"
 tmp_loudness=""
 trap 'rm -f "$tmp_compose"; [ -z "$tmp_loudness" ] || rm -f "$tmp_loudness"' EXIT
-if [ ! -f "$COMPOSE_FILE" ]; then
-    curl -fsSL -o "$tmp_compose" https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.full.yml
-    mv "$tmp_compose" "$COMPOSE_FILE"
+curl -fsSL -o "$tmp_compose" "${COMPOSE_BASE_URL}/docker-compose.full.yml"
+if command -v sha256sum &> /dev/null; then
+    echo "docker-compose.full.yml SHA256：$(sha256sum "$tmp_compose" | awk '{print $1}')"
 fi
-if [[ "$enable_loudness" =~ ^[Yy]$ ]] && [ ! -f "$LOUDNESS_COMPOSE_FILE" ]; then
+mv "$tmp_compose" "$COMPOSE_FILE"
+if [[ "$enable_loudness" =~ ^[Yy]$ ]]; then
     tmp_loudness="$(mktemp "${LOUDNESS_COMPOSE_FILE}.tmp.XXXXXX")"
-    curl -fsSL -o "$tmp_loudness" https://raw.githubusercontent.com/qq01-hub/openmusic/main/docker-compose.loudness.yml
+    curl -fsSL -o "$tmp_loudness" "${COMPOSE_BASE_URL}/docker-compose.loudness.yml"
+    if command -v sha256sum &> /dev/null; then
+        echo "docker-compose.loudness.yml SHA256：$(sha256sum "$tmp_loudness" | awk '{print $1}')"
+    fi
     mv "$tmp_loudness" "$LOUDNESS_COMPOSE_FILE"
 fi
 
@@ -343,6 +352,8 @@ if [ ! -f "$ENV_FILE" ]; then
     METING_PASSWORD="$(random_hex 16)"
     METING_USERNAME="admin"
     ENCRYPTION_KEY="$(generate_key)"
+    SETUP_TOKEN="$(random_hex 32)"
+    REDIS_PASSWORD="$(random_hex 32)"
     BIND_ADDRESS="${OPENMUSIC_BIND_ADDRESS:-}"
     if [ -z "$BIND_ADDRESS" ]; then
         if ask_yes_no "是否直接监听公网端口以便通过服务器 IP 打开向导（有域名配 Nginx 反代建议选 N，仅听本机）？[y/N]" "N"; then
@@ -362,6 +373,9 @@ METING_ADMIN_PATH=$METING_ADMIN_PATH
 METING_ADMIN_USERNAME=$METING_USERNAME
 METING_ADMIN_PASSWORD=$METING_PASSWORD
 ROOM_CREDENTIAL_ENCRYPTION_KEY=$ENCRYPTION_KEY
+SETUP_TOKEN=$SETUP_TOKEN
+REDIS_PASSWORD=$REDIS_PASSWORD
+LOUDNESS_REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
 EOF
     chmod 600 "$ENV_FILE"
     echo "已生成新的 .env 配置（权限 600）"
@@ -392,8 +406,23 @@ for config_file in data/.env data/setup.lock data/runtimeConfig.json data/adminC
 done
 [ -f data/.env ] || (umask 077 && : > data/.env)
 [ -f data/setup.lock ] || touch data/setup.lock
+# 首次安装一次性令牌：服务端实际从 data/.env（挂载为 server/.env）读取 SETUP_TOKEN；
+# 安装未完成且 data/.env 尚无令牌时写入，安装完成后不再生成。
+if [ ! -s data/setup.lock ] && ! grep -Eq '^SETUP_TOKEN=.+' data/.env; then
+    setup_token_value="$(read_env_value SETUP_TOKEN '')"
+    if [ -z "$setup_token_value" ]; then setup_token_value="$(random_hex 32)"; fi
+    (umask 077 && printf 'SETUP_TOKEN=%s\n' "$setup_token_value" >> data/.env)
+    chmod 600 data/.env
+fi
 [ -f data/runtimeConfig.json ] || printf '{}\n' > data/runtimeConfig.json
 [ -f data/adminConfig.json ] || printf '{}\n' > data/adminConfig.json
+# 运行时镜像以非 root 用户 node（uid 1000）运行，bind 挂载的数据文件需归该用户所有，
+# 否则向导与后台写 data/.env、runtimeConfig.json 等文件会失败
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    chown -R 1000:1000 data 2>/dev/null || echo "警告: 数据目录权限调整失败，请手动执行 chown -R 1000:1000 data"
+else
+    echo "提示: 若容器日志出现数据文件写入失败，请执行 sudo chown -R 1000:1000 data"
+fi
 
 echo ""
 echo "正在启动 OpenMusic..."
@@ -453,6 +482,11 @@ if docker compose --env-file "$ENV_FILE" "${COMPOSE_FILES[@]}" up "${compose_up_
         echo "1. 在本地电脑用原 SSH 账号和端口建立隧道："
         echo "   ssh -N -L ${actual_openmusic_port}:127.0.0.1:${actual_openmusic_port} -L ${actual_meting_port}:127.0.0.1:${actual_meting_port} user@server"
         echo "2. 浏览器打开 http://localhost:${actual_openmusic_port}/setup，确认预填配置并保存管理员凭据"
+    fi
+    setup_token_value="$(awk -F= '$1 == "SETUP_TOKEN" { sub(/^[^=]*=/, ""); print; exit }' data/.env 2>/dev/null || true)"
+    if [ -n "$setup_token_value" ]; then
+        echo "首次安装令牌（请妥善保存，安装完成后自动失效）：${setup_token_value}"
+        echo "打开向导前先访问与向导相同地址和端口的 /api/setup/authorize?token=${setup_token_value} 完成授权（会自动跳回向导）"
     fi
     echo "Meting 管理后台的入口和初始凭据保存在 ${DEPLOY_DIR}/${ENV_FILE}"
     echo "已自动生成开箱即用的 Nginx HTTPS 反代示例：${DEPLOY_DIR}/nginx-openmusic-docker.conf"

@@ -3,24 +3,53 @@
 #       docker compose --env-file .env -f docker-compose.full.yml up -d
 #
 # Meting 管理后台仅监听宿主机回环地址，远程管理请使用 SSH 隧道
+#
+# 安全默认值（批 2 收紧）：主站默认绑 127.0.0.1、Cookie 默认强制 Secure、
+# REDIS_PASSWORD 非空时 Redis 启用 requirepass（留空保持旧行为，兼容已有部署）、
+# 应用镜像可用 OPENMUSIC_IMAGE / METING_IMAGE 覆盖（fork 自部署请换成自己的仓库）、
+# 基础镜像已 pin 到具体版本 + digest。
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.5-alpine@sha256:bb186d083732f669da90be8b0f975a37812b15e913465bb14d845db72a4e3e08
     restart: unless-stopped
     networks:
       - openmusic
-    command: redis-server --appendonly yes
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+    # 密码非空才启用 requirepass，避免给已有无密码部署强加认证导致启动失败
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then
+      exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+      else exec redis-server --appendonly yes; fi'
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping; else redis-cli ping; fi"]
       interval: 10s
       timeout: 3s
       retries: 5
+    security_opt:
+      - no-new-privileges:true
+    # redis 官方入口需在启动时 chown 数据目录并从 root 降权到 redis 用户，故保留这三项能力
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *default-logging
 
   meting:
-    image: w3126197382/meting-api:latest
+    image: "${METING_IMAGE:-w3126197382/meting-api:latest}"
     restart: unless-stopped
     networks:
       openmusic:
@@ -31,7 +60,7 @@ services:
     environment:
       ADMIN_PATH: ${METING_ADMIN_PATH:?请在 .env 中设置随机 METING_ADMIN_PATH}
       ADMIN_USERNAME: ${METING_ADMIN_USERNAME:?请在 .env 中设置 METING_ADMIN_USERNAME}
-      ADMIN_PASSWORD: ${METING_ADMIN_PASSWORD:?请在 .env 中设置强 METING_ADMIN_PASSWORD}
+      ADMIN_PASSWORD: ${METING_ADMIN_PASSWORD:?请在 .env 中设置随机 METING_ADMIN_PASSWORD}
     volumes:
       - ./data/meting:/app/data
     healthcheck:
@@ -39,9 +68,21 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+    security_opt:
+      - no-new-privileges:true
+    # Meting 镜像入口可能同样需要 chown 数据目录并降权，保留与 redis 相同的最小能力集
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    mem_limit: 512m
+    cpus: 0.75
+    logging: *default-logging
 
   openmusic:
-    image: w3126197382/openmusic:latest
+    image: "${OPENMUSIC_IMAGE:-w3126197382/openmusic:latest}"
     build:
       context: .
       dockerfile: Dockerfile
@@ -50,13 +91,18 @@ services:
     networks:
       - openmusic
     ports:
-      - "${OPENMUSIC_BIND_ADDRESS:-0.0.0.0}:${OPENMUSIC_PORT:-4000}:4000"
+      - "${OPENMUSIC_BIND_ADDRESS:-127.0.0.1}:${OPENMUSIC_PORT:-4000}:4000"
     environment:
       PORT: 4000
       NODE_ENV: production
-      # 首次 IP/HTTP 部署允许 Cookie，HTTPS 上线后设为 0 强制 Secure
-      ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-1}"
+      # 默认强制 Secure Cookie；仅纯 HTTP 首次体验时在 .env 显式设 ALLOW_INSECURE_COOKIES=1
+      ALLOW_INSECURE_COOKIES: "${ALLOW_INSECURE_COOKIES:-0}"
       DOCKER_REDIS_URL: redis://redis:6379/0
+      # 与 DOCKER_REDIS_URL 分开传密码：roomStorage/setup 会把 REDIS_PASSWORD 叠加到连接上，
+      # URL 本身保持无凭据，避免密码随 URL 被写进 server/.env 或日志
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      # 首次安装向导的一次性令牌（部署脚本写入部署目录 .env，此处透传进容器）
+      SETUP_TOKEN: "${SETUP_TOKEN:-}"
       DOCKER_METING_URL: http://meting-api:3000
       OPENMUSIC_UPDATE_SOCKET: /run/openmusic-update/control.sock
       ROOM_CREDENTIAL_ENCRYPTION_KEY: ${ROOM_CREDENTIAL_ENCRYPTION_KEY:?请在 .env 中设置 ROOM_CREDENTIAL_ENCRYPTION_KEY}
@@ -88,19 +134,48 @@ services:
         condition: service_healthy
       meting:
         condition: service_healthy
+    # 升级控制 socket 由 updater 以 0660/root 组创建，主站以 node 用户运行需加入 0 组才能连接
+    group_add:
+      - "0"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 768m
+    cpus: 1.0
+    logging: *default-logging
 
   updater:
-    image: w3126197382/openmusic:latest
+    image: "${OPENMUSIC_IMAGE:-w3126197382/openmusic:latest}"
     restart: unless-stopped
     command: ["node", "/app/deploy/updater/index.mjs", "docker"]
     networks:
       - openmusic
+    environment:
+      # 升级目标仓库与部署镜像保持一致（只写仓库名，不带 tag）
+      OPENMUSIC_IMAGE_REPOSITORY: "${OPENMUSIC_IMAGE_REPOSITORY:-w3126197382/openmusic}"
     volumes:
+      # ⚠️ 风险：挂载 docker.sock 等于授予宿主机 root 等效权限。未改用 socket proxy 的原因：
+      # 升级事务（core.mjs 崩溃恢复）需要 containers/images 的完整读写端点，proxy 白名单一旦
+      # 漏配会在升级中途失败且回滚端点同样受限，风险高于收益；故保留直挂，靠下方只读根文件
+      # 系统 + cap_drop + 独立容器隔离爆炸半径。主站容器不挂此 socket。
       - /var/run/docker.sock:/var/run/docker.sock
       - openmusic-update:/run/openmusic-update
     depends_on:
       openmusic:
         condition: service_started
+    # 例外：updater 必须以 root 运行（访问 docker.sock + 执行容器换代），镜像默认的 node 用户不适用
+    user: "0:0"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+    cpus: 0.5
+    logging: *default-logging
 
 volumes:
   redis-data:

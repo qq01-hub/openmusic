@@ -1,6 +1,4 @@
-import { lookup as dnsLookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
-import { isBlockedMediaHostname } from './mediaProxy.js';
+import { fetchPinnedPublicUrl, isBlockedMediaHostname } from './mediaProxy.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 
 export const MUSIC_API_PLATFORMS = new Set(['netease', 'tencent', 'kugou', 'qishui']);
@@ -43,18 +41,6 @@ function isDisallowedCustomApiHostname(hostname) {
   if (isMetadataOrLinkLocalHost(hostname)) return true;
   if (process.env.ALLOW_PRIVATE_CUSTOM_MUSIC_API === '1') return false;
   return isBlockedMediaHostname(hostname);
-}
-
-async function assertSafeCustomApiTarget(parsedUrl) {
-  const host = String(parsedUrl.hostname || '').replace(/^\[|\]$/g, '');
-  if (isDisallowedCustomApiHostname(host)) {
-    throw new Error('自定义音乐接口目标地址不允许指向内网或元数据主机');
-  }
-  if (isIP(host)) return;
-  const records = await dnsLookup(host, { all: true });
-  if (!records.length || records.some((record) => isDisallowedCustomApiHostname(record.address))) {
-    throw new Error('自定义音乐接口域名解析到受限内网或元数据地址');
-  }
 }
 
 function pruneResponseCache(now = Date.now()) {
@@ -527,16 +513,25 @@ async function requestEndpoint(endpoint, query, timeoutMs, fetchImpl, preview = 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    if (fetchImpl === fetch) {
-      await assertSafeCustomApiTarget(url);
-    }
-    const response = await fetchImpl(url.toString(), {
-      method: endpoint.method,
-      headers,
-      body: endpoint.method === 'POST' ? renderedBody : undefined,
-      signal: controller.signal,
-      redirect: 'error',
-    });
+    // 真实请求走 mediaProxy 的「校验 + IP 钉扎」通道（fetchPinnedPublicUrl），
+    // 消除旧实现校验后由原生 fetch 重新解析域名的 DNS 重绑定（TOCTOU）窗口；
+    // ALLOW_PRIVATE_CUSTOM_MUSIC_API=1 时保留直连（管理员显式允许内网音源）。
+    const usePinnedFetch = fetchImpl === fetch && process.env.ALLOW_PRIVATE_CUSTOM_MUSIC_API !== '1';
+    const response = usePinnedFetch
+      ? await fetchPinnedPublicUrl(url.toString(), {
+        method: endpoint.method,
+        headers,
+        body: endpoint.method === 'POST' ? renderedBody : undefined,
+        signal: controller.signal,
+        timeoutMs,
+      })
+      : await fetchImpl(url.toString(), {
+        method: endpoint.method,
+        headers,
+        body: endpoint.method === 'POST' ? renderedBody : undefined,
+        signal: controller.signal,
+        redirect: 'error',
+      });
     if (response.status >= 500) {
       await cancelResponseBody(response);
       throw new Error(`自定义音乐接口返回 ${response.status}`);

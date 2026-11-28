@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 // 开发与部署复用前端实际清单，避免表情名称、编号各维护一份
-const sourceManifest = new URL('../client/public/qface/manifest.json', import.meta.url);
+// qface 已外置到仓库根 static/（批 4），清单以 static 为准；dist 路径仅作旧布局兜底
+const sourceManifest = new URL('../static/qface/manifest.json', import.meta.url);
 const builtManifest = new URL('../client/dist/qface/manifest.json', import.meta.url);
 export const QQ_FACE_CATALOG = JSON.parse(readFileSync(
   existsSync(sourceManifest) ? sourceManifest : builtManifest, 'utf8',

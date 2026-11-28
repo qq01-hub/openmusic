@@ -15,9 +15,12 @@ if (!['docker', 'source'].includes(mode) || process.platform === 'win32') {
 }
 const directory = mode === 'docker' ? '/run/openmusic-update' : path.join(root, '.openmusic-update');
 const socket = path.join(directory, 'control.sock');
-await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+await fs.mkdir(directory, { recursive: true, mode: 0o710 });
 
-// 主站和升级进程必须同一 UID，控制通道不监听 TCP 端口
+// 控制通道不监听 TCP 端口。主站以非 root（node）运行、updater 以 root 运行：
+// 目录 0710 + socket 0660（root 组），主站容器通过 group_add 加入 0 组后可连接；
+// 该卷仅由主站与 updater 两个服务挂载。旧卷若仍是 0700/0600 需删除 openmusic-update 卷重建一次。
+await fs.chmod(directory, 0o710).catch(() => {});
 await new Promise((resolve, reject) => {
   const request = http.get({ socketPath: socket, path: '/status', timeout: 1500 }, response => {
     response.resume();
@@ -111,7 +114,7 @@ const server = http.createServer(async (request, response) => {
 server.requestTimeout = 15_000;
 server.headersTimeout = 10_000;
 server.listen(socket, () => {
-  void fs.chmod(socket, 0o600).catch(() => server.close());
+  void fs.chmod(socket, 0o660).catch(() => server.close());
 });
 const shutdown = async () => {
   server.close();

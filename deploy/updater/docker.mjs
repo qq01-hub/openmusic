@@ -2,7 +2,22 @@ import http from 'node:http';
 import { hostname } from 'node:os';
 import { updateError } from './core.mjs';
 
-const IMAGE = 'w3126197382/openmusic';
+// 升级目标仓库：与部署镜像保持一致，可用 OPENMUSIC_IMAGE_REPOSITORY 覆盖
+// （fork 自部署必须指向自己的仓库；默认仍为上游官方仓库）
+const IMAGE = String(process.env.OPENMUSIC_IMAGE_REPOSITORY || 'w3126197382/openmusic').replace(/\/+$/, '');
+
+/** 从镜像 inspect 结果提取全部 RepoDigests（仓库@digest 形式） */
+export function imageRepoDigests(pulled) {
+  return Array.isArray(pulled?.RepoDigests)
+    ? pulled.RepoDigests.filter(value => typeof value === 'string' && value.includes('@sha256:'))
+    : [];
+}
+
+/** 期望 digest 是否与实际拉到的镜像一致；无期望值时返回 null 表示无法比对 */
+export function digestMatches(expected, pulled) {
+  if (!expected) return null;
+  return imageRepoDigests(pulled).some(entry => entry.endsWith(`@${expected}`));
+}
 export class DockerEngine {
   constructor(socketPath = '/var/run/docker.sock') { this.socketPath = socketPath; }
   request(method, route, body, timeout = 60_000) {
@@ -98,6 +113,19 @@ export function dockerExecutor(engine, health) {
     await checkpoint('正在拉取官方 Docker 镜像，主站仍保持运行');
     await engine.request('POST', `/images/create?fromImage=${encodeURIComponent(IMAGE)}&tag=${encodeURIComponent(release.tag)}`, undefined, 10 * 60_000);
     const pulled = await engine.request('GET', `/images/${encodeURIComponent(image)}/json`);
+    // digest 校验（换容器前执行，失败时旧容器尚未停机）：
+    // - 发布元数据带期望 digest 时必须与实际拉到的镜像 RepoDigests 一致，否则中止升级；
+    // - 无期望值时把实际 digest 写入升级事务并展示在进度中，供事后核对线上实际运行的镜像。
+    const expectedDigest = String(release.dockerDigest || '').trim();
+    const actualDigests = imageRepoDigests(pulled);
+    Object.assign(journal, { expectedDigest: expectedDigest || null, imageDigests: actualDigests });
+    const matched = digestMatches(expectedDigest, pulled);
+    if (matched === false) {
+      throw updateError('UPDATE_DIGEST_MISMATCH', `镜像 digest 与发布记录不一致（期望 ${expectedDigest}，实际 ${actualDigests.join(', ') || '无'}），已中止升级`, 502);
+    }
+    await checkpoint(matched
+      ? `镜像 digest 校验通过（${expectedDigest}）`
+      : `发布未提供期望 digest，已记录实际镜像 digest：${actualDigests.join(', ') || '无'}（请人工核对）`);
     if (pulled.Id === target.Image) return;
     const name = target.Name.replace(/^\//, '');
     const jobId = `${Date.now()}-${target.Id.slice(0, 8)}`;

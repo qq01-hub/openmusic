@@ -3,8 +3,6 @@ import { needsApiSign } from './apiSign';
 import { ensureSessionBootstrap, hasSessionBootstrapReady, isSessionBootstrapLoginRequired } from './sessionBootstrap';
 import { ensureFreshAccountAccess, hasVerifiedAccountSession, setAnonymousAccess, updateAccountAccess } from './accountAccessSession';
 
-const SIGN_QUERY_KEYS = ['om_ts', 'om_nonce', 'om_sign'] as const;
-
 function createAuthExpiredError(): Error & { code: string; status: number } {
   return Object.assign(new Error('登录已过期，请重新登录'), {
     code: 'ACCOUNT_AUTH_REQUIRED',
@@ -20,20 +18,18 @@ function notifyAuthRequired(): void {
   }
 }
 
+// API 签名已整体移除：客户端从未真正计算过签名，服务端也从未校验，
+// 授权一律以 HttpOnly 会话 Cookie 与服务端会话校验为准。
+// 本函数保留为同源 /api URL 规范化工具，供既有调用方继续使用。
 export function stripApiSignParams(url: string): string {
   if (!url) return url;
-  const hasSignParams = url.includes('om_ts=') || url.includes('om_nonce=') || url.includes('om_sign=');
-  if (!hasSignParams) {
-    if (!url.includes('/api/')) return url;
-    if (url.startsWith('/api/')) return url;
-  }
+  if (!url.includes('/api/')) return url;
+  if (url.startsWith('/api/')) return url;
   try {
     const origin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost';
     const parsed = new URL(url, origin);
-    const hadSign = SIGN_QUERY_KEYS.some((key) => parsed.searchParams.has(key));
-    for (const key of SIGN_QUERY_KEYS) parsed.searchParams.delete(key);
     if (parsed.origin !== origin || !parsed.pathname.startsWith('/api/')) {
-      if (!hadSign && /^https?:\/\//i.test(url)) return url;
+      if (/^https?:\/\//i.test(url)) return url;
       return parsed.href;
     }
     return `${parsed.pathname}${parsed.search}${parsed.hash}`;

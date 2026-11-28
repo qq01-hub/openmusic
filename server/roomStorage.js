@@ -5,6 +5,7 @@ import { decryptRoomSecrets, encryptRoomSecrets } from './roomCredentialCrypto.j
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { randomBytes } from 'node:crypto';
 import { createLogger, incrementMetric } from './logger.js';
+import { createRoomChatStore, roomChatKey, ROOM_CHAT_STORAGE_VERSION } from './roomChatStorage.js';
 import { appendMissingFavoriteSongs } from './favoritesSync.js';
 import { expireMigratedFavoriteSource } from './favoriteRetention.js';
 
@@ -15,6 +16,10 @@ const log = createLogger('room-storage');
 
 let redisClient = null;
 let enabled = false;
+const roomChatStore = createRoomChatStore({
+  getClient: () => (enabled ? redisClient : null),
+  onMode: (roomId, mode) => { if (mode !== 'noop') incrementMetric('room_chat_storage_total', { mode }); },
+});
 let redisInitPromise;
 const roomStorageOperations = new Map();
 const roomWriteQueue = createLatestWriteQueue({
@@ -83,6 +88,13 @@ export function getRedisClient() {
   return enabled ? redisClient : null;
 }
 
+/** 仅供测试注入假 Redis 客户端（与 roomCreateGuard 的 _set...ForTests 同惯例） */
+export function _setRoomStorageClientForTests(client) {
+  redisClient = client || null;
+  enabled = Boolean(client);
+  redisInitPromise = undefined;
+}
+
 /** .env 中是否配置了 Redis 连接（未配置视为首次部署，进入安装向导） */
 export function hasRedisEnvConfig() {
   return Boolean(
@@ -146,17 +158,44 @@ export async function loadAllRoomsFromStorage() {
     for (let offset = 0; offset < ids.length; offset += 100) {
       const chunk = ids.slice(offset, offset + 100);
       const values = await redisClient.mGet(chunk.map(roomKey));
+      const parsedRooms = [];
       for (let index = 0; index < values.length; index++) {
         if (!values[index]) continue;
         try {
-          const room = JSON.parse(values[index]);
-          room.musicAccountSecrets = decryptRoomSecrets(room.musicAccountSecrets, room.id);
-          rooms.push(room);
+          parsedRooms.push(JSON.parse(values[index]));
         } catch (err) {
           incrementMetric('redis_error_total', { phase: 'load_room' });
           log.warn('redis_room_payload_invalid', { roomId: chunk[index], error: err });
         }
       }
+      // chat 列表按 chunk 并行加载，避免房间多时逐房串行往返拖慢启动
+      await Promise.all(parsedRooms.map(async (room) => {
+        try {
+          if (Array.isArray(room.messages)) {
+            // 旧格式：聊天内嵌在快照里。内存中照常交给 restore 使用，
+            // 同时迁移到独立 chat 列表并把主快照改写为新格式（幂等，失败下次启动重试）。
+            const legacyMessages = room.messages;
+            try {
+              await roomChatStore.migrateLegacy(room.id, legacyMessages);
+              // 注意：此处 room.musicAccountSecrets 仍是存储形态（密文），必须原样写回，禁止二次加密
+              const migrated = { ...room, chatStorageVersion: ROOM_CHAT_STORAGE_VERSION };
+              delete migrated.messages;
+              await redisClient.set(roomKey(room.id), JSON.stringify(migrated));
+            } catch (migrationErr) {
+              incrementMetric('redis_error_total', { phase: 'migrate_room_chat' });
+              log.warn('redis_room_chat_migration_failed', { roomId: room.id, error: migrationErr });
+            }
+          } else {
+            room.messages = await roomChatStore.loadChat(room.id);
+            roomChatStore.noteLoaded(room.id, room.messages);
+          }
+          room.musicAccountSecrets = decryptRoomSecrets(room.musicAccountSecrets, room.id);
+          rooms.push(room);
+        } catch (err) {
+          incrementMetric('redis_error_total', { phase: 'load_room' });
+          log.warn('redis_room_payload_invalid', { roomId: room.id, error: err });
+        }
+      }));
     }
   }
 
@@ -167,10 +206,18 @@ async function saveRoomToStorageNow(roomSnapshot) {
   if (!enabled || !redisClient) return;
 
   try {
+    // 聊天拆到独立列表键，主快照不再内嵌 messages（chatStorageVersion 标记新格式）。
+    // 快照未带 messages 字段时不动 chat 键，保持旧行为。
+    const hasChat = Array.isArray(roomSnapshot.messages);
+    if (hasChat) await roomChatStore.saveChat(roomSnapshot.id, roomSnapshot.messages);
     const persisted = {
       ...roomSnapshot,
       musicAccountSecrets: encryptRoomSecrets(roomSnapshot.musicAccountSecrets, roomSnapshot.id),
     };
+    if (hasChat) {
+      delete persisted.messages;
+      persisted.chatStorageVersion = ROOM_CHAT_STORAGE_VERSION;
+    }
     const payload = JSON.stringify(persisted);
     const transaction = redisClient.multi().set(roomKey(roomSnapshot.id), payload).sAdd(ROOM_IDS_KEY, roomSnapshot.id);
     if (roomSnapshot.ownerAccountId) transaction.sAdd(accountRoomsKey(roomSnapshot.ownerAccountId), String(roomSnapshot.id).trim().toUpperCase());
@@ -226,9 +273,10 @@ export async function deleteRoomFromStorage(roomId, accountId = '') {
   if (!enabled || !redisClient) return;
 
   cancelQueuedRoomSave(roomId);
+  roomChatStore.forget(roomId);
   return enqueueRoomStorageOperation(roomId, async () => {
     try {
-      const transaction = redisClient.multi().del(roomKey(roomId)).sRem(ROOM_IDS_KEY, roomId);
+      const transaction = redisClient.multi().del(roomKey(roomId)).del(roomChatKey(roomId)).sRem(ROOM_IDS_KEY, roomId);
       if (accountId) transaction.sRem(accountRoomsKey(accountId), String(roomId || '').trim().toUpperCase());
       await transaction.exec();
     } catch (err) {

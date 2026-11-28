@@ -192,52 +192,7 @@ export function buildSitemapXml(siteOrigin, opts = {}) {
   ].join('\n');
 }
 
-/**
- * @param {string} [origin]
- * @param {ReturnType<typeof buildPublicSiteSeo>} [seo]
- */
-export function buildWebApplicationJsonLd(origin = '', seo = buildPublicSiteSeo()) {
-  const clean = String(origin || '').replace(/\/$/, '');
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'WebApplication',
-    name: seo.siteName || SITE_NAME,
-    alternateName: ['一起听歌', '多人听歌', '和朋友一起听歌', '点歌房'],
-    description: seo.description || DEFAULT_DESCRIPTION,
-    ...(clean ? { url: `${clean}/` } : {}),
-    applicationCategory: 'MusicApplication',
-    operatingSystem: 'Web Browser',
-    offers: {
-      '@type': 'Offer',
-      price: '0',
-      priceCurrency: 'CNY',
-    },
-    inLanguage: 'zh-CN',
-    featureList: seo.featureList || FEATURE_LIST,
-    publisher: {
-      '@type': 'Organization',
-      name: seo.siteName || SITE_NAME,
-      ...(clean ? { url: `${clean}/` } : {}),
-    },
-  };
-}
 
-/** @param {typeof SEO_FAQS} [faqs] */
-export function buildFaqJsonLd(faqs = SEO_FAQS) {
-  const list = Array.isArray(faqs) && faqs.length ? faqs : SEO_FAQS;
-  return {
-    '@context': 'https://schema.org',
-    '@type': 'FAQPage',
-    mainEntity: list.map((item) => ({
-      '@type': 'Question',
-      name: item.q,
-      acceptedAnswer: {
-        '@type': 'Answer',
-        text: item.a,
-      },
-    })),
-  };
-}
 
 /**
  * @param {string} html

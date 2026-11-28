@@ -9,6 +9,8 @@ on:
         description: '正式发布标签，例如 v3.6.6'
         required: true
 
+# GH_TOKEN 为当前仓库的内置 token：Release 只发到运行本 workflow 的仓库自身，
+# fork 上触发也只会发到 fork，不会写到上游仓库，无需额外防误推处理
 permissions:
   contents: write
 
@@ -16,10 +18,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.tag || github.ref }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '20'
           cache: npm

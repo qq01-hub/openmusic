@@ -1,5 +1,6 @@
 /** OpenAI 兼容模型接入：Chat Completions / Responses API。 */
 import QRCode from 'qrcode';
+import { fetchPinnedPublicUrl, isBlockedMediaHostname } from './mediaProxy.js';
 import { resolveAiThinking } from './aiThinking.js';
 import { getRuntimeConfig } from './runtimeConfig.js';
 import { AI_BOT_USER_ID } from './chatAiAuth.js';
@@ -14,7 +15,6 @@ export { AI_BOT_USER_ID };
 
 export const DEFAULT_AI_TEXT_MODEL = 'Qwen/Qwen3-8B';
 export const DEFAULT_AI_VISION_MODEL = 'Qwen/Qwen3.5-4B';
-export const DEFAULT_AI_MODEL = DEFAULT_AI_TEXT_MODEL;
 export { DEFAULT_ROOM_AI_PERSONA };
 export const AI_FORBIDDEN_ROOM_TOOL_NAMES = new Set([
   'destroy_room',
@@ -488,9 +488,28 @@ export function normalizeAiModel(value, fallback = DEFAULT_AI_TEXT_MODEL) {
   return model;
 }
 
+/**
+ * AI 上游 SSRF 防护：默认拒绝内网 / 链路本地 / 云元数据主机（含 169.254.169.254、
+ * metadata.google.internal 等），与 mediaProxy 共用同一份黑名单判定。
+ * 管理员确需自托管内网模型时可显式设置 ALLOW_PRIVATE_AI_API=1 放行（与自定义音源的
+ * ALLOW_PRIVATE_CUSTOM_MUSIC_API 口径一致）；域名解析到私网的情形由请求时的
+ * fetchPinnedPublicUrl 钉扎校验兜底，本函数只做主机名字面判定。
+ */
+export function isAiApiBaseUrlBlocked(value) {
+  if (process.env.ALLOW_PRIVATE_AI_API === '1') return false;
+  try {
+    const parsed = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(parsed.protocol)) return false;
+    return isBlockedMediaHostname(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeAiApiBaseUrl(value) {
   const url = String(value || '').trim();
   if (!url) return '';
+  if (isAiApiBaseUrlBlocked(url)) return '';
   try {
     const parsed = new URL(url);
     if (!['http:', 'https:'].includes(parsed.protocol)) return '';
@@ -501,6 +520,18 @@ function normalizeAiApiBaseUrl(value) {
   } catch {
     return '';
   }
+}
+
+/** AI 上游统一出口：默认走校验 + IP 钉扎通道；显式放行内网时才用原生 fetch。 */
+async function fetchAiUpstream(url, { timeoutMs = 20_000, ...options } = {}) {
+  if (process.env.ALLOW_PRIVATE_AI_API === '1') return fetch(url, options);
+  return fetchPinnedPublicUrl(url, {
+    method: options.method || 'GET',
+    headers: options.headers || {},
+    body: options.body,
+    signal: options.signal,
+    timeoutMs,
+  });
 }
 
 function normalizeAiApiProtocol(value) {
@@ -899,7 +930,7 @@ async function requestAiChatCompletion(options = {}, selectedPool = null) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(apiUrl, {
+      const response = await fetchAiUpstream(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -907,6 +938,7 @@ async function requestAiChatCompletion(options = {}, selectedPool = null) {
         },
         body: JSON.stringify(body),
         signal: controller.signal,
+        timeoutMs,
       });
       return { response, rawResponse: await response.text() };
     } finally {
@@ -1480,13 +1512,14 @@ export async function fetchAiProviderModels(options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   try {
-    const response = await fetch(modelsUrl, {
+    const response = await fetchAiUpstream(modelsUrl, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       signal: controller.signal,
+      timeoutMs: 20_000,
     });
     const rawText = await response.text();
     let data = null;
@@ -2002,9 +2035,6 @@ export function resolveRoomAiBotName(room, config = getRuntimeConfig()) {
   return getAiModelConfig(config).botName;
 }
 
-export function resolveRoomAiPersona(room) {
-  return normalizeRoomAiPersona(room?.roomAiPersona);
-}
 
 /** 站点开启且房主未关闭 */
 export function isRoomAiEnabledForRoom(room, config = getRuntimeConfig()) {
@@ -2038,11 +2068,6 @@ export function getPublicRoomAiConfig(config = getRuntimeConfig(), room = null) 
       : [],
     commands: enabled ? buildAiCommandHints(botName) : [],
   };
-}
-
-/** @deprecated 兼容旧调用，等同 getPublicRoomAiConfig(config, room) */
-export function getPublicRoomAiConfigForRoom(room, config = getRuntimeConfig()) {
-  return getPublicRoomAiConfig(config, room);
 }
 
 

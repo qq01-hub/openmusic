@@ -94,20 +94,5 @@ export function aggregateSongSuggestions(groups, keyword, limit = 8) {
     .map(({ score, index, providerRank, ...item }) => item);
 }
 
-export async function fetchSongSuggestions(keyword, sources, fetchProvider) {
-  const query = String(keyword || '').trim();
-  if (!query) return [];
-  const selected = (Array.isArray(sources) ? sources : SOURCE_PRIORITY)
-    .filter((source, index, list) => ALLOWED_SOURCES.has(source) && list.indexOf(source) === index);
-  const settled = await Promise.allSettled(selected.map(async (source) => [
-    source,
-    await fetchProvider(source, query),
-  ]));
-  const groups = {};
-  settled.forEach((result) => {
-    if (result.status === 'fulfilled') groups[result.value[0]] = result.value[1];
-  });
-  return aggregateSongSuggestions(groups, query);
-}
 
 export { ALLOWED_SOURCES, SOURCE_PRIORITY };

@@ -117,6 +117,46 @@ function qfaceDevCachePlugin(): Plugin {
   };
 }
 
+/** 开发态托管已外置到仓库根 static/ 的大资源（desk-pet/qface/vendor），URL 与生产一致 */
+function staticAssetsDevPlugin(): Plugin {
+  const staticRoot = path.join(__dirname, '..', 'static');
+  const mime: Record<string, string> = {
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.css': 'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.apng': 'image/apng',
+    '.svg': 'image/svg+xml',
+    '.webm': 'video/webm',
+    '.woff2': 'font/woff2',
+    '.zip': 'application/zip',
+    '.txt': 'text/plain; charset=utf-8',
+  };
+  return {
+    name: 'openmusic-static-assets-dev',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = decodeURIComponent(req.url?.split('?')[0] || '');
+        if (!/^\/(desk-pet|qface|vendor)\//.test(pathname)) {
+          next();
+          return;
+        }
+        const filePath = path.join(staticRoot, pathname);
+        if (!filePath.startsWith(staticRoot) || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+          next();
+          return;
+        }
+        res.setHeader('Content-Type', mime[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        fs.createReadStream(filePath).pipe(res);
+      });
+    },
+  };
+}
+
 export default defineConfig({
   define: {
     __APP_BUILD_ID__: JSON.stringify(appVersionMeta.buildId),
@@ -126,6 +166,7 @@ export default defineConfig({
     react(),
     seoDevMiddleware(),
     qfaceDevCachePlugin(),
+    staticAssetsDevPlugin(),
     seoBuildPlugin(),
     appVersionPlugin(),
     ...(shouldPrecompress
@@ -156,6 +197,14 @@ export default defineConfig({
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash][extname]',
         manualChunks(id) {
+          if (id.includes('node_modules') && id.includes('@babel/runtime')) {
+            // @babel/runtime 的 helper 是跨包共享的底层模块（react-window、antd 生态等都在用）。
+            // 若不单独成桶，Rollup 会把被多方共享的 helper 并进 antd-vendor，
+            // 于是所有用到 helper 的 chunk 都被迫静态 import antd-vendor，
+            // 再经 hoistTransitiveImports 摊进首屏 modulepreload（实测 antd 占首屏 gzip 的 56%）。
+            // 单独成桶后，非后台 chunk 只依赖这个几 KB 的小桶，antd 回到仅 Admin/Setup 懒加载。
+            return 'shared-vendor';
+          }
           if (!id.includes('node_modules')) {
             if (
               id.includes('/components/Chat')

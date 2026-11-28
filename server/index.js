@@ -266,6 +266,7 @@ import {
   createDistributedSocketRateLimiter,
   getSocketEventRatePolicy,
 } from './socketRateLimiter.js';
+import { createSocketSessionVerifier } from './socketSessionCache.js';
 import { createLogger, incrementMetric } from './logger.js';
 import {
   isLinuxdoConfigured,
@@ -358,6 +359,7 @@ const accountDeletion = createAccountDeletionService({
     await flushAllPendingRoomPersists();
   },
   onDisabled: (id) => {
+    socketSessionVerifier.invalidateAccount(id);
     io.to(`account:${id}`).emit('account_session_invalidated', { reason: 'account_deleted', stopReconnect: true });
     io.in(`account:${id}`).disconnectSockets(true);
   },
@@ -414,6 +416,9 @@ async function clearRoomOwnerBindings(roomId) {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientDist = path.join(__dirname, '../client/dist');
+// 大资源（desk-pet/qface/vendor）已外置到仓库根 static/（批 4），不再进 client/dist；
+// URL 不变，仍按 /desk-pet/、/qface/、/vendor/ 托管，部署时可把 static/ 换成独立目录或 CDN 回源。
+const clientStatic = path.join(__dirname, '../static');
 const PORT = process.env.PORT || 4000;
 const HOST = (process.env.HOST || '').trim();
 const DISCONNECT_GRACE_MS = 30_000;
@@ -485,9 +490,12 @@ function corsOrigin(origin, callback) {
 
   const normalized = origin.replace(/\/$/, '');
 
-  // 首次部署尚无 CLIENT_URL；安装 API 自身仍执行严格同 Host 校验。
+  // 首次部署尚无 CLIENT_URL：跨站来源只放行已配置的白名单（无白名单时仅非生产本地调试来源）。
+  // 安装向导是同源页面、不依赖 CORS；安装 API 自身另有严格同 Host 校验与一次性令牌校验。
   if (isSetupRequired()) {
-    callback(null, true);
+    callback(null, ALLOWED_ORIGINS
+      ? ALLOWED_ORIGINS.has(normalized)
+      : !IS_PRODUCTION && isLocalDevOrigin(normalized));
     return;
   }
 
@@ -535,9 +543,6 @@ app.use(cors({
     'X-OpenMusic-Request',
     'X-OpenMusic-Device',
     'Authorization',
-    'X-OM-Ts',
-    'X-OM-Nonce',
-    'X-OM-Sign',
   ],
 }));
 app.use((_req, res, next) => {
@@ -4710,15 +4715,36 @@ app.use('/assets', servePrecompressedStatic(
   () => 'public, max-age=31536000, immutable',
 ));
 app.use('/vendor/folia/assets', servePrecompressedStatic(
-  path.join(clientDist, 'vendor', 'folia', 'assets'),
+  path.join(clientStatic, 'vendor', 'folia', 'assets'),
   /\.(?:js|css|json|svg|map)$/i,
   () => 'public, max-age=31536000, immutable',
 ));
 app.use('/vendor/sonic-workshop', servePrecompressedStatic(
-  path.join(clientDist, 'vendor', 'sonic-workshop'),
+  path.join(clientStatic, 'vendor', 'sonic-workshop'),
   /\.(?:js|css|html|json|svg)$/i,
   () => 'public, max-age=2592000',
 ));
+
+// 外置大资源托管（批 4）：static/ 顶层即 desk-pet/、qface/、vendor/，URL 与原 dist 内路径一致。
+// 必须挂在 client/dist 之前，避免旧部署残留的 dist 同名目录抢先命中。
+app.use(express.static(clientStatic, {
+  index: false,
+  setHeaders(res, filePath) {
+    const rel = path.relative(clientStatic, filePath).replace(/\\/g, '/');
+    if (rel.startsWith('vendor/sonic-workshop/')) {
+      // sandboxed iframe 使用 opaque origin 加载 ES module，精确允许 Origin: null。
+      res.setHeader('Access-Control-Allow-Origin', 'null');
+    }
+    if (['vendor/folia/stage.json', 'vendor/folia/index.html', 'vendor/folia/source.zip', 'vendor/folia/LICENSE.txt'].includes(rel)) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+      return;
+    }
+    if (rel.startsWith('qface/') || rel.startsWith('vendor/') || rel.startsWith('desk-pet/')) {
+      // 表情与桌宠资源几乎不变，浏览器长缓存 1 年
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  },
+}));
 
 app.use(express.static(clientDist, {
   index: false,
@@ -4788,6 +4814,8 @@ function bindSocketAccountSession(socket) {
 }
 
 function unbindSocketAccountSession(socketId) {
+  const cachedSocket = io.sockets.sockets.get(socketId);
+  if (cachedSocket) socketSessionVerifier.invalidateSocket(cachedSocket);
   const key = socketToAccountSessionKey.get(socketId);
   socketToAccountSessionKey.delete(socketId);
   if (!key) return;
@@ -4800,6 +4828,7 @@ function unbindSocketAccountSession(socketId) {
 function disconnectSocketsForAccountSession(token, reason = 'session_invalidated') {
   const key = accountSessionSocketKey(token);
   if (!key) return;
+  socketSessionVerifier.invalidateSessionKey(key);
   const socketIds = [...(accountSessionSockets.get(key) || [])];
   for (const socketId of socketIds) {
     const socket = io.sockets.sockets.get(socketId);
@@ -4841,6 +4870,17 @@ async function verifySocketAccountSession(socket, { skipRiskCheck = false } = {}
     return { valid: false };
   }
 }
+
+// 包级核验走短 TTL 缓存（只缓存 valid 结果）；30 秒周期的 sweep 仍调用
+// verifySocketAccountSession 本体做权威复核，不经过缓存。
+const socketSessionVerifier = createSocketSessionVerifier({
+  verify: (socket, options) => verifySocketAccountSession(socket, options),
+  getSessionKey: (socket) => (socket.data.anonymous
+    ? `anon:${socket.data.accountId || ''}`
+    : socketToAccountSessionKey.get(socket.id) || ''),
+  onHit: () => incrementMetric('socket_session_cache_total', { outcome: 'hit' }),
+  onMiss: () => incrementMetric('socket_session_cache_total', { outcome: 'miss' }),
+});
 
 const SOCKET_SESSION_SWEEP_MS = 30_000;
 const SOCKET_SESSION_VERIFY_TIMEOUT_MS = 5_000;
@@ -4925,6 +4965,7 @@ function monitorSocketAccountSession(socket) {
     },
     invalidate(reason) {
       if (entry.stopped) return;
+      socketSessionVerifier.invalidateSocket(socket);
       entry.stop();
       incrementMetric('account_socket_rejected_total', { reason });
       socket.emit('account_session_invalidated', { reason, stopReconnect: false });
@@ -5394,7 +5435,7 @@ io.on('connection', (socket) => {
 
   socket.use(async (packet, proceed) => {
     const next = () => runWithMetingRequestContext({ accountId: socket.data.accountId }, proceed);
-    const session = await verifySocketAccountSession(socket, { skipRiskCheck: true });
+    const session = await socketSessionVerifier.verifySocket(socket, { skipRiskCheck: true });
     if (!session.valid) {
       const callback = typeof packet?.[packet.length - 1] === 'function'
         ? packet[packet.length - 1]
@@ -7990,6 +8031,8 @@ if (!isRedisEnabled()) {
       if (config.riskChallengeEnabled && config.turnstileEnabled) suspendAccountSocketsForHumanChallenge(id);
     },
     onSessionRevoked: sid => {
+      // 吊销通道到达即清本进程该会话的包级核验缓存（键与 bind 时一致，为 sid 的 sha256）
+      socketSessionVerifier.invalidateSessionKey(createHash('sha256').update(sid).digest('hex'));
       io.local.to(`account-session:${sid}`).emit('account_session_invalidated', { reason: 'session_revoked', stopReconnect: true });
       io.local.in(`account-session:${sid}`).disconnectSockets(true);
     },

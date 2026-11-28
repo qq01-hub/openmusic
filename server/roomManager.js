@@ -2939,11 +2939,6 @@ export function roomExists(roomId) {
   return rooms.has(roomId?.toUpperCase());
 }
 
-export function isUserBanned(roomId, userId, deviceId = null) {
-  const room = rooms.get(roomId?.toUpperCase());
-  if (!room || !userId) return false;
-  return isAccessBanned(room, userId, deviceId);
-}
 
 function restoreChatVisibleSinceMap(raw) {
   const map = new Map();
@@ -3384,15 +3379,6 @@ export function getRoomMusicAccountCookie(roomId, platform) {
   return normalizeMusicAccountSecrets(room.musicAccountSecrets)[plat] || null;
 }
 
-export function getRoomNeteaseFmCookie(roomId) {
-  const room = rooms.get(String(roomId || "").toUpperCase());
-  if (!room) return null;
-  const secret = normalizeMusicAccountSecrets(room.musicAccountSecrets).netease;
-  if (!secret) return null;
-  const meta = normalizeMusicAccounts(room.musicAccounts).netease;
-  if (meta && (meta.hasVip || meta.isValid === false)) return null;
-  return secret;
-}
 
 export function getRoomFmCookie(roomId, platform) {
   const room = rooms.get(String(roomId || "").toUpperCase());
@@ -4570,20 +4556,6 @@ export function removeUser(roomId, userId, connectionId = null) {
   return { userRemoved: true, room: serializeRoom(room) };
 }
 
-export function updateUserLocation(roomId, userId, location) {
-  const room = rooms.get(roomId);
-  const user = room?.users.get(userId);
-  if (!room || !user) return null;
-
-  const nextLocation = String(location || "")
-    .trim()
-    .slice(0, 12);
-  if (user.location === nextLocation) return null;
-
-  user.location = nextLocation;
-  // 定位不必立刻落盘，随下一次结构变更 persist 即可
-  return true;
-}
 
 export function canUserMutate(roomId, userId) {
   const room = rooms.get(roomId);
@@ -5551,29 +5523,6 @@ export async function skipSong(roomId, socketId, connectionId = null, options = 
   return { room: serializeRoom(room), systemMessage };
 }
 
-/** AI 助手切歌：不要求主控连接，以系统身份推进播放 */
-export async function skipSongAsAi(roomId, options = {}) {
-  const room = rooms.get(roomId);
-  if (!room) return { error: "房间不存在" };
-  if (!room.current) return { error: "当前没有正在播放的歌曲" };
-
-  const songTitle = formatSongTitle(room.current);
-  const botName = String(options.botName || "小肥鱼").trim().slice(0, 20) || "小肥鱼";
-  const reasonText = String(options.reasonText || "").trim().slice(0, 40);
-
-  await playNext(room, { allowFetchRandom: false, forceAdvance: true });
-
-  const notice = reasonText
-    ? `${botName} 切了 ${songTitle}（${reasonText}）`
-    : `${botName} 切了 ${songTitle}`;
-  const systemMessage = appendSystemChatMessage(room, notice);
-  persistRoom(room);
-  return {
-    room: serializeRoom(room),
-    systemMessage,
-    message: notice,
-  };
-}
 
 function resolveUserConnectionId(room, userId) {
   const user = room?.users?.get(userId);
